@@ -1,4 +1,4 @@
-FROM ubuntu:25.10
+FROM ubuntu:rolling
 # Scenario 07: Apache directory listing enabled
 # CWE-548: Exposure of Information Through Directory Listing
 # Ubuntu 25.10 (Quantal)
