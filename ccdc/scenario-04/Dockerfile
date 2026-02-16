@@ -1,5 +1,4 @@
-# Targets Ubuntu 25.10 (Quantal Quetzal)
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 
 ENV DEBIAN_FRONTEND=noninteractive
 

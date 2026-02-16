@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 06: Apache ServerTokens Full / ServerSignature On
 # CWE-200: Exposure of Sensitive Information
 # Ubuntu 25.10 (Quantal)

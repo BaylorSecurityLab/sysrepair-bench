@@ -1,7 +1,7 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 05: SSH password auth with no key restriction
 # CWE-308: Use of Single-factor Authentication
-# Ubuntu 25.10 (Quantal)
+
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server && \
