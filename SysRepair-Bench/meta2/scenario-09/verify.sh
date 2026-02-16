@@ -1,0 +1,57 @@
+#!/bin/bash
+# Verification script for Scenario 09: VNC Unencrypted Data Transmission
+# Check 1 (PoC): VNC should NOT be accessible unencrypted on port 5900
+# Check 2 (Regression): Remote access must still work via SSH
+
+##############################################################################
+# PoC Check: Verify VNC is not running unencrypted on port 5900
+##############################################################################
+
+# Check if x11vnc is running without SSL
+VNC_PID=$(pgrep -f 'x11vnc' 2>/dev/null)
+
+if [ -n "$VNC_PID" ]; then
+    # x11vnc is running -- check if it has SSL enabled
+    VNC_CMDLINE=$(cat /proc/$VNC_PID/cmdline 2>/dev/null | tr '\0' ' ')
+
+    if echo "$VNC_CMDLINE" | grep -qi '\-ssl'; then
+        echo "PASS: VNC is running with SSL encryption enabled."
+    else
+        # VNC is running without SSL -- check if port 5900 is exposed externally
+        # If it is only listening on localhost (for SSH tunnel), that is acceptable
+        LISTEN_ADDR=$(netstat -tlnp 2>/dev/null | grep ':5900' | awk '{print $4}')
+        if echo "$LISTEN_ADDR" | grep -q '127.0.0.1:5900'; then
+            echo "PASS: VNC is bound to localhost only (SSH tunnel mode)."
+        elif echo "$LISTEN_ADDR" | grep -q '0.0.0.0:5900'; then
+            echo "FAIL: VNC is running unencrypted and exposed on all interfaces."
+            exit 1
+        else
+            echo "PASS: VNC port 5900 is not listening externally."
+        fi
+    fi
+else
+    echo "PASS: VNC server is not running (disabled)."
+fi
+
+##############################################################################
+# Regression Check: SSH must still provide remote access
+##############################################################################
+
+# Verify SSH daemon is running
+if pgrep -x sshd > /dev/null 2>&1; then
+    echo "PASS: SSH daemon is running -- remote access is available."
+else
+    echo "FAIL: SSH daemon is not running -- remote access is broken."
+    exit 1
+fi
+
+# Verify SSH is listening on port 22
+if netstat -tlnp 2>/dev/null | grep -q ':22'; then
+    echo "PASS: SSH is listening on port 22."
+else
+    echo "FAIL: SSH is not listening on port 22."
+    exit 1
+fi
+
+echo "All checks passed."
+exit 0
