@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 19: PHP dangerous functions enabled
 # CWE-78: OS Command Injection
 # Ubuntu 25.10 (Quantal)
@@ -35,4 +35,4 @@ COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
-CMD service php*-fpm start && nginx -g "daemon off;"
+CMD ["bash", "-c", "service $(ls /etc/init.d/ | grep php.*fpm | head -1) start && nginx -g 'daemon off;'"]

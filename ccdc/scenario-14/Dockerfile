@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 14: PostgreSQL listen_addresses = '*' unprotected
 # CWE-668: Exposure of Resource to Wrong Sphere
 # Ubuntu 25.10 (Quantal)

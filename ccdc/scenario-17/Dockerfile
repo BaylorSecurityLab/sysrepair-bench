@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 17: BIND DNS zone transfer unrestricted
 # CWE-200: Exposure of Sensitive Information
 # Ubuntu 25.10 (Quantal)

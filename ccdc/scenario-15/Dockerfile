@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 15: vsftpd anonymous upload enabled
 # CWE-434: Unrestricted Upload of File with Dangerous Type
 # Ubuntu 25.10 (Quantal)

@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 20: WordPress file editor enabled
 # CWE-94: Improper Control of Generation of Code (Code Injection)
 # Ubuntu 25.10 (Quantal)

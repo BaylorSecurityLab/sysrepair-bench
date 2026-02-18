@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 16: vsftpd no SSL/TLS enforcement
 # CWE-319: Cleartext Transmission of Sensitive Information
 # Ubuntu 25.10 (Quantal)

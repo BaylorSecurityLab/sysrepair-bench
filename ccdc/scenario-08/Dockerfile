@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 08: Apache TRACE method enabled
 # CWE-693: Protection Mechanism Failure
 # Ubuntu 25.10 (Quantal)

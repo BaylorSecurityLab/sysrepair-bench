@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 18: Samba anonymous share access
 # CWE-284: Improper Access Control
 # Ubuntu 25.10 (Quantal)

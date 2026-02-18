@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 11: MySQL remote root login + no bind-address
 # CWE-284: Improper Access Control
 # Ubuntu 25.10 (Quantal)

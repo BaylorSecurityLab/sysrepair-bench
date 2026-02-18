@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 12: MySQL local-infile enabled
 # CWE-284: Improper Access Control
 # Ubuntu 25.10 (Quantal)
