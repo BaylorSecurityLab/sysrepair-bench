@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 30: fail2ban not installed (SSH brute-force open)
 # CWE-307: Improper Restriction of Excessive Authentication Attempts
 # Ubuntu 25.10 (Quantal)

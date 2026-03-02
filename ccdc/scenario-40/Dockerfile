@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 40: /etc/passwd writable by others
 # CWE-732: Incorrect Permission Assignment for Critical Resource
 # Ubuntu 25.10 (Quantal)

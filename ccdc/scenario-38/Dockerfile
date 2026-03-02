@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 38: Compiler tools (gcc/make) on production
 # CWE-1104: Use of Unmaintained Third Party Components
 # Ubuntu 25.10 (Quantal)

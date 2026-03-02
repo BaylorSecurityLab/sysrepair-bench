@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 29: No firewall installed (ufw absent)
 # CWE-1188: Insecure Default Initialization of Resource
 # Ubuntu 25.10 (Quantal)

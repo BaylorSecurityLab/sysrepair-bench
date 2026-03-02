@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 49: Rogue SSH authorized_keys on root
 # CWE-506: Embedded Malicious Code (Backdoor)
 # Ubuntu 25.10 (Quantal)

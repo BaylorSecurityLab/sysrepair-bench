@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM ubuntu:25.10
 # Scenario 39: /etc/shadow world-readable
 # CWE-732: Incorrect Permission Assignment for Critical Resource
 # Ubuntu 25.10 (Quantal)
