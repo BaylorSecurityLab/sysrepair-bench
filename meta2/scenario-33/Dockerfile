@@ -1,4 +1,4 @@
-FROM navig/ubuntu:8.04
+FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
 
 # Fix package repositories to use old-releases
 RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
