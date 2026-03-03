@@ -5,29 +5,20 @@ PASS=0
 FAIL=1
 
 ##############################################
-# PoC Check: /cgi-bin/php?-s must NOT disclose source
+# PoC Check: CVE-2012-1823 RCE via query string injection
+# Attack: POST PHP code to stdin via php://input with -d auto_prepend_file
 ##############################################
 
-# Test the primary attack vector: ?-s (source disclosure)
-RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/cgi-bin/php?-s" 2>/dev/null)
+# Use nc (curl/wget not available in this container) for the HTTP POST
+# Use double-quoted PHP string to avoid shell quoting issues
+PAYLOAD='<?php echo "CVE_2012_1823_PROOF"; ?>'
+CONTENT_LENGTH=${#PAYLOAD}
+RCE_RESPONSE=$(printf "POST /cgi-bin/php?-d+allow_url_include%%3d1+-d+auto_prepend_file%%3dphp://input HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ${CONTENT_LENGTH}\r\n\r\n${PAYLOAD}" \
+    | nc -w3 127.0.0.1 80 2>/dev/null)
 
-if [ "$RESPONSE" = "200" ]; then
-    # Got a 200, check if it returns PHP source code
-    BODY=$(curl -s "http://127.0.0.1/cgi-bin/php?-s" 2>/dev/null)
-    if echo "$BODY" | grep -qi "<?php\|<code>\|<span"; then
-        echo "FAIL: /cgi-bin/php?-s still discloses PHP source code"
-        exit $FAIL
-    fi
-fi
-
-# Test another dangerous vector: ?-d to inject configuration
-RESPONSE2=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/cgi-bin/php?-d+allow_url_include%3d1" 2>/dev/null)
-if [ "$RESPONSE2" = "200" ]; then
-    BODY2=$(curl -s "http://127.0.0.1/cgi-bin/php?-d+allow_url_include%3d1" 2>/dev/null)
-    if echo "$BODY2" | grep -qi "<?php\|<code>\|X-Powered-By: PHP"; then
-        echo "FAIL: /cgi-bin/php?-d parameter injection still works"
-        exit $FAIL
-    fi
+if echo "$RCE_RESPONSE" | grep -q "CVE_2012_1823_PROOF"; then
+    echo "FAIL: CVE-2012-1823 is exploitable — arbitrary PHP code executed via CGI query string injection"
+    exit $FAIL
 fi
 
 echo "PASS: PHP-CGI query string parameter injection is blocked"
@@ -42,16 +33,15 @@ if ! netstat -tlnp 2>/dev/null | grep -q ':80 '; then
     exit $FAIL
 fi
 
-# Check that a normal PHP page works (via mod_php or properly configured CGI)
-PHPTEST=$(curl -s "http://127.0.0.1/info.php" 2>/dev/null)
-if ! echo "$PHPTEST" | grep -qi "php\|phpinfo"; then
-    # Try alternative test
-    PHPTEST2=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/info.php" 2>/dev/null)
-    if [ "$PHPTEST2" = "000" ] || [ "$PHPTEST2" = "500" ]; then
-        echo "FAIL: PHP is not working (info.php returns error)"
-        exit $FAIL
-    fi
+# Check that a normal PHP page is reachable via nc
+PHP_RESPONSE=$(printf "GET /info.php HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" | nc -w3 127.0.0.1 80 2>/dev/null)
+if echo "$PHP_RESPONSE" | grep -qi "php\|phpinfo"; then
+    echo "PASS: PHP and Apache are functional"
+elif echo "$PHP_RESPONSE" | grep -q "200 OK"; then
+    echo "PASS: PHP and Apache are functional"
+else
+    echo "FAIL: PHP is not working (info.php unreachable or returns error)"
+    exit $FAIL
 fi
 
-echo "PASS: PHP and Apache are functional"
 exit $PASS

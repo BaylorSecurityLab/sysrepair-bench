@@ -23,11 +23,17 @@ RUN mkdir -p /etc/postgresql/ssl && \
     chmod 600 /etc/postgresql/ssl/server.key
 
 # Configure PostgreSQL to use SSL
-# Ubuntu 8.04 ships PostgreSQL 8.3
+# PostgreSQL 8.3 does NOT support ssl_cert_file/ssl_key_file params (added in 9.2).
+# In 8.3, cert/key must reside in $PGDATA as server.crt and server.key.
 RUN PG_CONF=$(find /etc/postgresql -name postgresql.conf | head -1) && \
-    echo "ssl = on" >> "$PG_CONF" && \
-    echo "ssl_cert_file = '/etc/postgresql/ssl/server.crt'" >> "$PG_CONF" && \
-    echo "ssl_key_file = '/etc/postgresql/ssl/server.key'" >> "$PG_CONF"
+    echo "ssl = on" >> "$PG_CONF"
+
+# Copy SSL cert/key into the PostgreSQL 8.3 data directory
+RUN cp /etc/postgresql/ssl/server.crt /var/lib/postgresql/8.3/main/server.crt && \
+    cp /etc/postgresql/ssl/server.key /var/lib/postgresql/8.3/main/server.key && \
+    chown postgres:postgres /var/lib/postgresql/8.3/main/server.crt \
+                            /var/lib/postgresql/8.3/main/server.key && \
+    chmod 600 /var/lib/postgresql/8.3/main/server.key
 
 # Allow connections from all hosts
 RUN PG_HBA=$(find /etc/postgresql -name pg_hba.conf | head -1) && \

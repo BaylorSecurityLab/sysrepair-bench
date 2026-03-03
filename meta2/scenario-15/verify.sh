@@ -26,7 +26,22 @@ if [ -n "$DISTCC_PID" ]; then
         exit 1
     fi
 else
-    echo "PASS: distccd is not running (service disabled)."
+    # distccd not running — check if /start.sh still configures it without --allow
+    if [ -f /start.sh ] && grep -q 'distccd' /start.sh; then
+        if grep -q '\-\-allow' /start.sh; then
+            if grep -qE '\-\-allow\s+0\.0\.0\.0/0' /start.sh; then
+                echo "FAIL: distccd configured with --allow 0.0.0.0/0 in /start.sh — allows all hosts."
+                exit 1
+            else
+                echo "PASS: distccd configured with --allow restriction in /start.sh (not currently running)."
+            fi
+        else
+            echo "FAIL: distccd in /start.sh has no --allow flag — unrestricted access when started."
+            exit 1
+        fi
+    else
+        echo "PASS: distccd is not running (service disabled)."
+    fi
 fi
 
 ##############################################################################

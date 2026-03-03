@@ -30,7 +30,17 @@ if [ -n "$VNC_PID" ]; then
         fi
     fi
 else
-    echo "PASS: VNC server is not running (disabled)."
+    # VNC not running — check if /start.sh still configures x11vnc without SSL
+    if [ -f /start.sh ] && grep -q 'x11vnc' /start.sh; then
+        if grep -qi '\-ssl' /start.sh; then
+            echo "PASS: VNC is configured with SSL in /start.sh (not currently running)."
+        else
+            echo "FAIL: x11vnc in /start.sh is configured without -ssl — still vulnerable even if not running."
+            exit 1
+        fi
+    else
+        echo "PASS: VNC server is not running (disabled)."
+    fi
 fi
 
 ##############################################################################

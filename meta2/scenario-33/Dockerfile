@@ -1,12 +1,18 @@
 FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
 
-# Fix package repositories to use old-releases
+# Fix package repositories to use old-releases and enable multiverse
+# (default-jdk does not exist in Ubuntu 8.04 Hardy — introduced in Ubuntu 10.04)
 RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
+    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
+    sed -i 's/^\(deb.*hardy.*\)$/\1 multiverse/' /etc/apt/sources.list
 
-# Install Java (for RMI registry)
+# Install Java (sun-java6-jdk is the JDK available in Hardy multiverse)
+# Pre-accept the Sun DLJ license to allow non-interactive install
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y default-jdk openssh-server
+    echo "sun-java6-jdk shared/accepted-sun-dlj-v1-1 boolean true" | debconf-set-selections && \
+    echo "sun-java6-bin shared/accepted-sun-dlj-v1-1 boolean true" | debconf-set-selections && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y sun-java6-jdk openssh-server && \
+    apt-get clean
 
 # Configure SSH
 RUN mkdir -p /var/run/sshd && \

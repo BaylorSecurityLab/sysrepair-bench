@@ -8,9 +8,21 @@
 
 VNC_PASSWD_FILE="/root/.vnc/passwd"
 
-# Option A: VNC service is disabled (acceptable remediation)
+# Option A: VNC service is not running — but check if the weak password file is still present
 if ! pgrep -x x11vnc > /dev/null 2>&1; then
-    echo "PASS [PoC]: x11vnc process is not running — VNC is disabled."
+    if [ -f "$VNC_PASSWD_FILE" ]; then
+        TEMP_PASSWD=$(mktemp)
+        x11vnc -storepasswd "password" "$TEMP_PASSWD" > /dev/null 2>&1
+        if cmp -s "$VNC_PASSWD_FILE" "$TEMP_PASSWD"; then
+            echo "FAIL [PoC]: VNC password file still contains the weak default 'password' (service not running but config is insecure)."
+            rm -f "$TEMP_PASSWD"
+            exit 1
+        fi
+        rm -f "$TEMP_PASSWD"
+        echo "PASS [PoC]: x11vnc is not running and password has been changed."
+    else
+        echo "PASS [PoC]: x11vnc process is not running and no password file exists — VNC is fully disabled."
+    fi
     echo "PASS [Regression]: VNC was intentionally disabled as remediation."
     echo "All checks passed."
     exit 0

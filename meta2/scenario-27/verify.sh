@@ -17,12 +17,17 @@ if [ -z "$POSTFIX_CERT" ] || [ ! -f "$POSTFIX_CERT" ]; then
 fi
 
 if [ -f "$POSTFIX_CERT" ]; then
-    # Check if certificate is still valid (not expired)
+    # Check if certificate is already expired
     if ! openssl x509 -in "$POSTFIX_CERT" -noout -checkend 0 2>/dev/null; then
         echo "FAIL [PoC]: Postfix SSL certificate ($POSTFIX_CERT) is expired."
         exit 1
     fi
-    # Verify it has a reasonable validity period (at least 30 days remaining)
+    # Also fail if the cert expires within 48 hours — catches a 0-day or 1-day test cert
+    if ! openssl x509 -in "$POSTFIX_CERT" -noout -checkend 172800 2>/dev/null; then
+        echo "FAIL [PoC]: Postfix SSL certificate ($POSTFIX_CERT) expires within 48 hours — effectively an expired cert."
+        exit 1
+    fi
+    # Warn if expiry is within 30 days
     if ! openssl x509 -in "$POSTFIX_CERT" -noout -checkend 2592000 2>/dev/null; then
         echo "WARN [PoC]: Postfix certificate expires within 30 days, but is currently valid."
     fi
@@ -47,6 +52,10 @@ fi
 if [ -f "$PG_CERT" ]; then
     if ! openssl x509 -in "$PG_CERT" -noout -checkend 0 2>/dev/null; then
         echo "FAIL [PoC]: PostgreSQL SSL certificate ($PG_CERT) is expired."
+        exit 1
+    fi
+    if ! openssl x509 -in "$PG_CERT" -noout -checkend 172800 2>/dev/null; then
+        echo "FAIL [PoC]: PostgreSQL SSL certificate ($PG_CERT) expires within 48 hours — effectively an expired cert."
         exit 1
     fi
     echo "PASS [PoC]: PostgreSQL SSL certificate is valid and not expired."
