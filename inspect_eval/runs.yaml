@@ -1,0 +1,77 @@
+# Named run presets. Invoke with:  uv run python -m sysrepair_bench.run <preset>
+# Each preset is a flat dict of: model, solver, benchmarks, scenarios,
+# message_limit, max_attempts, max_connections, log_dir.
+
+defaults:
+  message_limit: 40
+  max_attempts: 1
+  max_connections: 2
+  log_dir: ./logs
+  # --- Timeouts (applied globally; override per-preset if a run needs more) ---
+  # time_limit: per-sample wall-clock ceiling (s). Prevents a hung docker exec
+  time_limit: 1800 # 30 min per scenario
+  token_limit: 500000 # defense against tool-output loops
+  bash_timeout: 180
+  verify_timeout: 300 # verify.sh may need to wait for services
+  fail_on_error: 0.2 # abort run if >20% of samples error out
+  retry_on_error: 2 # transient provider/sandbox errors get 2 retries
+
+presets:
+  smoke:
+    model: openai/devstral-2:123b
+    solver: react
+    scenarios: ["meta2/scenario-01"]
+    message_limit: 20
+
+  meta2_react_local:
+    model: openai/devstral-2:123b
+    solver: react
+    benchmarks: ["meta2"]
+
+  meta2_lats_local:
+    model: openai/devstral-2:123b
+    solver: lats
+    benchmarks: ["meta2"]
+    message_limit: 60
+
+  full_reflexion_qwen:
+    model: ollama/qwen3.5:35b
+    solver: reflexion
+    benchmarks: ["meta2", "vulnhub", "ccdc"]
+    message_limit: 50
+
+  pas_gpt:
+    model: openai/gpt-oss:120b
+    solver: plan_and_solve
+    benchmarks: ["meta2"]
+
+  # ---------------------------------------------------------------------------
+  # Full sweep: every benchmark x every solver x top open-weight models
+  # (best-of-each-company snapshot, 2026-04-14).
+  # Adjust model tags to whatever your Ollama instance has pulled.
+  # Run with:  uv run python -m sysrepair_bench.run full_matrix
+  # ---------------------------------------------------------------------------
+  full_matrix:
+    models:
+      - ollama/glm-5.1:latest # Zhipu AI — GLM-5.1
+      - ollama/qwen3.5:397b-a17b # Alibaba — Qwen3.5 397B A17B (MoE)
+      - ollama/deepseek-v3.2:latest # DeepSeek — V3.2
+      - ollama/kimi-k2.5:latest # Moonshot — Kimi K2.5
+      - ollama/minimax-2.7:latest # MiniMax — 2.7
+      - ollama/mimo-v2-flash:latest # Xiaomi — MiMo-V2-Flash
+      - ollama/gemma-4:31b # Google — Gemma 4 31B
+      - ollama/llama-4:405b # Meta — Llama 4 405B
+      - ollama/mistral-large-3:123b # Mistral — Large 3
+      - ollama/yi-2:34b # 01.AI — Yi-2 34B
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    benchmarks: ["meta2", "vulnhub", "ccdc"]
+    message_limit: 50
+    max_connections: 2
+    log_dir: ./logs/full_matrix
+    # --- HPC timeouts override defaults: ---
+    time_limit: 2400 # 40 min per scenario (LATS tree search is slower)
+    token_limit: 800000 # LATS fans out; keep generous but bounded
+    bash_timeout: 240 # Samba/VNC on Hardy sometimes needs >2 min
+    verify_timeout: 360
+    fail_on_error: 0.25 # allow a few flaky samples before aborting
+    retry_on_error: 2
