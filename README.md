@@ -11,23 +11,28 @@ For each scenario, given only the running container and a threat description, an
 
 Remediation is scored as successful **only if both checks pass**.
 
-The benchmark currently contains **120 scenarios** across three suites:
+The benchmark targets **~250 scenarios across five VM classes**; **120 are live today** across three suites, with Meta3 and Meta4 in active development.
 
-| Suite | Scenarios | Source | Focus |
-|-------|-----------|--------|-------|
-| [`ccdc/`](ccdc/) | 50 | CCDC hardening scripts (TAMU linuxmonkeys, LATech/UTSA SWCCDC, team checklists) | Configuration, dependencies, permissions on Ubuntu 25.10 |
-| [`meta2/`](meta2/) | 40 | OpenVAS scan of Metasploitable 2.0 | Legacy services and CVEs on Ubuntu 8.04 (S34–S40 are **Compensating Controls**). ⚠ **Linux host only** |
-| [`vulnhub/`](vulnhub/) | 30 | VulnHub VM vulnerability analysis (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) | Per-VM vulnerabilities rebuilt on Debian 11 or pulled images |
+| VM Class / Suite | Era | Built | Target | Source |
+|---|---|---|---|---|
+| [`ccdc/`](ccdc/) | 2015–2022 | 50 | ~50 | CCDC blue-team hardening scripts (TAMU linuxmonkeys, LATech/UTSA SWCCDC, team checklists) on Ubuntu 25.10 |
+| [`meta2/`](meta2/) | 2008–2012 | 40 | ~50 | OpenVAS scan of Metasploitable 2.0 on Ubuntu 8.04. ⚠ **Linux host only** (see Host Requirements) |
+| [`vulnhub/`](vulnhub/) | 2012–2022 | 30 | ~50 | Per-VM vulnerability rebuilds (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) on Debian 11 |
+| **`meta3/`** *(in progress)* | 2016–2020 | 0 | ~50 | Port of Rapid7 Metasploitable 3 VMs — **both Windows (Server 2008)** and **Ubuntu 14.04** variants — reproducing the documented vulnerability set (Elasticsearch RCE, Jenkins, ManageEngine, WinRM, SMB, IIS WebDAV, etc.) |
+| **`meta4/`** *(in progress)* | 2022–2026 | 0 | ~50 | **Novel contribution.** Intentionally vulnerable VM incorporating recent CVEs (Log4Shell-era and post-Log4Shell) to fill the temporal gap left by aging Metasploitable and VulnHub images |
 
-### Remediation categories
+Meta4 is a primary artifact of SysRepair-Bench. Existing intentionally-vulnerable VMs overwhelmingly contain pre-2020 vulnerabilities; evaluating modern remediation capability requires environments that reflect the current threat landscape. Meta3 restores coverage of the 2016–2020 era (including the only Windows scenarios in the benchmark) by porting the well-studied Rapid7 Metasploitable 3 surface into reproducible containers / VMs.
 
-Each scenario's `threat.md` is labeled with one of five remediation categories:
+### Vulnerability categories
 
-1. **Access Control** — permissions, ownership, authentication hardening.
-2. **Configuration Hardening** — service/daemon config edits.
-3. **Dependency & Package Management** — patching, upgrades, removals.
-4. **Network Security & Firewall Policy** — iptables/ufw rules, listener scoping.
-5. **Compensating Controls** *(new)* — the direct fix would break a dependent legacy workload or the software is end-of-life, so the agent must apply a network- or config-layer mitigation while the service stays usable. Seeded by `meta2/scenario-34..40`.
+Every scenario's `threat.md` is labeled with one of **four operational remediation categories** that mirror how security-operations teams classify remediation work:
+
+1. **Access Control** — authentication, authorization, user privileges, file ownership. Typical actions: `chmod`, `chown`, `usermod`, `passwd`, `visudo`, `sshd_config`, PAM.
+2. **Configuration Hardening** — insecure defaults, missing security directives, misconfigured service parameters. Typical actions: edits to `nginx.conf`, `sshd_config`, `my.cnf`, `apache2.conf`, `pg_hba.conf`, followed by `systemctl reload`/`restart`.
+3. **Dependency & Package Management** — outdated packages with known CVEs, inherently compromised services, unnecessary high-risk daemons. Typical actions: `apt-get upgrade`, `--only-upgrade`, `remove`, `systemctl disable`.
+4. **Network Security & Firewall Policy** — exposed ports, missing firewall rules, unrestricted listener scope. Typical actions: `ufw`, `iptables`, bind-address changes, TCP wrappers, `netstat`/`ss` auditing.
+
+A **fifth category, Compensating Controls**, is being actively added in parallel (seeded by [`meta2/scenario-34..40`](meta2/)). It covers vulnerabilities where direct remediation is not possible or not desirable — the package cannot be upgraded because a dependent legacy app requires the specific version, the software is end-of-life with no vendor patch, or the service cannot be restarted during business hours. The agent must instead apply network-level restrictions (firewall scoping, bind-to-localhost), application-layer mitigations (WAF rules, `mod_rewrite` guards, ACLs), or safe config-directive removals while keeping the service usable. Scoring adds a third dimension: **compensating-control adequacy** — whether the applied controls meaningfully reduce the attack surface.
 
 ## Repository Layout
 
@@ -36,6 +41,9 @@ sysrepair-bench/
 ├── ccdc/                    # 50 CCDC-derived scenarios (scenario-01..50)
 ├── meta2/                   # 40 Metasploitable 2 / OpenVAS scenarios (scenario-01..40; S34-S40 = Compensating Controls)
 ├── vulnhub/                 # 30 VulnHub-derived scenarios (scenario-01..30)
+├── meta3/                   # (in progress) Metasploitable 3 port — Windows Server + Ubuntu 14.04
+├── meta4/                   # (in progress) Novel post-Log4Shell vulnerable VM
+├── inspect_eval/            # Inspect AI harness: solvers, task wiring, run presets
 └── README.md
 ```
 
@@ -61,7 +69,28 @@ Scenarios are scoped so that fixes are expressible as system-administration prim
 | `service_stop` / `service_disable` | `rlogin`, `avahi-daemon`, `cups` |
 | `iptables_block` | Backdoor ports (1524, 1099, 6200, …) |
 
-Scenarios requiring source-code patches (XSS/SQLi in web apps, language-runtime bugs) are **out of scope** — those belong to code-repair benchmarks.
+## Evaluation Criteria
+
+Every scenario is scored on two mandatory objectives, plus — for Compensating-Controls scenarios — a third:
+
+1. **Security objective (primary).** The specific vulnerability described in `threat.md` is eliminated. Verified by the scenario's `verify.sh` PoC block: a CVE is no longer exploitable, a misconfiguration is corrected, an insecure service is disabled or hardened, permissions are properly restrictive.
+2. **Service availability (regression).** Every service that was operational before remediation stays operational afterward. A fix that patches the vulnerability but kills the web server, database, or SSH management path is scored as a failure. Verified by the scenario's `verify.sh` regression block.
+3. **Compensating-control adequacy** *(Compensating Controls category only).* Where direct remediation is forbidden by the scenario constraints, `verify.sh` additionally asserts that the attack-surface reduction is in place (firewall rule present, listener scoped to loopback, WAF/`mod_rewrite` guard active, unsafe config directive removed).
+
+A scenario is scored **success only if all applicable objectives pass**.
+
+Scenarios may additionally track command count, wall-clock, safety violations (destructive commands outside remediation scope), hallucination (claimed actions that were not executed), and invariant preservation (prior hardening not undone while fixing the target).
+
+## Out of Scope
+
+SysRepair-Bench does **not** cover:
+
+- **Source code modification.** The agent never edits application source, generates code patches, or runs application test suites. That is the domain of SWE-bench and automated program repair.
+- **Web-application vulnerabilities requiring code fixes** (SQLi/XSS/CSRF). Web-server *configuration* hardening (directory listing, security headers, disabling unsafe modules) is in scope; changing application logic is not.
+- **Windows systems** *(except the Meta3 Windows Server variant).* All other suites target Linux (Ubuntu, Debian, CentOS); general Windows administration is out of scope outside the Metasploitable 3 port.
+- **Cloud-native / Kubernetes-specific issues.** IAM policy, orchestration misconfig, and cloud-service settings are out of scope.
+- **Zero-days with no known remediation.** Every scenario has at least one valid remediation path; the benchmark tests whether agents find and execute it.
+- **Hardware / firmware vulnerabilities** (Spectre, Meltdown, etc.).
 
 ## Set-up
 
@@ -139,13 +168,53 @@ Each `threat.md` is written as a self-contained prompt and provides:
 
 Agents should be evaluated under either a *zero-knowledge* variant (only the container is exposed) or a *one-day* variant (threat.md is provided as context). The `verify.sh` grader is the same in both cases.
 
+## Running agents with the Inspect AI harness
+
+An end-to-end evaluation harness built on [Inspect AI](https://inspect.aisi.org.uk/) lives in [`inspect_eval/`](inspect_eval/). It loads scenarios from every suite, runs an agent solver against each one in a Docker sandbox, invokes `verify.sh`, and records pass/fail plus trajectory telemetry.
+
+### Quickstart
+
+```bash
+cd inspect_eval
+uv sync
+
+# Single scenario smoke test
+uv run python -m sysrepair_bench.run smoke
+
+# Full meta2 suite, ReAct solver, local Ollama
+uv run python -m sysrepair_bench.run meta2_react_local
+```
+
+### Available presets
+
+Presets are declared in [`inspect_eval/runs.yaml`](inspect_eval/runs.yaml). Each preset pins a model, solver, benchmark selection, and timeouts.
+
+| Preset | Purpose |
+|---|---|
+| `smoke` | One-scenario sanity check (`meta2/scenario-01`, ReAct) |
+| `meta2_react_local` | Full `meta2/` suite under ReAct, local model |
+| `meta2_lats_local` | Full `meta2/` suite under LATS tree search |
+| `pas_gpt` | Plan-and-Solve on `meta2/` |
+| `full_reflexion_qwen` | Reflexion across `meta2`, `vulnhub`, `ccdc` |
+| `full_matrix` | 10 open-weight models × 5 solvers × 3 benchmarks (HPC) |
+
+### Solvers
+
+`react`, `basic`, `reflexion`, `plan_and_solve`, `lats` — all exposed via the `solver:` key in a preset.
+
+### Timeouts & safety
+
+Defaults in `runs.yaml`: `time_limit=1800s`, `token_limit=500k`, `bash_timeout=180s`, `verify_timeout=300s`. Every `bash` and `verify.sh` invocation has an explicit timeout so a hung service can't stall the run; LATS marks timed-out nodes as fatal rather than re-expanding them. The tool surface is bash-only (no Python) because Metasploitable-2-era containers may not ship a Python interpreter.
+
+See [`inspect_eval/README.md`](inspect_eval/README.md) for the full list of task parameters, scoring fields, and harness internals.
+
 ## Suites
 
-| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) |
-|---|---|---|---|
-| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) |
-| Scenarios | 50 | 40 | 30 |
-| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs |
+| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) | [meta3/](meta3/) *(WIP)* | [meta4/](meta4/) *(WIP)* |
+|---|---|---|---|---|---|
+| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) | Windows Server 2008 R2 + Ubuntu 14.04 (Metasploitable 3 port) | Ubuntu 22.04 / Debian 12 (post-Log4Shell CVEs) |
+| Scenarios | 50 | 40 | 30 | 0 / ~50 | 0 / ~50 |
+| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs | Windows + Linux service-layer RCEs, SMB/WinRM/IIS + Linux daemons | Recent-CVE mix across the four remediation categories |
 
 See each suite's README for the full scenario index.
 
