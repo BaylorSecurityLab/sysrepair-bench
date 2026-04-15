@@ -1,0 +1,11 @@
+{
+  "metasploitable": {
+    "files_path": "/cookbooks/metasploitable/files/"
+  },
+  "proftpd": {
+    "download_url": "ftp://ftp.proftpd.org/distrib/source"
+  },
+  "run_list": [
+    "recipe[metasploitable::proftpd]"
+  ]
+}

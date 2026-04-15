@@ -1,0 +1,12 @@
+{
+  "metasploitable": {
+    "files_path": "/cookbooks/metasploitable/files/"
+  },
+  "unrealircd": {
+    "install_dir": "/opt/unrealircd",
+    "download_url": "https://raw.githubusercontent.com/rapid7/metasploitable3/master/chef/cookbooks/metasploitable/files/default/unrealircd"
+  },
+  "run_list": [
+    "recipe[metasploitable::unrealircd]"
+  ]
+}

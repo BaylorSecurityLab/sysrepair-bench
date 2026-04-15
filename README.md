@@ -11,14 +11,15 @@ For each scenario, given only the running container and a threat description, an
 
 Remediation is scored as successful **only if both checks pass**.
 
-The benchmark targets **~250 scenarios across five VM classes**; **120 are live today** across three suites, with Meta3 and Meta4 in active development.
+The benchmark targets **~250 scenarios across five VM classes**; **139 are live today** across four suites, with the Windows half of Meta3 and all of Meta4 in active development.
 
 | VM Class / Suite | Era | Built | Target | Source |
 |---|---|---|---|---|
 | [`ccdc/`](ccdc/) | 2015–2022 | 50 | ~50 | CCDC blue-team hardening scripts (TAMU linuxmonkeys, LATech/UTSA SWCCDC, team checklists) on Ubuntu 25.10 |
 | [`meta2/`](meta2/) | 2008–2012 | 40 | ~50 | OpenVAS scan of Metasploitable 2.0 on Ubuntu 8.04. ⚠ **Linux host only** (see Host Requirements) |
 | [`vulnhub/`](vulnhub/) | 2012–2022 | 30 | ~50 | Per-VM vulnerability rebuilds (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) on Debian 11 |
-| **`meta3/`** *(in progress)* | 2016–2020 | 0 | ~50 | Port of Rapid7 Metasploitable 3 VMs — **both Windows (Server 2008)** and **Ubuntu 14.04** variants — reproducing the documented vulnerability set (Elasticsearch RCE, Jenkins, ManageEngine, WinRM, SMB, IIS WebDAV, etc.) |
+| [`meta3/ubuntu/`](meta3/ubuntu/) | 2014–2020 | 19 | 19 | Port of Rapid7 Metasploitable 3 (Ubuntu 14.04) — Drupalgeddon, ProFTPD mod_copy, payroll_app, Docker group escalation, WEBrick, UnrealIRCd, Samba, phpMyAdmin. Vendors the Rapid7 Chef cookbook under BSD-3. |
+| **[`meta3/windows/`](meta3/windows/)** *(in progress)* | 2016–2020 | 0 | ~20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scan-driven index pending Windows OpenVAS scan. ⚠ **Windows host only** (see Host Requirements) |
 | **`meta4/`** *(in progress)* | 2022–2026 | 0 | ~50 | **Novel contribution.** Intentionally vulnerable VM incorporating recent CVEs (Log4Shell-era and post-Log4Shell) to fill the temporal gap left by aging Metasploitable and VulnHub images |
 
 Meta4 is a primary artifact of SysRepair-Bench. Existing intentionally-vulnerable VMs overwhelmingly contain pre-2020 vulnerabilities; evaluating modern remediation capability requires environments that reflect the current threat landscape. Meta3 restores coverage of the 2016–2020 era (including the only Windows scenarios in the benchmark) by porting the well-studied Rapid7 Metasploitable 3 surface into reproducible containers / VMs.
@@ -41,7 +42,8 @@ sysrepair-bench/
 ├── ccdc/                    # 50 CCDC-derived scenarios (scenario-01..50)
 ├── meta2/                   # 40 Metasploitable 2 / OpenVAS scenarios (scenario-01..40; S34-S40 = Compensating Controls)
 ├── vulnhub/                 # 30 VulnHub-derived scenarios (scenario-01..30)
-├── meta3/                   # (in progress) Metasploitable 3 port — Windows Server + Ubuntu 14.04
+├── meta3/ubuntu/            # 19 Metasploitable 3 (Ubuntu 14.04) scenarios + vendored Chef cookbook (shared/)
+├── meta3/windows/           # (in progress) Metasploitable 3 (Windows Server) — awaiting OpenVAS scan
 ├── meta4/                   # (in progress) Novel post-Log4Shell vulnerable VM
 ├── inspect_eval/            # Inspect AI harness: solvers, task wiring, run presets
 └── README.md
@@ -130,6 +132,22 @@ be run with `--cap-add=NET_ADMIN`:
 docker run -d --cap-add=NET_ADMIN --name meta2-s39 meta2-s39
 ```
 
+### Host requirements for the `meta3/windows/` sub-suite
+
+> ⚠ **The `meta3/windows/` sub-suite runs on a Windows host only.** It cannot be
+> executed on Linux or macOS — Windows containers (`mcr.microsoft.com/windows/servercore`)
+> share the Windows NT kernel with the host and have no Linux equivalent. The
+> `meta3/ubuntu/` sub-suite, `ccdc/`, and `vulnhub/` all run on any Docker host.
+
+The Windows sub-suite requires:
+
+- Windows 10/11 **Pro or Enterprise**, or Windows Server 2019+ (Home editions do not support Windows Containers or Hyper-V isolation)
+- Docker Desktop switched to **Windows Containers** mode (right-click the tray icon → "Switch to Windows containers"), **or** a native Windows `dockerd` install
+- Hyper-V and Containers features enabled: `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All` and `Enable-WindowsOptionalFeature -Online -FeatureName Containers -All`
+- ~40 GB free disk for the Server Core base image plus per-scenario layers
+
+Process isolation works when the container's Windows build matches the host; Hyper-V isolation (`--isolation=hyperv`) is the safe default for mixed builds. See [`meta3/windows/README.md`](meta3/windows/README.md) for per-scenario isolation requirements.
+
 ## Using SysRepair-Bench
 
 ### Build and run a single scenario
@@ -210,11 +228,11 @@ See [`inspect_eval/README.md`](inspect_eval/README.md) for the full list of task
 
 ## Suites
 
-| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) | [meta3/](meta3/) *(WIP)* | [meta4/](meta4/) *(WIP)* |
+| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) | [meta3/](meta3/README.md) | [meta4/](meta4/) *(WIP)* |
 |---|---|---|---|---|---|
-| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) | Windows Server 2008 R2 + Ubuntu 14.04 (Metasploitable 3 port) | Ubuntu 22.04 / Debian 12 (post-Log4Shell CVEs) |
-| Scenarios | 50 | 40 | 30 | 0 / ~50 | 0 / ~50 |
-| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs | Windows + Linux service-layer RCEs, SMB/WinRM/IIS + Linux daemons | Recent-CVE mix across the four remediation categories |
+| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) | `ubuntu:14.04` ([`meta3/ubuntu/`](meta3/ubuntu/README.md)) + `mcr.microsoft.com/windows/servercore` ([`meta3/windows/`](meta3/windows/README.md), Windows host required) | Ubuntu 22.04 / Debian 12 (post-Log4Shell CVEs) |
+| Scenarios | 50 | 40 | 30 | 19 Ubuntu live / ~20 Windows *(WIP)* | 0 / ~50 |
+| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs | Ubuntu: Config (S01–S05, S18, S19), Patch (S06–S09), Access (S10, S11), Network (S12), **Compensating** (S13–S17). Windows sub-suite same shape, pending scan. | Recent-CVE mix across the four remediation categories |
 
 See each suite's README for the full scenario index.
 
@@ -236,3 +254,5 @@ Scenarios draw on public material from:
 - Collegiate Cyber Defense Competition (CCDC) team hardening toolkits — TAMU linuxmonkeys, LATech 2023 SWCCDC, UTSA 2023 SWCCDC
 - OpenVAS scan of [Metasploitable 2.0](https://information.rapid7.com/download-metasploitable-2017.html)
 - [VulnHub](https://www.vulnhub.com/) community VMs (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, FristiLeaks, LinSecurity, Brainpan, De-ICE, PwnOS)
+- Rapid7 [metasploitable3](https://github.com/rapid7/metasploitable3) — `meta3/ubuntu/shared/cookbooks/` vendors portions of the upstream Chef cookbook (BSD-3-Clause, © Rapid7, Inc.) to provision the Meta3-Ubuntu software stack (Drupal, payroll_app, phpMyAdmin, ProFTPD, UnrealIRCd, Samba). Full attribution in [`meta3/ubuntu/shared/UPSTREAM_LICENSE`](meta3/ubuntu/shared/UPSTREAM_LICENSE). The Windows sub-suite will similarly reference the upstream Packer/Vagrant installer scripts once authored.
+- [OpenVAS / Greenbone](https://www.greenbone.net/) for the scan reports in [`openvas-scan-reports/`](openvas-scan-reports/) that drive the meta2 and meta3 scenario scopes

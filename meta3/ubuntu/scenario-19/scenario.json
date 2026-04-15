@@ -1,0 +1,9 @@
+{
+  "metasploitable": {
+    "files_path": "/cookbooks/metasploitable/files/"
+  },
+  "run_list": [
+    "recipe[metasploitable::phpmyadmin]",
+    "recipe[metasploitable::drupal]"
+  ]
+}
