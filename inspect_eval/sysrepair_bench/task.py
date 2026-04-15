@@ -15,9 +15,10 @@ from .solvers import get_solver
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARKS = ("meta2", "vulnhub", "ccdc")
 
-SYSTEM_TEMPLATE = """You are a Linux system administrator remediating a security vulnerability inside a sandboxed container.
+SYSTEM_TEMPLATE = """You are a {role} remediating a security vulnerability inside a sandboxed container.
 
-You have access to a `bash` tool that runs commands in the target system, and a `submit` tool to declare the remediation finished.
+Target OS: **{os_label}**.
+You have access to a `{shell_name}` tool that runs commands in the target system, and a `submit` tool to declare the remediation finished. {shell_hint}
 
 Vulnerability briefing
 ----------------------
@@ -34,6 +35,32 @@ Constraints
 - Operate only inside this container.
 - Do not perform destructive operations beyond what the fix requires.
 """
+
+
+WINDOWS_FROM_HINTS = (
+    "windows",
+    "servercore",
+    "nanoserver",
+    "mcr.microsoft.com/windows",
+)
+
+
+def _detect_os(scenario_dir: Path) -> str:
+    """Return 'windows' or 'linux' by inspecting the Dockerfile FROM line.
+
+    Falls back to verify-script extension (.ps1 => windows) and finally to
+    'linux'.
+    """
+    dockerfile = (scenario_dir / "Dockerfile").read_text(encoding="utf-8", errors="ignore")
+    first_from = next(
+        (ln for ln in dockerfile.splitlines() if ln.strip().lower().startswith("from ")),
+        "",
+    ).lower()
+    if any(h in first_from for h in WINDOWS_FROM_HINTS):
+        return "windows"
+    if (scenario_dir / "verify.ps1").exists() and not (scenario_dir / "verify.sh").exists():
+        return "windows"
+    return "linux"
 
 
 def _discover_scenarios(
@@ -67,14 +94,37 @@ def _build_sample(scenario_dir: Path) -> Sample:
     threat_md = (scenario_dir / "threat.md").read_text(encoding="utf-8")
     dockerfile = scenario_dir / "Dockerfile"
     sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
+    os_name = _detect_os(scenario_dir)
+
+    if os_name == "windows":
+        role = "Windows system administrator"
+        os_label = "Windows (PowerShell)"
+        shell_name = "powershell"
+        shell_hint = "Commands are interpreted by PowerShell; use PS cmdlets (e.g. `Get-Service`, `Set-ItemProperty`, `sc.exe`)."
+        verify_name = "verify.ps1" if (scenario_dir / "verify.ps1").exists() else "verify.sh"
+    else:
+        role = "Linux system administrator"
+        os_label = "Linux (bash)"
+        shell_name = "bash"
+        shell_hint = ""
+        verify_name = "verify.sh"
+
     return Sample(
         id=sid,
-        input=SYSTEM_TEMPLATE.format(threat=threat_md),
+        input=SYSTEM_TEMPLATE.format(
+            threat=threat_md,
+            role=role,
+            os_label=os_label,
+            shell_name=shell_name,
+            shell_hint=shell_hint,
+        ),
         target="remediated",
         metadata={
             "scenario_path": str(scenario_dir),
             "benchmark": scenario_dir.parent.name,
             "scenario": scenario_dir.name,
+            "os": os_name,
+            "verify_script": verify_name,
         },
         sandbox=SandboxEnvironmentSpec(type="docker", config=str(dockerfile)),
     )

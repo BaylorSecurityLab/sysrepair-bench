@@ -23,41 +23,96 @@ from inspect_ai.model import (
 )
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.tool import ToolDef, bash, tool
-from inspect_ai.util import sandbox
+from inspect_ai.util import sandbox, store
 
 
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-# Only bash is exposed. We deliberately do NOT register `python()` because some
-# target containers (Ubuntu 8.04 / Metasploitable-2 images) don't ship a usable
-# python interpreter for the tool bridge. Everything the agent does must be
-# expressible as shell.
+# OS-aware shell: bash on Linux containers, PowerShell on Windows containers.
+# The per-sample OS is stamped into store() at solver entry (see _prime_os).
+# Python is deliberately NOT exposed because some target containers (Ubuntu
+# 8.04 / Metasploitable-2, Windows Server 2008 R2) don't ship a usable
+# interpreter for the tool bridge.
+
+
+def _shell_tool(timeout: int = 180):
+    @tool
+    def shell():
+        async def execute(command: str) -> str:
+            """Run a shell command inside the target container.
+
+            On Linux targets the command is passed to `bash -lc`.
+            On Windows targets it is passed to `powershell.exe -Command`.
+            Returns combined stdout/stderr and the exit code.
+            """
+            os_name = store().get("os", "linux")
+            if os_name == "windows":
+                argv = ["powershell.exe", "-NoProfile", "-Command", command]
+            else:
+                argv = ["bash", "-lc", command]
+            try:
+                r = await sandbox().exec(argv, timeout=timeout)
+            except TimeoutError:
+                return f"[timeout after {timeout}s]"
+            return (
+                f"exit_code: {r.returncode}\n"
+                f"stdout:\n{(r.stdout or '')[:4000]}\n"
+                f"stderr:\n{(r.stderr or '')[:2000]}"
+            )
+        return execute
+    return shell()
+
 
 def _tools(timeout: int = 180):
-    return [bash(timeout=timeout)]
+    return [_shell_tool(timeout)]
+
+
+def _prime_os(state: TaskState) -> None:
+    """Copy sample OS metadata into the per-sample store so tools can see it."""
+    store().set("os", state.metadata.get("os", "linux"))
 
 
 # ---------------------------------------------------------------------------
 # Verify helper (used by reflexion / plan_and_solve / lats mid-run)
 # ---------------------------------------------------------------------------
 
-async def _verify_in_sandbox(scenario_path: str, timeout: int = 300) -> bool:
-    """Run the scenario's verify.sh inside the sandbox.
+async def _verify_in_sandbox(
+    scenario_path: str, timeout: int = 300, os_name: str = "linux"
+) -> bool:
+    """Run the scenario's verify script inside the sandbox.
 
+    Picks verify.ps1 + PowerShell on Windows, verify.sh + bash on Linux.
     ``timeout`` is generous by default because Hardy-era services (Samba, VNC,
-    Ruby dRuby, distccd) can take many seconds to come up and verify.sh may
-    need to poll them.
+    Ruby dRuby, distccd) and Windows services can take many seconds to come up.
     """
-    verify_src = (Path(scenario_path) / "verify.sh").read_text(encoding="utf-8")
+    sp = Path(scenario_path)
     sb = sandbox()
-    await sb.write_file("/tmp/verify.sh", verify_src)
-    await sb.exec(["chmod", "+x", "/tmp/verify.sh"], timeout=30)
+    if os_name == "windows":
+        src_file = sp / "verify.ps1"
+        if not src_file.exists():
+            src_file = sp / "verify.sh"  # fallback
+        await sb.write_file("C:/verify.ps1", src_file.read_text(encoding="utf-8"))
+        argv = [
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", "C:/verify.ps1",
+        ]
+    else:
+        await sb.write_file("/tmp/verify.sh",
+                            (sp / "verify.sh").read_text(encoding="utf-8"))
+        await sb.exec(["chmod", "+x", "/tmp/verify.sh"], timeout=30)
+        argv = ["bash", "/tmp/verify.sh"]
     try:
-        result = await sb.exec(["bash", "/tmp/verify.sh"], timeout=timeout)
+        result = await sb.exec(argv, timeout=timeout)
     except TimeoutError:
         return False
     return result.returncode == 0
+
+
+def _shell_exec_argv(os_name: str, command: str) -> list[str]:
+    if os_name == "windows":
+        return ["powershell.exe", "-NoProfile", "-Command", command]
+    return ["bash", "-lc", command]
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +122,7 @@ async def _verify_in_sandbox(scenario_path: str, timeout: int = 300) -> bool:
 def _react_solver(
     message_limit: int, max_attempts: int, bash_timeout: int
 ) -> Solver:
-    return react(
+    inner = react(
         tools=_tools(bash_timeout),
         attempts=max_attempts,
         on_continue=(
@@ -77,6 +132,15 @@ def _react_solver(
         ),
     )
 
+    @solver
+    def _wrapped() -> Solver:
+        async def solve(state: TaskState, generate: Generate) -> TaskState:
+            _prime_os(state)
+            return await inner(state, generate)
+        return solve
+
+    return _wrapped()
+
 
 # ---------------------------------------------------------------------------
 # 2. Basic / Raw computer use — minimal generate+tool loop
@@ -85,6 +149,7 @@ def _react_solver(
 @solver
 def basic_solver(message_limit: int = 40, bash_timeout: int = 180) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
+        _prime_os(state)
         state.tools = _tools(bash_timeout)
         for _ in range(message_limit):
             state = await generate(state)
@@ -112,7 +177,9 @@ def reflexion_solver(
     verify_timeout: int = 300,
 ) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
+        _prime_os(state)
         scenario_path = state.metadata["scenario_path"]
+        os_name = state.metadata.get("os", "linux")
         original_input = state.input_text
         correction = ""
         model = get_model()
@@ -133,7 +200,7 @@ def reflexion_solver(
             inner_state = await inner(inner_state)
             state.messages.extend(inner_state.messages[1:])  # skip dup system
 
-            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout):
+            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout, os_name=os_name):
                 state.output.completion = "REMEDIATION_COMPLETE"
                 return state
 
@@ -177,7 +244,9 @@ def plan_and_solve_solver(
     verify_timeout: int = 300,
 ) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
+        _prime_os(state)
         scenario_path = state.metadata["scenario_path"]
+        os_name = state.metadata.get("os", "linux")
         model = get_model()
 
         plan_prompt = (
@@ -212,7 +281,7 @@ def plan_and_solve_solver(
                 executed += 1
                 sb = sandbox()
                 try:
-                    result = await sb.exec(["bash", "-lc", cmd], timeout=bash_timeout)
+                    result = await sb.exec(_shell_exec_argv(os_name, cmd), timeout=bash_timeout)
                 except TimeoutError:
                     state.messages.append(
                         ChatMessageAssistant(
@@ -229,11 +298,12 @@ def plan_and_solve_solver(
                 )
                 if result.returncode == 0:
                     break
+                shell_word = "PowerShell" if os_name == "windows" else "bash"
                 fix_prompt = (
                     f"Step goal: {step.get('description', '')}\n"
                     f"Command failed: {cmd}\n"
                     f"stderr: {result.stderr[:300]}\n"
-                    "Provide ONE corrected bash command, no markdown, no explanation."
+                    f"Provide ONE corrected {shell_word} command, no markdown, no explanation."
                 )
                 fix_resp = await model.generate(
                     input=[
@@ -245,7 +315,7 @@ def plan_and_solve_solver(
                 if cmd.startswith("bash\n"):
                     cmd = cmd[5:]
 
-            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout):
+            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout, os_name=os_name):
                 state.output.completion = "REMEDIATION_COMPLETE"
                 return state
 
@@ -296,7 +366,10 @@ def lats_solver(
     verify_timeout: int = 300,
 ) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
+        _prime_os(state)
         scenario_path = state.metadata["scenario_path"]
+        os_name = state.metadata.get("os", "linux")
+        shell_word = "PowerShell" if os_name == "windows" else "bash"
         model = get_model()
         root = _Node(command="", parent=None, depth=0)
         rollout_count = 0
@@ -332,7 +405,7 @@ def lats_solver(
                 f"Last result: exit={n.exit_code} "
                 f"stdout={n.stdout[:200]} stderr={n.stderr[:200]}\n\n"
                 f'Return JSON: {{"commands": ["cmd1", ...]}} with {num_expansions} '
-                "distinct candidate bash commands that each make different progress."
+                f"distinct candidate {shell_word} commands that each make different progress."
             )
             resp = await model.generate(
                 input=[
@@ -357,7 +430,7 @@ def lats_solver(
             sb = sandbox()
             try:
                 result = await sb.exec(
-                    ["bash", "-lc", n.command], timeout=bash_timeout
+                    _shell_exec_argv(os_name, n.command), timeout=bash_timeout
                 )
                 n.exit_code = result.returncode
                 n.stdout = (result.stdout or "")[:400]
@@ -374,7 +447,7 @@ def lats_solver(
                 )
             )
 
-            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout):
+            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout, os_name=os_name):
                 return 1.0, True
 
             score_prompt = (
