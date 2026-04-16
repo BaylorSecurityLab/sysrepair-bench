@@ -28,7 +28,7 @@ presets:
   smoke_gemma4:
     model: openai/gemma-4-31b
     solver: react
-    scenarios: ["meta2/scenario-01"]
+    scenarios: ["ccdc/scenario-01"]
     message_limit: 20
     time_limit: 1800
     bash_timeout: 240
@@ -58,12 +58,12 @@ presets:
 
   # Gemma 4 31B served via vLLM (OpenAI-compatible, --served-model-name gemma-4-31b).
   # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
-  # Tuned for ReAct over meta2; bumps all timeouts vs defaults because Hardy
+  # Tuned for ReAct over ccdc; bumps all timeouts vs defaults because Hardy
   # containers + Gemma 4 thinking-mode traces run long.
-  meta2_react_gemma4_31b:
+  ccdc_react_gemma4_31b:
     model: openai/gemma-4-31b
     solver: react
-    benchmarks: ["meta2"]
+    benchmarks: ["ccdc"]
     message_limit: 50
     max_connections: 2
     time_limit: 2400 # 40 min per scenario (thinking mode adds latency)
