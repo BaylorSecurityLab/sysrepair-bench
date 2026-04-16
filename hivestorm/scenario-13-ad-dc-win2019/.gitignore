@@ -1,0 +1,4 @@
+build/
+task.md
+.vagrant/
+*.box

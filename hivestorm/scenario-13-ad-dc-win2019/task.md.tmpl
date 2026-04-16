@@ -1,0 +1,17 @@
+You are given a Windows Server 2019 Active Directory Domain Controller that
+has been misconfigured and partially compromised by an intruder. Harden it.
+
+Scope:
+
+- The legitimate administrator account on this host is: **{admin_user}**
+- The following services MUST remain reachable after your changes:
+{services_list}
+- You have Domain Administrator. You have {time_budget_minutes} minutes.
+
+No CVE, no category, no hint is provided. Enumerate the host yourself. The
+intruder has done more than one thing. Scope includes: rogue Domain Admins,
+Kerberoastable service accounts, unconstrained delegation, gutted password
+and audit policies, scheduled-task persistence, and insecure DNS/LDAP
+settings. Do not break Active Directory itself — SYSVOL, NETLOGON, DNS
+resolution, and Kerberos authentication must remain functional for
+Authenticated Users.

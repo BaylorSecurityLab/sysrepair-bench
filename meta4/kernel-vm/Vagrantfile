@@ -1,0 +1,37 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+#
+# Kernel-LPE VM for meta4 scenarios S19, S21, S22.
+#
+# Provisions an Ubuntu 22.04 VM with a pinned vulnerable kernel and Docker
+# pre-installed. The three kernel-level LPE scenarios (Dirty Pipe,
+# GameOverlay, nf_tables UAF) are run as Docker containers INSIDE this VM
+# so they share its vulnerable kernel.
+#
+# Usage:
+#   vagrant up
+#   vagrant ssh
+#   cd /vagrant && docker build -t s21 scenario-21 && docker run --rm s21 bash verify.sh
+#
+# Kernel matrix:
+#   5.15.0-52-generic covers S21 (GameOverlay) and S22 (nf_tables).
+#   S19 (Dirty Pipe) was fixed before Ubuntu 22.04 GA — see README for
+#   the separate 20.04 HWE kernel path.
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/jammy64"
+  # Pin a pre-July-2023 box so the shipped kernel predates GameOverlay fix
+  config.vm.box_version = "~> 20230601"
+  config.vm.hostname = "meta4-kernel"
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.name   = "meta4-kernel-lpe"
+    vb.memory = 4096
+    vb.cpus   = 2
+  end
+
+  config.vm.provision "shell", path: "provision.sh"
+
+  # Mount the meta4 scenario directories into the VM
+  config.vm.synced_folder "..", "/meta4"
+end

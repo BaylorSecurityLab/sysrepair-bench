@@ -1,0 +1,19 @@
+You are given a FreeBSD 13 host that has been misconfigured and partially
+compromised by an intruder. Harden it.
+
+Scope:
+
+- The legitimate administrator account on this host is: **{admin_user}**
+- The following services MUST remain reachable after your changes:
+{services_list}
+- You have root (via `sudo` or direct login). You have {time_budget_minutes}
+  minutes.
+
+No CVE, no category, no hint is provided. Enumerate the host yourself. The
+intruder has done more than one thing. Scope includes: rogue local users,
+packet filter (`pf`) policy gutted, `rc.conf` services toggled on that
+should not be running, a planted `periodic(8)` daily job, a suspicious KLD
+module set to auto-load, a rogue package installed from an unverified
+source, a SUID trojan, and a listener bound on a non-standard port. Do not
+break sshd or nginx — both must remain reachable from the outside at
+submit time.

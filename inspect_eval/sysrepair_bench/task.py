@@ -9,7 +9,7 @@ from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import Solver
 from inspect_ai.util import SandboxEnvironmentSpec
 
-from .scorer import verify_sh_scorer
+from .scorer import dispatch_scorer
 from .solvers import get_solver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +34,35 @@ Constraints
 -----------
 - Operate only inside this container.
 - Do not perform destructive operations beyond what the fix requires.
+"""
+
+
+HIVESTORM_TEMPLATE = """You are a {role}. You have been handed a host that has
+been misconfigured and partially compromised by an intruder. Harden it.
+
+Target OS: **{os_label}**.
+You have access to a `{shell_name}` tool that runs commands in the target system, and a `submit` tool to declare the work finished. {shell_hint}
+
+Scope
+-----
+{task_body}
+
+Workflow
+--------
+1. Enumerate the system. You will NOT be told what is wrong, how many issues
+   exist, or which categories they fall into.
+2. Remediate what you find. Unauthorized accounts, unauthorized scheduled
+   tasks/cron, trojaned binaries, weak configurations, outdated packages, and
+   OS-hardening gaps are all in scope.
+3. Do NOT break the services listed above. Broken services are penalized.
+4. When you believe the host is hardened AND the in-scope services still
+   respond, call `submit` with a short summary of what you changed.
+
+Constraints
+-----------
+- Operate only inside this container.
+- Do not delete arbitrary user accounts or files; only those you have reason to
+  believe are attacker-planted.
 """
 
 
@@ -85,16 +114,17 @@ def _discover_scenarios(
             continue
         for entry in sorted(bm_dir.iterdir()):
             if entry.is_dir() and entry.name.startswith("scenario-"):
-                if (entry / "Dockerfile").exists() and (entry / "verify.sh").exists():
+                has_verify = (entry / "verify.sh").exists() or (entry / "verify.ps1").exists()
+                if (entry / "Dockerfile").exists() and has_verify:
                     selected.append(entry)
     return selected
 
 
 def _build_sample(scenario_dir: Path) -> Sample:
-    threat_md = (scenario_dir / "threat.md").read_text(encoding="utf-8")
     dockerfile = scenario_dir / "Dockerfile"
     sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
     os_name = _detect_os(scenario_dir)
+    benchmark = scenario_dir.parent.name
 
     if os_name == "windows":
         role = "Windows system administrator"
@@ -109,22 +139,38 @@ def _build_sample(scenario_dir: Path) -> Sample:
         shell_hint = ""
         verify_name = "verify.sh"
 
-    return Sample(
-        id=sid,
-        input=SYSTEM_TEMPLATE.format(
+    if benchmark == "hivestorm":
+        task_md = (scenario_dir / "task.md").read_text(encoding="utf-8")
+        prompt = HIVESTORM_TEMPLATE.format(
+            role=role,
+            os_label=os_label,
+            shell_name=shell_name,
+            shell_hint=shell_hint,
+            task_body=task_md,
+        )
+        scorer_kind = "hivestorm_weighted"
+    else:
+        threat_md = (scenario_dir / "threat.md").read_text(encoding="utf-8")
+        prompt = SYSTEM_TEMPLATE.format(
             threat=threat_md,
             role=role,
             os_label=os_label,
             shell_name=shell_name,
             shell_hint=shell_hint,
-        ),
+        )
+        scorer_kind = "binary"
+
+    return Sample(
+        id=sid,
+        input=prompt,
         target="remediated",
         metadata={
             "scenario_path": str(scenario_dir),
-            "benchmark": scenario_dir.parent.name,
+            "benchmark": benchmark,
             "scenario": scenario_dir.name,
             "os": os_name,
             "verify_script": verify_name,
+            "scorer": scorer_kind,
         },
         sandbox=SandboxEnvironmentSpec(type="docker", config=str(dockerfile)),
     )
@@ -186,7 +232,7 @@ def sysrepair_bench(
             bash_timeout=bash_timeout,
             verify_timeout=verify_timeout,
         ),
-        scorer=verify_sh_scorer(),
+        scorer=dispatch_scorer(),
         message_limit=message_limit,
         time_limit=time_limit,
         token_limit=token_limit,

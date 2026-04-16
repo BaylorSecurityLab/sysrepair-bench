@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="C" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d [%t] %-5p %c - %m q=${ctx:q}%n"/>
+    </Console>
+  </Appenders>
+  <Loggers><Root level="info"><AppenderRef ref="C"/></Root></Loggers>
+</Configuration>

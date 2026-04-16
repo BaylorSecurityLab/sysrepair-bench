@@ -46,3 +46,9 @@ bundles/
 vendor/pkg/
 pyenv
 Vagrantfile
+!meta4/kernel-vm/Vagrantfile
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo

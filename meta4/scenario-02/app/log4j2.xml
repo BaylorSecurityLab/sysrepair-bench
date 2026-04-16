@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    <!-- Non-default PatternLayout referencing Thread Context Map ${ctx:q}
+         is what re-opens the lookup surface patched in 2.15.0. -->
+    <Console name="C" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d %-5p [%t] %c - %m q=${ctx:q}%n"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Root level="info"><AppenderRef ref="C"/></Root>
+  </Loggers>
+</Configuration>

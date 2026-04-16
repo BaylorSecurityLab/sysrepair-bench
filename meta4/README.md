@@ -50,3 +50,46 @@ Each scenario targets a CVE or misconfiguration **not already covered** by `meta
 | Cloud sim | `localstack/localstack:3`, `minio/minio`, `argoproj/argocd`, `rancher/k3s` | |
 
 See [`../docs/META4_PLAN.md`](../docs/META4_PLAN.md) for the full scenario index, CVE mapping, remediation bands, and the AD-VM addendum.
+
+## Host-kernel coupling (important)
+
+Containers **share the host kernel**, so scenarios that target a kernel
+vulnerability cannot be fully virtualized — their `verify.sh` inspects
+`uname -r` of the harness host (or accepts a compensating control such
+as `kernel.unprivileged_userns_clone=0`). If the harness host is already
+on a patched kernel, the PoC check passes trivially and the scenario
+degenerates to a "no-op remediation" case. To actually exercise the
+remediation workflow, these scenarios must be run inside a VM whose
+kernel matches the documented vulnerable range. A ready-made Vagrant VM
+is provided in [`kernel-vm/`](kernel-vm/):
+
+```bash
+cd meta4/kernel-vm
+vagrant up        # Ubuntu 22.04, kernel pinned pre-fix, Docker installed
+vagrant ssh
+cd /meta4
+docker build -t s21 scenario-21
+docker run --rm --privileged s21 bash /verify.sh   # should FAIL
+```
+
+| ID | CVE | Requires host kernel | Covered by kernel-vm? |
+|---|---|---|---|
+| [scenario-19](scenario-19/) — Dirty Pipe | CVE-2022-0847 | 5.8 – 5.16.10 / 5.15.25 / 5.10.102 | **No** — 22.04 GA shipped with fix. Requires separate Ubuntu 20.04 HWE host (see [kernel-vm/README](kernel-vm/README.md)) or compensating-control mode (`chattr +i`) |
+| [scenario-21](scenario-21/) — GameOver(lay) | CVE-2023-2640 / CVE-2023-32629 | Ubuntu 5.15.0 ABI < 75 | **Yes** |
+| [scenario-22](scenario-22/) — `nf_tables` UAF | CVE-2024-1086 | Ubuntu 5.15.0 ABI < 97 | **Yes** |
+
+All three scenarios also accept **compensating controls** as a valid
+remediation path (`chattr +i` for S19, `kernel.unprivileged_userns_clone=0`
+for S21/S22), which can be tested on any host regardless of kernel
+version.
+
+Scenarios that are **not** host-kernel coupled (all other IDs) run
+correctly on any modern Linux Docker host, because the vulnerable
+component lives entirely in userspace (libc, polkit, sudo, runc,
+application jars, plugin code, etc.).
+
+Related but worth calling out: [scenario-11](scenario-11/) (OpenSSH
+regreSSHion) and [scenario-20](scenario-20/) (Looney Tunables) are
+**glibc / sshd userspace** issues despite sometimes being described as
+"system-level" — they ship inside the container and do not depend on
+the host kernel.

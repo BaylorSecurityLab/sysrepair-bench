@@ -11,7 +11,7 @@ For each scenario, given only the running container and a threat description, an
 
 Remediation is scored as successful **only if both checks pass**.
 
-The benchmark targets **~250 scenarios across five VM classes**; **139 are live today** across four suites, with the Windows half of Meta3 and all of Meta4 in active development.
+The benchmark targets **~250 scenarios across five VM classes**; **190 are authored today** across six suites — `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (20, harness validation), and `meta4/` (31, harness validation) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
 
 | VM Class / Suite | Era | Built | Target | Source |
 |---|---|---|---|---|
@@ -19,8 +19,9 @@ The benchmark targets **~250 scenarios across five VM classes**; **139 are live 
 | [`meta2/`](meta2/) | 2008–2012 | 40 | ~50 | OpenVAS scan of Metasploitable 2.0 on Ubuntu 8.04. ⚠ **Linux host only** (see Host Requirements) |
 | [`vulnhub/`](vulnhub/) | 2012–2022 | 30 | ~50 | Per-VM vulnerability rebuilds (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) on Debian 11 |
 | [`meta3/ubuntu/`](meta3/ubuntu/) | 2014–2020 | 19 | 19 | Port of Rapid7 Metasploitable 3 (Ubuntu 14.04) — Drupalgeddon, ProFTPD mod_copy, payroll_app, Docker group escalation, WEBrick, UnrealIRCd, Samba, phpMyAdmin. Vendors the Rapid7 Chef cookbook under BSD-3. |
-| **[`meta3/windows/`](meta3/windows/)** *(in progress)* | 2016–2020 | 0 | ~20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scan-driven index pending Windows OpenVAS scan. ⚠ **Windows host only** (see Host Requirements) |
-| **`meta4/`** *(in progress)* | 2022–2026 | 0 | ~50 | **Novel contribution.** Intentionally vulnerable VM incorporating recent CVEs (Log4Shell-era and post-Log4Shell) to fill the temporal gap left by aging Metasploitable and VulnHub images |
+| **[`meta3/windows/`](meta3/windows/)** *(in progress)* | 2016–2020 | 20 | ~20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). ⚠ **Windows host only** (see Host Requirements) |
+| **[`meta4/`](meta4/)** *(harness validation)* | 2022–2026 | 31 | ~50 | **Novel contribution.** Container suite covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs) that fill the temporal gap left by aging Metasploitable and VulnHub images. Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)). |
+| [`hivestorm/`](hivestorm/) | HS20–HS23 | 16 | 16 | **Free-roam** Hivestorm-style scenarios (Debian/Ubuntu/CentOS/Windows Server-Core/FreeBSD/AD-DC). Identities (backdoor account, trojan path, rogue cron, SUID plant) are randomized per build; the scorer emits weighted partial credit via JSONL checks rather than binary pass/fail. |
 
 Meta4 is a primary artifact of SysRepair-Bench. Existing intentionally-vulnerable VMs overwhelmingly contain pre-2020 vulnerabilities; evaluating modern remediation capability requires environments that reflect the current threat landscape. Meta3 restores coverage of the 2016–2020 era (including the only Windows scenarios in the benchmark) by porting the well-studied Rapid7 Metasploitable 3 surface into reproducible containers / VMs.
 
@@ -43,8 +44,11 @@ sysrepair-bench/
 ├── meta2/                   # 40 Metasploitable 2 / OpenVAS scenarios (scenario-01..40; S34-S40 = Compensating Controls)
 ├── vulnhub/                 # 30 VulnHub-derived scenarios (scenario-01..30)
 ├── meta3/ubuntu/            # 19 Metasploitable 3 (Ubuntu 14.04) scenarios + vendored Chef cookbook (shared/)
-├── meta3/windows/           # (in progress) Metasploitable 3 (Windows Server) — awaiting OpenVAS scan
-├── meta4/                   # (in progress) Novel post-Log4Shell vulnerable VM
+├── meta3/windows/           # 20 Metasploitable 3 (Windows Server) scenarios (harness validation)
+├── meta4/                   # 31 modern-CVE container scenarios (harness validation)
+│   └── kernel-vm/           #   Vagrant VM for kernel-coupled LPE scenarios (S21, S22)
+├── hivestorm/               # 16 free-roam Hivestorm-style scenarios (weighted partial-credit)
+├── openvas-scan-reports/    # OpenVAS scan PDFs scoping meta2 and meta3/windows
 ├── inspect_eval/            # Inspect AI harness: solvers, task wiring, run presets
 └── README.md
 ```
@@ -228,11 +232,13 @@ See [`inspect_eval/README.md`](inspect_eval/README.md) for the full list of task
 
 ## Suites
 
-| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) | [meta3/](meta3/README.md) | [meta4/](meta4/) *(WIP)* |
+| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) | [meta3/](meta3/README.md) | [meta4/](meta4/README.md) |
 |---|---|---|---|---|---|
-| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) | `ubuntu:14.04` ([`meta3/ubuntu/`](meta3/ubuntu/README.md)) + `mcr.microsoft.com/windows/servercore` ([`meta3/windows/`](meta3/windows/README.md), Windows host required) | Ubuntu 22.04 / Debian 12 (post-Log4Shell CVEs) |
-| Scenarios | 50 | 40 | 30 | 19 Ubuntu live / ~20 Windows *(WIP)* | 0 / ~50 |
-| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs | Ubuntu: Config (S01–S05, S18, S19), Patch (S06–S09), Access (S10, S11), Network (S12), **Compensating** (S13–S17). Windows sub-suite same shape, pending scan. | Recent-CVE mix across the four remediation categories |
+| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) | `ubuntu:14.04` ([`meta3/ubuntu/`](meta3/ubuntu/README.md)) + `mcr.microsoft.com/windows/servercore` ([`meta3/windows/`](meta3/windows/README.md), Windows host required) | Mixed: vendor-pinned vulnerable images (`tomcat:9.0.60-jdk11`, `httpd:2.4.49/50`, `atlassian/confluence-server:7.18.0`, `gitlab/gitlab-ce:16.7.0`), `ubuntu:22.04` / `debian:testing-20240301` for userspace LPE & XZ, `docker:24-dind` for runtime escapes, plus a kernel-pinned Vagrant VM for S21/S22 |
+| Scenarios | 50 | 40 | 30 | 19 Ubuntu live / 20 Windows *(harness validation)* | 31 / ~50 *(harness validation)* |
+| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs | Ubuntu: Config (S01–S05, S18, S19), Patch (S06–S09), Access (S10, S11), Network (S12), **Compensating** (S13–S17). Windows sub-suite same shape, scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). | Modern CVE coverage across all four remediation categories, plus kernel LPE (S19/S21/S22) and container/runtime escape (Leaky Vessels, docker.sock, `--privileged`) |
+
+Alongside these five binary-pass/fail suites, [`hivestorm/`](hivestorm/README.md) ships 16 **free-roam** scenarios (Debian/Ubuntu/CentOS/Windows Server-Core/FreeBSD/AD-DC) with per-build identity randomization and a weighted partial-credit scorer. It uses the same Inspect AI harness; selection is via `benchmark: hivestorm` in `runs.yaml`.
 
 See each suite's README for the full scenario index.
 

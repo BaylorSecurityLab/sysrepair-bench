@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="C" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d %-5p %c - %m%n"/>
+    </Console>
+    <!-- JDBC Appender with a JNDI DataSource reference: CVE-2021-44832 surface.
+         The ds-name value is attacker-influenceable if the configuration is
+         user-modifiable; shown here to make the appender class present. -->
+    <JDBC name="db" tableName="logs">
+      <DataSource jndiName="java:/comp/env/jdbc/AppLogDS"/>
+      <Column name="msg" pattern="%m"/>
+    </JDBC>
+  </Appenders>
+  <Loggers><Root level="info"><AppenderRef ref="C"/></Root></Loggers>
+</Configuration>
