@@ -45,6 +45,23 @@ presets:
     solver: plan_and_solve
     benchmarks: ["meta2"]
 
+  # Gemma 4 31B served via vLLM (OpenAI-compatible, --served-model-name gemma-4-31b).
+  # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
+  # Tuned for ReAct over meta2; bumps all timeouts vs defaults because Hardy
+  # containers + Gemma 4 thinking-mode traces run long.
+  meta2_react_gemma4_31b:
+    model: openai/gemma-4-31b
+    solver: react
+    benchmarks: ["meta2"]
+    message_limit: 50
+    max_connections: 2
+    time_limit: 2400 # 40 min per scenario (thinking mode adds latency)
+    token_limit: 800000 # thinking blocks inflate token counts
+    bash_timeout: 240 # Samba/VNC on Hardy sometimes needs >2 min
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
   # ---------------------------------------------------------------------------
   # Full sweep: every benchmark x every solver x top open-weight models
   # (best-of-each-company snapshot, 2026-04-14).
