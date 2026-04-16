@@ -50,3 +50,7 @@ pyenv
 __pycache__/
 *.pyc
 *.pyo
+
+# Development 
+.env
+inspect_eval/logs/

@@ -8,6 +8,11 @@ from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import Solver
 from inspect_ai.util import SandboxEnvironmentSpec
+from inspect_ai.util._sandbox.compose import (
+    ComposeBuild,
+    ComposeConfig,
+    ComposeService,
+)
 
 from .scorer import dispatch_scorer
 from .solvers import get_solver
@@ -160,6 +165,20 @@ def _build_sample(scenario_dir: Path) -> Sample:
         )
         scorer_kind = "binary"
 
+    compose_cfg = ComposeConfig(
+        services={
+            "default": ComposeService(
+                build=ComposeBuild(
+                    context=str(scenario_dir.resolve()),
+                    dockerfile=dockerfile.name,
+                ),
+                command="tail -f /dev/null",
+                init=True,
+                network_mode="bridge",
+            )
+        }
+    )
+
     return Sample(
         id=sid,
         input=prompt,
@@ -172,7 +191,7 @@ def _build_sample(scenario_dir: Path) -> Sample:
             "verify_script": verify_name,
             "scorer": scorer_kind,
         },
-        sandbox=SandboxEnvironmentSpec(type="docker", config=str(dockerfile)),
+        sandbox=SandboxEnvironmentSpec(type="docker", config=compose_cfg),
     )
 
 

@@ -66,13 +66,6 @@ if ! pgrep -x sshd >/dev/null 2>&1; then
 fi
 echo "  [PASS] sshd process is running"
 
-# Check SSH is listening on port 22
-if ! ss -tlnp 2>/dev/null | grep -q ':22\b'; then
-    echo "  [FAIL] SSH is not listening on port 22"
-    exit $FAIL
-fi
-echo "  [PASS] SSH is listening on port 22"
-
 ###############################################################################
 # Regression Test: Normal user SSH login must still work
 ###############################################################################

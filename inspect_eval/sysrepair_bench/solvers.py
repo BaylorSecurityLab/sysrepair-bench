@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from inspect_ai.agent import Agent, AgentState, agent, react
+from inspect_ai.agent import Agent, AgentState, agent, as_solver, react
 from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageSystem,
@@ -45,6 +45,9 @@ def _shell_tool(timeout: int = 180):
             On Linux targets the command is passed to `bash -lc`.
             On Windows targets it is passed to `powershell.exe -Command`.
             Returns combined stdout/stderr and the exit code.
+
+            Args:
+                command: The shell command to execute in the target container.
             """
             os_name = store().get("os", "linux")
             if os_name == "windows":
@@ -122,7 +125,7 @@ def _shell_exec_argv(os_name: str, command: str) -> list[str]:
 def _react_solver(
     message_limit: int, max_attempts: int, bash_timeout: int
 ) -> Solver:
-    inner = react(
+    inner = as_solver(react(
         tools=_tools(bash_timeout),
         attempts=max_attempts,
         on_continue=(
@@ -130,7 +133,7 @@ def _react_solver(
             "If you believe the vulnerability is fully fixed and the service "
             "still works, call submit() with a short summary."
         ),
-    )
+    ))
 
     @solver
     def _wrapped() -> Solver:

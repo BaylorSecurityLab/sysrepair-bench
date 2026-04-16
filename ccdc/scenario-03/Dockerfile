@@ -2,9 +2,9 @@ FROM ubuntu:25.10
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install OpenSSH server
+# Install OpenSSH server (sshpass pre-baked so verify.sh skips its runtime install)
 RUN apt-get update && \
-    apt-get install -y openssh-server passwd && \
+    apt-get install -y openssh-server passwd sshpass && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
