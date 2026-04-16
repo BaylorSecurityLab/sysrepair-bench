@@ -1,0 +1,73 @@
+# Hivestorm scenario-13 — Windows Server 2019 AD DC (single-domain).
+# Promotes the box to a DC on first provisioner pass, then runs seed.ps1
+# after the reboot. verify.ps1 is shipped to C:\ProgramData\sysrepair\.
+
+require 'json'
+
+ROLES_PATH = File.join(File.dirname(__FILE__), 'build', 'roles.json')
+unless File.exist?(ROLES_PATH)
+  abort "missing #{ROLES_PATH}. Run `hivestorm/prepare.sh 13` first."
+end
+ROLES = JSON.parse(File.read(ROLES_PATH))
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "gusztavvargadr/windows-server-2019-standard"
+  config.vm.box_version = ">= 2102.0.0"
+  config.vm.hostname = "hs13-dc01"
+  config.vm.communicator = "winrm"
+  config.winrm.username = "vagrant"
+  config.winrm.password = "vagrant"
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = false
+    vb.memory = 4096
+    vb.cpus   = 2
+    vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+  end
+
+  config.vm.network "private_network", ip: "192.168.56.13"
+
+  # Stage 1: promote to DC. Needs reboot.
+  config.vm.provision "shell",
+    name: "promote-to-dc",
+    reboot: true,
+    inline: <<~PS1, privileged: true, powershell_elevated_interactive: true
+      $ErrorActionPreference = "Stop"
+      $domain      = "#{ROLES["domain_fqdn"]}"
+      $netbios     = "#{ROLES["domain_netbios"]}"
+      $dsrmPwPlain = "#{ROLES["dsrm_password"]}"
+
+      # Roles.json landing spot.
+      New-Item -ItemType Directory -Path 'C:\\ProgramData\\sysrepair' -Force | Out-Null
+      Copy-Item 'C:\\vagrant\\build\\roles.json' 'C:\\ProgramData\\sysrepair\\roles.json' -Force
+      icacls 'C:\\ProgramData\\sysrepair\\roles.json' /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' | Out-Null
+
+      if (-not (Get-WindowsFeature AD-Domain-Services).Installed) {
+          Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
+      }
+
+      # Only promote if not already a DC.
+      $isDC = (Get-WmiObject -Class Win32_ComputerSystem).DomainRole -ge 4
+      if (-not $isDC) {
+          $dsrmPw = ConvertTo-SecureString $dsrmPwPlain -AsPlainText -Force
+          Install-ADDSForest `
+              -DomainName $domain `
+              -DomainNetbiosName $netbios `
+              -SafeModeAdministratorPassword $dsrmPw `
+              -InstallDns `
+              -Force:$true `
+              -NoRebootOnCompletion:$true | Out-Null
+      }
+    PS1
+
+  # Stage 2: seed misconfigurations + drop verify.ps1 for later.
+  config.vm.provision "shell",
+    name: "seed-misconfigs",
+    inline: <<~PS1, privileged: true, powershell_elevated_interactive: true
+      $ErrorActionPreference = "Continue"
+      Copy-Item 'C:\\vagrant\\seed.ps1'   'C:\\ProgramData\\sysrepair\\seed.ps1'   -Force
+      Copy-Item 'C:\\vagrant\\verify.ps1' 'C:\\ProgramData\\sysrepair\\verify.ps1' -Force
+      powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\ProgramData\\sysrepair\\seed.ps1'
+      Remove-Item 'C:\\ProgramData\\sysrepair\\seed.ps1' -Force
+    PS1
+end

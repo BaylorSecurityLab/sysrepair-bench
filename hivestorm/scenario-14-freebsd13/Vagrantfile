@@ -1,0 +1,70 @@
+# Hivestorm scenario-14 — FreeBSD 13 host.
+# Installs nginx, then runs seed.sh to plant misconfigurations.
+# verify.sh is shipped to /var/db/sysrepair/ for later invocation.
+
+require 'json'
+
+ROLES_PATH = File.join(File.dirname(__FILE__), 'build', 'roles.json')
+unless File.exist?(ROLES_PATH)
+  abort "missing #{ROLES_PATH}. Run `hivestorm/prepare.sh 14` first."
+end
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "freebsd/FreeBSD-13.2-RELEASE"
+  config.vm.hostname = "hs14-bsd"
+  # FreeBSD boxes default to the `vagrant` user with key-based SSH.
+  config.ssh.shell = "sh"
+  config.vm.base_mac = nil
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = false
+    vb.memory = 2048
+    vb.cpus   = 2
+    # FreeBSD requires the 82540EM NIC; box should already set this,
+    # but we re-assert for older templates.
+    vb.customize ["modifyvm", :id, "--nictype1", "Am79C973"]
+    vb.customize ["modifyvm", :id, "--nictype2", "Am79C973"]
+  end
+
+  config.vm.network "private_network", ip: "192.168.56.14"
+
+  # FreeBSD rsync'd synced folder — NFS is flaky on Win hosts.
+  config.vm.synced_folder ".", "/vagrant", type: "rsync",
+    rsync__exclude: [".vagrant/", "build/"]
+
+  # Stage 1: bootstrap pkg, install baseline services, then seed.
+  config.vm.provision "shell",
+    name: "bootstrap-and-seed",
+    privileged: true,
+    inline: <<~SH
+      set -eu
+      export ASSUME_ALWAYS_YES=yes
+
+      # Bootstrap pkg if missing (first boot of a fresh box).
+      if ! command -v pkg >/dev/null 2>&1; then
+          env ASSUME_ALWAYS_YES=yes pkg bootstrap -f
+      fi
+
+      # Baseline services the scenario expects to survive.
+      pkg install -y nginx netcat sudo bash
+
+      # Landing directory for roles.json + verifier.
+      mkdir -p /var/db/sysrepair
+      cp /vagrant/build/roles.json /var/db/sysrepair/roles.json
+      chmod 0600 /var/db/sysrepair/roles.json
+      cp /vagrant/seed.sh   /var/db/sysrepair/seed.sh
+      cp /vagrant/verify.sh /var/db/sysrepair/verify.sh
+      chmod 0700 /var/db/sysrepair/seed.sh /var/db/sysrepair/verify.sh
+
+      # Enable baseline services BEFORE seeding so we have something
+      # for the verifier to confirm is still running.
+      sysrc sshd_enable=YES
+      sysrc nginx_enable=YES
+      service sshd   start || true
+      service nginx  start || true
+
+      # Run the seeder.
+      /var/db/sysrepair/seed.sh
+      rm -f /var/db/sysrepair/seed.sh
+    SH
+end

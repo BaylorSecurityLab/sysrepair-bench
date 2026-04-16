@@ -45,8 +45,6 @@ bundles/
 .git/
 vendor/pkg/
 pyenv
-Vagrantfile
-!meta4/kernel-vm/Vagrantfile
 
 # Python bytecode
 __pycache__/
