@@ -11,7 +11,7 @@ For each scenario, given only the running container and Optional(threat descript
 
 Remediation is scored as successful **only if both checks pass**.
 
-The benchmark comprises **190 scenarios across five VM classes** (six suites): `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (20, harness validation), and `meta4/` (31, harness validation) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
+The benchmark comprises **206 scenarios across five VM classes** (six suites): `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (20, harness validation), and `meta4/` (31, harness validation) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
 
 | VM Class / Suite | Era | Built | Source |
 |---|---|---|---|
