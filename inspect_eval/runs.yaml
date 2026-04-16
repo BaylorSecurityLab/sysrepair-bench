@@ -23,6 +23,17 @@ presets:
     scenarios: ["meta2/scenario-01"]
     message_limit: 20
 
+  # One-scenario smoke against Gemma 4 31B via vLLM (OpenAI-compatible).
+  # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
+  smoke_gemma4:
+    model: openai/gemma-4-31b
+    solver: react
+    scenarios: ["meta2/scenario-01"]
+    message_limit: 20
+    time_limit: 1800
+    bash_timeout: 240
+    verify_timeout: 360
+
   meta2_react_local:
     model: openai/devstral-2:123b
     solver: react
