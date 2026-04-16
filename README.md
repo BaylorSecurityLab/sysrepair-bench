@@ -2,9 +2,9 @@
 
 ## Overview
 
-SysRepair-Bench evaluates autonomous agents on their ability to **remediate** misconfigurations, vulnerable dependencies, and unsafe permissions on real Linux systems. Each scenario is a reproducible Docker container seeded with a known-vulnerable state drawn from public red-team material (CCDC hardening checklists, the Metasploitable 2 OpenVAS report, and VulnHub VM write-ups).
+SysRepair-Bench evaluates autonomous agents on their ability to **remediate** misconfigurations, vulnerable dependencies, unsafe permissions on real systems. Each scenario is a reproducible Docker container/ Virtual Machine seeded with a known-vulnerable state drawn from public red-team material (CCDC hardening checklists, the Metasploitable 2 OpenVAS report, VulnHub VM write-ups, the Metasploitable 3 OpenVAS report, Hivestorm, Newly Designed Metasploitable 4 VM).
 
-For each scenario, given only the running container and a threat description, an agent must perform system-administration actions (edit configuration, install/remove packages, adjust permissions, manage services, etc.) until:
+For each scenario, given only the running container and Optional(threat description), an agent must perform system-administration actions (edit configuration, install/remove packages, adjust permissions, manage services, etc.) until:
 
 1. **PoC check** — the original vulnerability is no longer exploitable, AND
 2. **Regression check** — the affected service still functions correctly.
@@ -19,22 +19,19 @@ The benchmark comprises **190 scenarios across five VM classes** (six suites): `
 | [`meta2/`](meta2/) | 2008–2012 | 40 | OpenVAS scan of Metasploitable 2.0 on Ubuntu 8.04. ⚠ **Linux host only** (see Host Requirements) |
 | [`vulnhub/`](vulnhub/) | 2012–2022 | 30 | Per-VM vulnerability rebuilds (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) on Debian 11 |
 | [`meta3/ubuntu/`](meta3/ubuntu/) | 2014–2020 | 19 | Port of Rapid7 Metasploitable 3 (Ubuntu 14.04) — Drupalgeddon, ProFTPD mod_copy, payroll_app, Docker group escalation, WEBrick, UnrealIRCd, Samba, phpMyAdmin. Vendors the Rapid7 Chef cookbook under BSD-3. |
-| **[`meta3/windows/`](meta3/windows/)** *(in progress)* | 2016–2020 | 20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). ⚠ **Windows host only** (see Host Requirements) |
-| **[`meta4/`](meta4/)** *(harness validation)* | 2022–2026 | 31 | **Novel contribution.** Container suite covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs) that fill the temporal gap left by aging Metasploitable and VulnHub images. Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)). |
+| [`meta3/windows/`](meta3/windows/)| 2016–2020 | 20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). ⚠ **Windows host only** (see Host Requirements) |
+| **[`meta4/`](meta4/)** *(harness validation)* | 2022–2026 | 31 | Container suite covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs) that fill the temporal gap left by aging Metasploitable and VulnHub images. Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)). |
 | [`hivestorm/`](hivestorm/) | HS20–HS23 | 16 | **Free-roam** Hivestorm-style scenarios (Debian/Ubuntu/CentOS/Windows Server-Core/FreeBSD/AD-DC). Identities (backdoor account, trojan path, rogue cron, SUID plant) are randomized per build; the scorer emits weighted partial credit via JSONL checks rather than binary pass/fail. |
-
-Meta4 is a primary artifact of SysRepair-Bench. Existing intentionally-vulnerable VMs overwhelmingly contain pre-2020 vulnerabilities; evaluating modern remediation capability requires environments that reflect the current threat landscape. Meta3 restores coverage of the 2016–2020 era (including the only Windows scenarios in the benchmark) by porting the well-studied Rapid7 Metasploitable 3 surface into reproducible containers / VMs.
 
 ### Vulnerability categories
 
-Every scenario's `threat.md` is labeled with one of **four operational remediation categories** that mirror how security-operations teams classify remediation work:
+Every scenario's **(expect hivestorm)** `threat.md` is labeled with one of **five operational remediation categories** that mirror how security-operations teams classify remediation work:
 
 1. **Access Control** — authentication, authorization, user privileges, file ownership. Typical actions: `chmod`, `chown`, `usermod`, `passwd`, `visudo`, `sshd_config`, PAM.
 2. **Configuration Hardening** — insecure defaults, missing security directives, misconfigured service parameters. Typical actions: edits to `nginx.conf`, `sshd_config`, `my.cnf`, `apache2.conf`, `pg_hba.conf`, followed by `systemctl reload`/`restart`.
 3. **Dependency & Package Management** — outdated packages with known CVEs, inherently compromised services, unnecessary high-risk daemons. Typical actions: `apt-get upgrade`, `--only-upgrade`, `remove`, `systemctl disable`.
 4. **Network Security & Firewall Policy** — exposed ports, missing firewall rules, unrestricted listener scope. Typical actions: `ufw`, `iptables`, bind-address changes, TCP wrappers, `netstat`/`ss` auditing.
-
-A **fifth category, Compensating Controls**, is being actively added in parallel (seeded by [`meta2/scenario-34..40`](meta2/)). It covers vulnerabilities where direct remediation is not possible or not desirable — the package cannot be upgraded because a dependent legacy app requires the specific version, the software is end-of-life with no vendor patch, or the service cannot be restarted during business hours. The agent must instead apply network-level restrictions (firewall scoping, bind-to-localhost), application-layer mitigations (WAF rules, `mod_rewrite` guards, ACLs), or safe config-directive removals while keeping the service usable. Scoring adds a third dimension: **compensating-control adequacy** — whether the applied controls meaningfully reduce the attack surface.
+5. **Compensating Controls**, This covers vulnerabilities where direct remediation is not possible or not desirable — the package cannot be upgraded because a dependent legacy app requires the specific version, the software is end-of-life with no vendor patch, or the service cannot be restarted during business hours. The agent must instead apply network-level restrictions (firewall scoping, bind-to-localhost), application-layer mitigations (WAF rules, `mod_rewrite` guards, ACLs), or safe config-directive removals while keeping the service usable. Scoring adds a third dimension: **compensating-control adequacy** — whether the applied controls meaningfully reduce the attack surface.
 
 ## Repository Layout
 
@@ -53,7 +50,7 @@ sysrepair-bench/
 └── README.md
 ```
 
-Every scenario, across all three suites, follows the same layout:
+Every scenario, across all three suites, follows the same layout at minimum:
 
 ```
 scenario-NN/
@@ -93,14 +90,13 @@ SysRepair-Bench does **not** cover:
 
 - **Source code modification.** The agent never edits application source, generates code patches, or runs application test suites. That is the domain of SWE-bench and automated program repair.
 - **Web-application vulnerabilities requiring code fixes** (SQLi/XSS/CSRF). Web-server *configuration* hardening (directory listing, security headers, disabling unsafe modules) is in scope; changing application logic is not.
-- **Windows systems** *(except the Meta3 Windows Server variant).* All other suites target Linux (Ubuntu, Debian, CentOS); general Windows administration is out of scope outside the Metasploitable 3 port.
 - **Cloud-native / Kubernetes-specific issues.** IAM policy, orchestration misconfig, and cloud-service settings are out of scope.
 - **Zero-days with no known remediation.** Every scenario has at least one valid remediation path; the benchmark tests whether agents find and execute it.
 - **Hardware / firmware vulnerabilities** (Spectre, Meltdown, etc.).
 
 ## Set-up
 
-SysRepair-Bench uses Docker for reproducibility and isolation. Install Docker via the [official guide](https://docs.docker.com/engine/install/).
+SysRepair-Bench uses Docker, Packer and Vargrant for reproducibility and isolation. Install Docker, Packer, Vargrant and uv
 
 ```bash
 git clone https://github.com/<org>/sysrepair-bench.git
