@@ -16,6 +16,8 @@ RUN Invoke-WebRequest -Uri $env:TEMURIN_URL -OutFile 'C:\jre.zip' ; \
     [Environment]::SetEnvironmentVariable('JRE_HOME',  $jre, 'Machine')
 ENV JAVA_HOME=C:\\Java\\jdk8u402-b06-jre
 ENV JRE_HOME=C:\\Java\\jdk8u402-b06-jre
+ENV CATALINA_HOME=C:\\tomcat
+ENV CATALINA_BASE=C:\\tomcat
 
 # --- Tomcat 8.0.33 from the Apache archive (pinned version, vulnerable by design) ---
 ARG TOMCAT_URL=https://archive.apache.org/dist/tomcat/tomcat-8/v8.0.33/bin/apache-tomcat-8.0.33-windows-x64.zip

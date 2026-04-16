@@ -27,8 +27,8 @@ RUN New-Item -ItemType Directory -Path C:\ProgramData\WinTelemetry -Force | Out-
     '@ ; \
     New-Service -Name 'WinTelemetrySvc' -DisplayName 'Windows Telemetry Helper' \
         -BinaryPathName 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\WinTelemetry\svc.ps1' \
-        -StartupType Automatic ; \
-    New-NetFirewallRule -DisplayName 'WinTelemetry-4444' -Direction Inbound -Protocol TCP -LocalPort 4444 -Action Allow
+        -StartupType Automatic
+# Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY verify.ps1 C:/verify/verify.ps1
 

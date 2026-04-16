@@ -6,8 +6,8 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 
 # Enable the legacy SMBv1 server (off by default on modern Server Core)
 RUN Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -All -NoRestart ; \
-    Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force ; \
-    New-NetFirewallRule -DisplayName 'SMB-445' -Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow
+    Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force
+# Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY verify.ps1 C:/verify/verify.ps1
 

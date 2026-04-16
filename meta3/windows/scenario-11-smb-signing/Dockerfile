@@ -7,8 +7,8 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 # Disable required + enabled signing on server and client sides so a downgrade negotiates
 # an unsigned session — the classic precondition for NTLM relay (responder + ntlmrelayx).
 RUN Set-SmbServerConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force ; \
-    Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force ; \
-    New-NetFirewallRule -DisplayName 'SMB-445' -Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow
+    Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force
+# Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY verify.ps1 C:/verify/verify.ps1
 

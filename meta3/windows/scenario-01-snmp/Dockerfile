@@ -16,8 +16,8 @@ RUN Add-WindowsCapability -Online -Name 'SNMP.Client~~~~0.0.1.0' ; \
 #   - add ValidCommunities\public = READ-WRITE (4)
 RUN reg delete 'HKLM\SYSTEM\CurrentControlSet\services\SNMP\Parameters\PermittedManagers' /va /f ; exit 0
 RUN reg add 'HKLM\SYSTEM\CurrentControlSet\services\SNMP\Parameters' /v EnableAuthenticationTraps /t REG_DWORD /d 0 /f ; \
-    reg add 'HKLM\SYSTEM\CurrentControlSet\services\SNMP\Parameters\ValidCommunities' /v public /t REG_DWORD /d 4 /f ; \
-    New-NetFirewallRule -DisplayName 'SNMP-161' -Direction Inbound -Protocol UDP -LocalPort 161 -Action Allow
+    reg add 'HKLM\SYSTEM\CurrentControlSet\services\SNMP\Parameters\ValidCommunities' /v public /t REG_DWORD /d 4 /f
+# Firewall rules are unnecessary — base image disables Windows Defender Firewall entirely.
 
 COPY verify.ps1 C:/verify/verify.ps1
 EXPOSE 161/udp 22 5985

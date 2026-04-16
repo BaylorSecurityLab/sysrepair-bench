@@ -16,10 +16,8 @@ ARG DC9_URL=https://archives.manageengine.com/desktop-central/9.1.0_build_91097/
 
 RUN Invoke-WebRequest -Uri $env:DC9_URL -OutFile 'C:\dc9.exe' -UseBasicParsing ; \
     Start-Process -FilePath 'C:\dc9.exe' -ArgumentList '-i','silent' -Wait ; \
-    Remove-Item 'C:\dc9.exe' ; \
-    # Open the listener port for the agent
-    New-NetFirewallRule -DisplayName 'DC9-8020' -Direction Inbound -Protocol TCP -LocalPort 8020 -Action Allow ; \
-    New-NetFirewallRule -DisplayName 'DC9-8040' -Direction Inbound -Protocol TCP -LocalPort 8040 -Action Allow
+    Remove-Item 'C:\dc9.exe'
+# Firewall is disabled in the base image; no explicit allow rules required.
 
 COPY verify.ps1 C:/verify/verify.ps1
 

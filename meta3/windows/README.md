@@ -26,12 +26,10 @@
 | 18 | [scenario-18-scheduled-task-backdoor/](scenario-18-scheduled-task-backdoor/) | Hidden SYSTEM scheduled task running payload from `C:\Users\Public` (T1053.005) | Operator-planted |
 | 19 | [scenario-19-rogue-listener-service/](scenario-19-rogue-listener-service/) | `WinTelemetrySvc` PowerShell bind shell on 4444/TCP (T1543.003) | Operator-planted |
 | 20 | [scenario-20-hidden-admin-account/](scenario-20-hidden-admin-account/) | Local admin `support$` with RID-hiding suffix (T1136.001) | Operator-planted |
+| 21 | [scenario-21-ssh-defaults/](scenario-21-ssh-defaults/) | OpenSSH-Win32 7.1.0.0-beta + `vagrant:vagrant` admin (CVE-2016-1908/6210/6515, CVE-2017-15906, CVE-2018-15473) | Rapid7 Vagrant provisioning channel |
 
-Remaining work: scan-driven pruning once the Windows OpenVAS PDF is committed:
 
-**Scan-driven pruning is pending the Windows OpenVAS scan.** The scan will be committed to `../../openvas-scan-reports/metasploitable-3.0-win-openvas.pdf` and the scenario index here will be reconciled against it.
-
-Until then, this README documents:
+This README documents:
 1. The **proposed scope** sourced from the Rapid7 [metasploitable3 Packer/Vagrant build scripts](https://github.com/rapid7/metasploitable3) — this is the ground truth for what vulnerabilities Meta3-Windows ships with, and scan findings will largely overlap it.
 2. The **container strategy** for each candidate scenario (Server Core base, silent installers, port mappings, isolation mode).
 3. The **host prerequisites** the benchmark runner needs.
