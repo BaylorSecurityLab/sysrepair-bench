@@ -67,6 +67,114 @@ def _shell_tool(timeout: int = 180):
     return shell()
 
 
+def _hardy_text_editor(timeout: int = 180):
+    """Lightweight text_editor for Hardy containers. Uses pure shell commands
+    instead of Inspect's JSON-RPC tool injection (which fails on Ubuntu 8.04)."""
+
+    @tool
+    def text_editor():
+        async def execute(
+            command: str,
+            path: str,
+            file_text: str | None = None,
+            insert_line: int | None = None,
+            new_str: str | None = None,
+            old_str: str | None = None,
+            view_range: list[int] | None = None,
+        ) -> str:
+            """View, create, or edit files.
+
+            Args:
+                command: One of: view, create, str_replace, insert, undo_edit.
+                path: Absolute path to the file.
+                file_text: File content for 'create' command.
+                insert_line: Line number after which to insert (for 'insert').
+                new_str: Replacement string (for 'str_replace') or text to insert (for 'insert').
+                old_str: String to find and replace (for 'str_replace').
+                view_range: Optional [start, end] line range for 'view'.
+            """
+            sb = sandbox()
+
+            if command == "view":
+                if view_range and len(view_range) == 2:
+                    start, end = view_range
+                    if end == -1:
+                        cmd = f"sed -n '{start},$p' '{path}' | cat -n | sed 's/^\\s*//' | awk '{{printf \"%6d\\t%s\\n\", NR+{start-1}, $0}}'"
+                    else:
+                        cmd = f"sed -n '{start},{end}p' '{path}' | cat -n | sed 's/^\\s*//' | awk '{{printf \"%6d\\t%s\\n\", NR+{start-1}, $0}}'"
+                else:
+                    cmd = f"cat -n '{path}'"
+                try:
+                    r = await sb.exec(["bash", "-lc", cmd], timeout=timeout)
+                except TimeoutError:
+                    return f"[timeout viewing {path}]"
+                if r.returncode != 0:
+                    return f"Error: {r.stderr or r.stdout}"
+                return (r.stdout or "")[:8000]
+
+            elif command == "create":
+                if file_text is None:
+                    return "Error: file_text required for create."
+                await sb.write_file(path, file_text)
+                return f"File created: {path}"
+
+            elif command == "str_replace":
+                if old_str is None:
+                    return "Error: old_str required for str_replace."
+                # Read file, do exact replacement in Python-on-host, write back
+                try:
+                    r = await sb.exec(["cat", path], timeout=timeout)
+                except TimeoutError:
+                    return f"[timeout reading {path}]"
+                if r.returncode != 0:
+                    return f"Error reading {path}: {r.stderr}"
+                content = r.stdout or ""
+                if old_str not in content:
+                    return f"Error: old_str not found in {path}."
+                if content.count(old_str) > 1:
+                    return f"Error: old_str appears {content.count(old_str)} times. Make it more specific."
+                # Backup then replace
+                await sb.exec(["cp", path, f"{path}.bak"], timeout=30)
+                new_content = content.replace(old_str, new_str or "", 1)
+                await sb.write_file(path, new_content)
+                return f"Replaced in {path}."
+
+            elif command == "insert":
+                if insert_line is None or new_str is None:
+                    return "Error: insert_line and new_str required."
+                try:
+                    r = await sb.exec(["cat", path], timeout=timeout)
+                except TimeoutError:
+                    return f"[timeout reading {path}]"
+                content = r.stdout or ""
+                lines = content.splitlines(keepends=True)
+                await sb.exec(["cp", path, f"{path}.bak"], timeout=30)
+                insert_lines = new_str.splitlines(keepends=True)
+                if not insert_lines[-1:] or not insert_lines[-1].endswith("\n"):
+                    insert_lines.append("\n") if insert_lines else None
+                lines[insert_line:insert_line] = [
+                    l if l.endswith("\n") else l + "\n" for l in new_str.splitlines()
+                ]
+                await sb.write_file(path, "".join(lines))
+                return f"Inserted at line {insert_line} in {path}."
+
+            elif command == "undo_edit":
+                try:
+                    r = await sb.exec(["bash", "-lc", f"cp '{path}.bak' '{path}'"],
+                                      timeout=30)
+                except TimeoutError:
+                    return "[timeout on undo]"
+                if r.returncode != 0:
+                    return f"No backup found for {path}."
+                return f"Reverted {path} to previous version."
+
+            else:
+                return f"Unknown command: {command}. Use: view, create, str_replace, insert, undo_edit."
+
+        return execute
+    return text_editor()
+
+
 def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
     """Hivestorm-only tool: runs verify.sh and reports which checks passed."""
     @tool
@@ -118,8 +226,11 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
     return score_progress()
 
 
-def _tools(timeout: int = 180):
-    return [_shell_tool(timeout), text_editor(), think()]
+def _tools(timeout: int = 180, use_text_editor: bool = True):
+    tools = [_shell_tool(timeout), think()]
+    if use_text_editor:
+        tools.append(text_editor())
+    return tools
 
 
 def _prime_os(state: TaskState) -> None:
@@ -182,7 +293,10 @@ def _react_solver(
     def _wrapped() -> Solver:
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             _prime_os(state)
-            tools = _tools(bash_timeout)
+            is_hardy = state.metadata.get("benchmark") == "meta2"
+            tools = _tools(bash_timeout, use_text_editor=not is_hardy)
+            if is_hardy:
+                tools.append(_hardy_text_editor(bash_timeout))
             if state.metadata.get("scorer") == "hivestorm_weighted":
                 scenario_path = state.metadata.get("scenario_path", "")
                 tools = tools + [_score_progress_tool(scenario_path, verify_timeout)]
