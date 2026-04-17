@@ -1,33 +1,63 @@
 FROM --platform=linux/amd64 ubuntu:14.04
 
 # Fix repository URLs for EOL 14.04
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y curl ca-certificates && \
+RUN sed -i 's|archive.ubuntu.com|mirrors.kernel.org|g; s|security.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        curl ca-certificates wget \
+        gcc make build-essential \
+        openssl libssl-dev \
+        stunnel4 netcat iproute2 && \
     apt-get clean
 
-# Install Chef 13.8.5 via Omnibus
-RUN curl -L https://omnitruck.chef.io/install.sh | bash -s -- -v 13.8.5
+# ---------- Create boba_fett user (UnrealIRCd runs as this user) ----------
+RUN useradd -m -s /bin/bash boba_fett
 
-# Build context is meta3/ubuntu/ -- run: docker build -f scenario-15/Dockerfile -t meta3u-s15 .
-COPY shared/cookbooks /cookbooks
-COPY scenario-15/solo.rb /solo.rb
-COPY scenario-15/scenario.json /scenario.json
-RUN chef-solo -c /solo.rb -j /scenario.json
+# ---------- Download and extract UnrealIRCd 3.2.8.1 ----------
+# Scenario tests network exposure (CWE-668), not the backdoor itself.
+RUN mkdir -p /opt/unrealircd && \
+    cd /tmp && \
+    wget -q -O Unreal3.2.8.1.tar.gz \
+        "https://web.archive.org/web/20160319114613/https://www.unrealircd.org/downloads/Unreal3.2.8.1.tar.gz" && \
+    tar xzf Unreal3.2.8.1.tar.gz -C /opt/unrealircd
 
-# Install stunnel4 for the compensating control remediation path
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y stunnel4 openssl netcat && \
-    apt-get clean
+# ---------- UnrealIRCd configuration ----------
+COPY shared/cookbooks/metasploitable/files/unrealircd/unrealircd.conf /opt/unrealircd/Unreal3.2/unrealircd.conf
+COPY shared/cookbooks/metasploitable/files/unrealircd/ircd.motd /opt/unrealircd/Unreal3.2/ircd.motd
 
-# Seed stunnel configuration directory (agent populates content during remediation)
-RUN mkdir -p /etc/stunnel
+# ---------- Compile UnrealIRCd ----------
+RUN cd /opt/unrealircd/Unreal3.2 && \
+    ./configure \
+        --with-showlistmodes --enable-hub --enable-prefixaq \
+        --with-listen=5 \
+        --with-dpath=/opt/unrealircd/Unreal3.2 \
+        --with-spath=/opt/unrealircd/Unreal3.2/src/ircd \
+        --with-nick-history=2000 --with-sendq=3000000 --with-bufferpool=18 \
+        --with-hostname=metasploitableub --with-permissions=0600 \
+        --with-fd-setsize=1024 --enable-dynamic-linking && \
+    make
 
-# Generate a self-signed TLS certificate for stunnel (used after remediation)
-RUN openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -keyout /etc/stunnel/stunnel.pem \
-    -out /etc/stunnel/stunnel.pem \
-    -subj "/CN=localhost" 2>/dev/null && \
+# Set ownership
+RUN chown -R boba_fett /opt/unrealircd && \
+    chmod 0400 /opt/unrealircd/Unreal3.2/unrealircd.conf && \
+    chown boba_fett /opt/unrealircd/Unreal3.2/unrealircd.conf && \
+    chmod 0400 /opt/unrealircd/Unreal3.2/ircd.motd && \
+    chown boba_fett /opt/unrealircd/Unreal3.2/ircd.motd
+
+# ---------- UnrealIRCd init script ----------
+COPY shared/cookbooks/metasploitable/files/unrealircd/unrealircd /etc/init.d/unrealircd
+RUN chmod 760 /etc/init.d/unrealircd && \
+    sed -i -e 's/\r//g' /etc/init.d/unrealircd
+
+# ---------- stunnel setup (for compensating control remediation path) ----------
+RUN mkdir -p /etc/stunnel /var/run/stunnel4 && \
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/stunnel/stunnel.pem \
+        -out /etc/stunnel/stunnel.pem \
+        -subj "/CN=localhost" 2>/dev/null && \
     chmod 600 /etc/stunnel/stunnel.pem
 
+# ---------- Entrypoint & verify ----------
 COPY scenario-15/verify.sh /verify.sh
 COPY scenario-15/entrypoint.sh /entrypoint.sh
 RUN chmod +x /verify.sh /entrypoint.sh

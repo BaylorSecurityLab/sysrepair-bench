@@ -1,7 +1,7 @@
 FROM --platform=linux/amd64 ubuntu:14.04
 
 # Fix repository URLs for EOL 14.04
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
+RUN sed -i 's|archive.ubuntu.com|mirrors.kernel.org|g; s|security.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list && \
     apt-get update && apt-get clean
 
 # Install Ruby (for WEBrick) and networking utilities for verification

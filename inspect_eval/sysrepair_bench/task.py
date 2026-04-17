@@ -190,12 +190,21 @@ def _build_sample(scenario_dir: Path) -> Sample:
         )
         scorer_kind = "binary"
 
+    # Some benchmarks (meta3) use a shared/ sibling dir and COPY paths
+    # relative to the parent. Detect this and widen the build context.
+    if (scenario_dir.parent / "shared").is_dir():
+        build_context = str(scenario_dir.parent.resolve())
+        dockerfile_path = f"{scenario_dir.name}/{dockerfile.name}"
+    else:
+        build_context = str(scenario_dir.resolve())
+        dockerfile_path = dockerfile.name
+
     compose_cfg = _SysRepairComposeConfig(
         services={
             "default": _SysRepairService(
                 build=ComposeBuild(
-                    context=str(scenario_dir.resolve()),
-                    dockerfile=dockerfile.name,
+                    context=build_context,
+                    dockerfile=dockerfile_path,
                 ),
                 command="tail -f /dev/null",
                 init=True,

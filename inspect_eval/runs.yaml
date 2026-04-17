@@ -90,6 +90,39 @@ presets:
     fail_on_error: 0.25
     retry_on_error: 2
 
+  # Gemma 4 31B via vLLM — meta3 Ubuntu benchmark (19 scenarios, Ubuntu 14.04).
+  # Chef-based scenarios (05-07,09-10,13-15,17-19) need the full metasploitable3
+  # cookbook — see meta3/ubuntu/shared/cookbooks/metasploitable/. Missing internal
+  # recipes (mysql.rb, apache.rb, php_545.rb, etc.) must be ported from upstream
+  # https://github.com/rapid7/metasploitable3 before those scenarios can build.
+  meta3_ubuntu_react_gemma4_31b:
+    model: openai/gemma-4-31b
+    solver: react
+    benchmarks: ["meta3/ubuntu"]
+    message_limit: 50
+    max_connections: 2
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
+  # Gemma 4 31B via vLLM — vulnhub benchmark (30 scenarios: Metasploitable2,
+  # Mr. Robot, Debian 11). These images have GNU timeout natively.
+  vulnhub_react_gemma4_31b:
+    model: openai/gemma-4-31b
+    solver: react
+    benchmarks: ["vulnhub"]
+    message_limit: 50
+    max_connections: 2
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
   # ---------------------------------------------------------------------------
   # Full sweep: every benchmark x every solver x top open-weight models
   # (best-of-each-company snapshot, 2026-04-14).

@@ -1,8 +1,8 @@
 FROM --platform=linux/amd64 ubuntu:14.04
 
-# Fix repository URLs to old-releases.ubuntu.com
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
+# Fix repository URLs to mirrors.kernel.org
+RUN sed -i 's|archive.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list && \
+    sed -i 's|security.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list
 
 # Install OpenSSH server
 RUN apt-get update && \
@@ -19,7 +19,7 @@ RUN echo 'root:toor' | chpasswd
 RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 
 # Generate a DSA host key (weak, deprecated algorithm)
-RUN ssh-keygen -t dsa -N '' -f /etc/ssh/ssh_host_dsa_key
+RUN rm -f /etc/ssh/ssh_host_dsa_key && ssh-keygen -t dsa -N '' -f /etc/ssh/ssh_host_dsa_key
 
 # Inject weak host key algorithms — advertises ssh-rsa (SHA-1 based) and ssh-dss (DSA)
 RUN echo 'HostKeyAlgorithms +ssh-rsa,ssh-dss' >> /etc/ssh/sshd_config

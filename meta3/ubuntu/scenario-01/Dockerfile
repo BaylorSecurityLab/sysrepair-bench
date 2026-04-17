@@ -1,8 +1,8 @@
 FROM --platform=linux/amd64 ubuntu:14.04
 
-# Fix repository URLs to old-releases.ubuntu.com
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
+# Fix repository URLs to mirrors.kernel.org
+RUN sed -i 's|archive.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list && \
+    sed -i 's|security.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list
 
 # Install OpenSSH server
 RUN apt-get update && \

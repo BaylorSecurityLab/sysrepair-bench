@@ -1,7 +1,7 @@
 FROM --platform=linux/amd64 ubuntu:14.04
 
 # Fix repository URLs for EOL 14.04
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
+RUN sed -i 's|archive.ubuntu.com|mirrors.kernel.org|g; s|security.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list && \
     apt-get update && apt-get clean
 
 # Install MySQL 5.5 and supporting tools
@@ -23,8 +23,7 @@ RUN sed -i '/^skip-networking/d' /etc/mysql/my.cnf
 
 # Create a trusted application user for regression testing
 RUN service mysql start && \
-    mysql -u root -e "CREATE USER IF NOT EXISTS 'trusted_user'@'localhost' IDENTIFIED BY 'TrustedP@ss1';" && \
-    mysql -u root -e "GRANT SELECT ON *.* TO 'trusted_user'@'localhost';" && \
+    mysql -u root -e "GRANT SELECT ON *.* TO 'trusted_user'@'localhost' IDENTIFIED BY 'TrustedP@ss1';" && \
     mysql -u root -e "FLUSH PRIVILEGES;" && \
     service mysql stop
 
