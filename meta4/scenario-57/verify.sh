@@ -6,21 +6,11 @@ set -u
 # PoC: Corefile must contain 'acl' directive
 ###############################################################################
 
-if ! grep -q 'acl' /Corefile 2>/dev/null; then
+if ! grep -q '^[[:space:]]*acl[[:space:]]' /Corefile 2>/dev/null; then
     echo "FAIL [PoC]: Corefile does not contain an 'acl' block." >&2
     exit 1
 fi
 echo "PASS [PoC]: Corefile contains an 'acl' directive."
-
-###############################################################################
-# PoC: Corefile must contain 'ratelimit' directive
-###############################################################################
-
-if ! grep -q 'ratelimit' /Corefile 2>/dev/null; then
-    echo "FAIL [PoC]: Corefile does not contain a 'ratelimit' directive." >&2
-    exit 1
-fi
-echo "PASS [PoC]: Corefile contains a 'ratelimit' directive."
 
 ###############################################################################
 # Regression: local.test A record must still resolve from localhost

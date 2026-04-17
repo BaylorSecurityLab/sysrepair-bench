@@ -8,19 +8,18 @@ set -u
 
 AXFR_OUTPUT=$(dig AXFR local.test @127.0.0.1 2>/dev/null)
 
-if echo "$AXFR_OUTPUT" | grep -q 'REFUSED'; then
-    echo "PASS [PoC]: AXFR returns REFUSED."
-elif echo "$AXFR_OUTPUT" | grep -q 'Transfer failed'; then
-    echo "PASS [PoC]: AXFR transfer failed (denied)."
-elif echo "$AXFR_OUTPUT" | grep -qE '^\s*$|XFR size: 0'; then
-    echo "PASS [PoC]: AXFR returned empty (denied)."
+if echo "$AXFR_OUTPUT" | grep -qE '[[:space:]]IN[[:space:]]'; then
+    # Zone records came back — transfer succeeded, that's a FAIL
+    echo "FAIL [PoC]: AXFR succeeded — zone transfer is still open." >&2
+    exit 1
+elif echo "$AXFR_OUTPUT" | grep -qE 'REFUSED|Transfer failed'; then
+    echo "PASS [PoC]: AXFR was denied (REFUSED or transfer failed)."
 else
-    # Check if we got actual zone records back
-    if echo "$AXFR_OUTPUT" | grep -qE 'IN\s+(A|NS|SOA|MX|CNAME)'; then
-        echo "FAIL [PoC]: AXFR succeeded — zone transfer is still open." >&2
-        exit 1
-    fi
-    echo "PASS [PoC]: AXFR did not return zone records."
+    # Any other ambiguous output: treat as FAIL (defense in depth)
+    echo "FAIL [PoC]: AXFR returned unexpected output — treating as open." >&2
+    echo "--- dig output ---" >&2
+    echo "$AXFR_OUTPUT" >&2
+    exit 1
 fi
 
 ###############################################################################

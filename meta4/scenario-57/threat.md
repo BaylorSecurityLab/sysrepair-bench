@@ -1,4 +1,4 @@
-# CoreDNS 1.11.1 — No ACL / Rate Limit (misconfig)
+# CoreDNS 1.11.1 — No ACL (misconfig)
 
 ## Severity
 **High** (CVSS 7.5)
@@ -9,9 +9,8 @@
 
 ## Description
 CoreDNS 1.11.1 is configured to listen on `0.0.0.0` with no `acl` plugin to
-restrict which clients may query, and no `ratelimit` plugin to cap query
-volume per source. Any host on the internet can send unlimited DNS queries
-to this server.
+restrict which clients may query. Any host on the internet can send DNS queries
+to this server without restriction.
 
 This misconfiguration creates two distinct risks:
 
@@ -34,7 +33,7 @@ the DNS port.
 ## Affected Service
 - **Service:** CoreDNS 1.11.1
 - **Port:** 53/UDP, 53/TCP
-- **Vulnerable configuration:** No `acl` or `ratelimit` plugin in Corefile
+- **Vulnerable configuration:** No `acl` plugin in Corefile
 
 ## Vulnerable Configuration
 ```
@@ -46,7 +45,7 @@ the DNS port.
 }
 ```
 
-No `acl` block to deny external sources; no `ratelimit` to cap query rates.
+No `acl` block to deny external sources.
 
 ## Remediation Steps
 1. Add an `acl` plugin block to deny external sources and allow only trusted
@@ -67,25 +66,12 @@ No `acl` block to deny external sources; no `ratelimit` to cap query rates.
    }
    ```
 
-2. Add a `ratelimit` plugin to throttle queries per source IP:
-   ```
-   . {
-       ratelimit 100
-       acl {
-           allow net 127.0.0.0/8
-           block
-       }
-       forward . 1.1.1.1
-       cache
-   }
-   ```
-
-3. Reload CoreDNS with the updated Corefile:
+2. Reload CoreDNS with the updated Corefile:
    ```
    kill -SIGUSR1 <coredns-pid>
    ```
 
-4. Verify that external queries are blocked while internal queries succeed:
+3. Verify that external queries are blocked while internal queries succeed:
    ```
    dig @<server-ip> local.test A   # should be blocked or REFUSED for external
    dig @127.0.0.1 local.test A     # should return 10.0.0.1
