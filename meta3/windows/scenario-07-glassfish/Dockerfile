@@ -12,7 +12,11 @@ RUN Invoke-WebRequest -Uri $env:TEMURIN_URL -OutFile 'C:\jdk.zip' ; \
     Expand-Archive 'C:\jdk.zip' -DestinationPath 'C:\Java' ; \
     Remove-Item 'C:\jdk.zip'
 ENV JAVA_HOME=C:\\Java\\jdk8u402-b06
-ENV PATH=C:\\Java\\jdk8u402-b06\\bin;${PATH}
+ENV AS_JAVA=C:\\Java\\jdk8u402-b06
+# Do not append to ${PATH} via ENV — Docker expansion yields an empty string on Windows
+# and wipes C:\Windows\System32 from PATH, breaking powershell for subsequent RUN steps.
+# GlassFish resolves java via AS_JAVA → JAVA_HOME. The domain launch process also needs
+# java on PATH, so the CMD prepends it at runtime.
 
 # --- GlassFish 4.0 ---
 ARG GLASSFISH_URL=https://download.oracle.com/glassfish/4.0/release/glassfish-4.0.zip
@@ -36,4 +40,4 @@ RUN & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin start-domain domain1 ; 
 COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 4848 8080 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\glassfish4\\glassfish\\bin\\asadmin.bat start-domain --verbose domain1"]
+CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; $env:Path = 'C:\\Java\\jdk8u402-b06\\bin;' + $env:Path; & C:\\glassfish4\\glassfish\\bin\\asadmin.bat start-domain --verbose domain1"]

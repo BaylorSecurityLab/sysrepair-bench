@@ -7,7 +7,8 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 
 RUN dism /online /enable-feature /all /NoRestart \
         /featurename:IIS-WebServerRole /featurename:IIS-WebServer \
-        /featurename:IIS-FTPServer /featurename:IIS-FTPSvc /featurename:IIS-FTPExtensibility ; exit 0
+        /featurename:IIS-FTPServer /featurename:IIS-FTPSvc /featurename:IIS-FTPExtensibility \
+        /featurename:IIS-ManagementScriptingTools ; exit 0
 
 # Create the FTP root and the misconfigured site
 RUN New-Item -ItemType Directory -Path 'C:\ftproot' -Force | Out-Null ; \
@@ -15,20 +16,17 @@ RUN New-Item -ItemType Directory -Path 'C:\ftproot' -Force | Out-Null ; \
     Import-Module WebAdministration ; \
     New-WebFtpSite -Name 'MetaFTP' -Port 21 -PhysicalPath 'C:\ftproot' -Force
 
-# Misconfiguration: allow anonymous auth, disable basic, grant Read+Write to anonymous user
-RUN Set-WebConfigurationProperty -Filter '/system.ftpServer/security/authentication/anonymousAuthentication' \
-        -PSPath 'IIS:\Sites\MetaFTP' -Name enabled -Value $true ; \
-    Set-WebConfigurationProperty -Filter '/system.ftpServer/security/authentication/basicAuthentication' \
-        -PSPath 'IIS:\Sites\MetaFTP' -Name enabled -Value $false ; \
-    Add-WebConfiguration -Filter '/system.ftpServer/security/authorization' \
-        -PSPath 'IIS:\Sites\MetaFTP' \
-        -Value @{accessType='Allow'; users='?'; permissions='Read,Write'}
+# Misconfiguration: allow anonymous auth, disable basic, allow plaintext (no SSL),
+# and grant Read+Write to anonymous user.
+# FTP site-level auth/SSL use "appcmd set site" (dot-path into ftpServer element);
+# authorization uses "appcmd set config" (system.ftpServer/security/authorization section).
+RUN cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set site "MetaFTP" /ftpServer.security.authentication.anonymousAuthentication.enabled:true' ; \
+    cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set site "MetaFTP" /ftpServer.security.authentication.basicAuthentication.enabled:false' ; \
+    cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set site "MetaFTP" /ftpServer.security.ssl.controlChannelPolicy:SslAllow /ftpServer.security.ssl.dataChannelPolicy:SslAllow' ; \
+    cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set config "MetaFTP" /section:system.ftpServer/security/authorization /+[accessType=''Allow'',users=''?'',permissions=''Read,Write''] /commit:apphost'
 
 # Passive port range so the host port-map can work deterministically
-RUN Set-WebConfigurationProperty -Filter '/system.ftpServer/firewallSupport' \
-        -PSPath 'MACHINE/WEBROOT/APPHOST' -Name lowDataChannelPort -Value 50000 ; \
-    Set-WebConfigurationProperty -Filter '/system.ftpServer/firewallSupport' \
-        -PSPath 'MACHINE/WEBROOT/APPHOST' -Name highDataChannelPort -Value 50050
+RUN cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set config /section:system.ftpServer/firewallSupport /lowDataChannelPort:50000 /highDataChannelPort:50050 /commit:apphost'
 
 COPY verify.ps1 C:/verify/verify.ps1
 EXPOSE 21 50000-50050 22 5985

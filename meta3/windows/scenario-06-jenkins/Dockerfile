@@ -28,4 +28,4 @@ COPY jenkins_home/ C:/jenkins/home/
 COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 8080 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\Java\\jdk8u402-b06-jre\\bin\\java.exe -Djenkins.install.runSetupWizard=false -DJENKINS_HOME=C:\\jenkins\\home -jar C:\\jenkins\\jenkins.war --httpPort=8080"]
+CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; cmd /c 'C:\\Java\\jdk8u402-b06-jre\\bin\\java.exe -Djenkins.install.runSetupWizard=false -DJENKINS_HOME=C:\\jenkins\\home -jar C:\\jenkins\\jenkins.war --httpPort=8080'"]

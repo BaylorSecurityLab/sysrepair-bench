@@ -5,8 +5,11 @@ FROM sysrepair/meta3-win-base:ltsc2019
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
 # Enable the legacy SMBv1 server (off by default on modern Server Core)
-RUN Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -All -NoRestart ; \
-    Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force
+# Enable SMB1 feature via DISM, then force-enable SMB1 via registry (the PS cmdlet
+# needs LanmanServer running, which isn't available at build time).
+# DISM returns 3010 (restart required) on success — swallow it.
+RUN dism /online /enable-feature /featurename:SMB1Protocol /all /NoRestart ; if ($LASTEXITCODE -eq 3010 -or $LASTEXITCODE -eq 0) { exit 0 } else { exit $LASTEXITCODE }
+RUN reg add 'HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' /v SMB1 /t REG_DWORD /d 1 /f
 # Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY verify.ps1 C:/verify/verify.ps1

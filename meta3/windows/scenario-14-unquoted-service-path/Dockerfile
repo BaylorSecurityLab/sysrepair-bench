@@ -13,7 +13,7 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 #   - ACL on C:\Program Files\Meta Vuln grants BUILTIN\Users Modify, so a low-priv
 #     user can drop C:\Program Files\Meta.exe and win the race at next service start.
 RUN New-Item -ItemType Directory -Path 'C:\Program Files\Meta Vuln\bin' -Force | Out-Null ; \
-    Set-Content -Path 'C:\Program Files\Meta Vuln\bin\vulnsvc.exe' -Value 'stub' -Encoding Byte -Force ; \
+    Set-Content -Path 'C:\Program Files\Meta Vuln\bin\vulnsvc.exe' -Value 'stub' -Encoding ASCII -Force ; \
     icacls 'C:\Program Files\Meta Vuln' /grant 'BUILTIN\Users:(OI)(CI)M' /T ; \
     New-Service -Name 'MetaVulnSvc' -DisplayName 'Meta Vuln Service' -BinaryPathName 'C:\Program Files\Meta Vuln\bin\vulnsvc.exe --run' -StartupType Manual
 

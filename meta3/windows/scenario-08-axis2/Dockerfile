@@ -20,6 +20,7 @@ RUN Invoke-WebRequest -Uri $env:TOMCAT_URL -OutFile 'C:\tomcat.zip' ; \
     Rename-Item 'C:\apache-tomcat-8.0.33' 'C:\tomcat' ; \
     Remove-Item 'C:\tomcat.zip'
 ENV CATALINA_HOME=C:\\tomcat
+ENV CATALINA_BASE=C:\\tomcat
 
 # --- Axis2 1.6.0 WAR (ships with admin/axis2 default creds in WEB-INF/conf/axis2.xml) ---
 ARG AXIS2_URL=https://archive.apache.org/dist/axis/axis2/java/core/1.6.0/axis2-1.6.0-war.zip
