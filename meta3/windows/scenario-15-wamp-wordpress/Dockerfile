@@ -10,24 +10,38 @@ FROM sysrepair/meta3-win-base:ltsc2019
 
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
-# Chocolatey bootstrap
-RUN Set-ExecutionPolicy Bypass -Scope Process -Force ; \
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 ; \
-    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+# Install VCRT 2015-2022 (required by PHP)
+RUN Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile 'C:\vc.exe' -UseBasicParsing ; \
+    Start-Process -FilePath 'C:\vc.exe' -ArgumentList '/install','/quiet','/norestart' -Wait ; \
+    Remove-Item 'C:\vc.exe'
 
-# MariaDB + PHP 5.6 + Apache httpd (pinned versions match the WampServer 3.0.6 stack)
-RUN choco install -y --no-progress mariadb --version=10.1.21 ; \
-    choco install -y --no-progress php --version=5.6.30 ; \
-    choco install -y --no-progress apache-httpd --version=2.4.25
+# IIS + CGI (replaces Apache — Apache Lounge downloads are blocked from containers)
+RUN dism /online /enable-feature /all /NoRestart \
+        /featurename:IIS-WebServerRole /featurename:IIS-WebServer \
+        /featurename:IIS-CommonHttpFeatures /featurename:IIS-DefaultDocument \
+        /featurename:IIS-StaticContent /featurename:IIS-CGI \
+        /featurename:IIS-ISAPIExtensions /featurename:IIS-ISAPIFilter \
+        /featurename:IIS-ManagementScriptingTools ; exit 0
 
-# Wire PHP into Apache and enable WordPress-relevant extensions
-RUN $httpdConf = 'C:\tools\Apache24\conf\httpd.conf' ; \
-    Add-Content -Path $httpdConf -Value "`nLoadModule php5_module `"C:/tools/php56/php5apache2_4.dll`"" ; \
-    Add-Content -Path $httpdConf -Value "AddHandler application/x-httpd-php .php" ; \
-    Add-Content -Path $httpdConf -Value "PHPIniDir `"C:/tools/php56`"" ; \
-    Add-Content -Path $httpdConf -Value "DocumentRoot `"C:/wamp/www`"" ; \
-    Copy-Item 'C:\tools\php56\php.ini-production' 'C:\tools\php56\php.ini' -Force ; \
-    (Get-Content 'C:\tools\php56\php.ini') -replace ';extension=mysqli','extension=mysqli' -replace ';extension=mbstring','extension=mbstring' | Set-Content 'C:\tools\php56\php.ini'
+# PHP 7.4.33 NTS (FastCGI for IIS)
+RUN Invoke-WebRequest -Uri 'https://windows.php.net/downloads/releases/archives/php-7.4.33-nts-Win32-vc15-x64.zip' -OutFile 'C:\php.zip' -UseBasicParsing ; \
+    Expand-Archive 'C:\php.zip' -DestinationPath 'C:\php' -Force ; \
+    Remove-Item 'C:\php.zip' ; \
+    Copy-Item 'C:\php\php.ini-production' 'C:\php\php.ini' -Force ; \
+    (Get-Content 'C:\php\php.ini') -replace ';extension=mysqli','extension=mysqli' -replace ';extension=mbstring','extension=mbstring' | Set-Content 'C:\php\php.ini'
+
+# MariaDB 10.1.21 (zip distribution — no installer needed)
+RUN Invoke-WebRequest -Uri 'https://archive.mariadb.org/mariadb-10.1.21/winx64-packages/mariadb-10.1.21-winx64.zip' -OutFile 'C:\mariadb.zip' -UseBasicParsing ; \
+    Expand-Archive 'C:\mariadb.zip' -DestinationPath 'C:\' -Force ; \
+    Rename-Item 'C:\mariadb-10.1.21-winx64' 'C:\mariadb' ; \
+    Remove-Item 'C:\mariadb.zip' ; \
+    & 'C:\mariadb\bin\mysql_install_db.exe' --datadir='C:\mariadb\data' --service='mariadb'
+
+# Wire PHP into IIS via FastCGI and set document root
+RUN Import-Module WebAdministration ; \
+    New-WebHandler -Name 'PHP-FastCGI' -Path '*.php' -Verb '*' -Modules 'FastCgiModule' -ScriptProcessor 'C:\php\php-cgi.exe' -ResourceType File ; \
+    Add-WebConfiguration -Filter '/system.webServer/fastCgi' -PSPath 'IIS:\' -Value @{fullPath='C:\php\php-cgi.exe'} ; \
+    Set-ItemProperty 'IIS:\Sites\Default Web Site' -Name physicalPath -Value 'C:\wamp\www\wordpress'
 
 # WordPress 4.7.1 (matches upstream metasploitable3-windows)
 RUN New-Item -ItemType Directory -Path 'C:\wamp\www' -Force | Out-Null ; \
@@ -39,11 +53,11 @@ COPY wp-config.php C:/wamp/www/wordpress/wp-config.php
 COPY init-wordpress.sql C:/init-wordpress.sql
 COPY verify.ps1 C:/verify/verify.ps1
 
-# Bootstrap: start MariaDB, seed the WordPress DB + weak admin:admin login, start Apache
+# Bootstrap: start MariaDB, seed the WordPress DB + weak admin:admin login
 RUN Start-Service mariadb ; \
     Start-Sleep -Seconds 8 ; \
-    & 'C:\Program Files\MariaDB 10.1\bin\mysql.exe' -u root -e "SOURCE C:/init-wordpress.sql" ; \
+    & 'C:\mariadb\bin\mysql.exe' -u root -e "SOURCE C:/init-wordpress.sql" ; \
     Stop-Service mariadb
 
 EXPOSE 80 3306 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service mariadb; Start-Process -FilePath 'C:\\tools\\Apache24\\bin\\httpd.exe'; while ($true) { Start-Sleep 60 }"]
+CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service mariadb; Start-Service W3SVC; while ($true) { Start-Sleep 60 }"]
