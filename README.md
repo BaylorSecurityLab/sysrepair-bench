@@ -33,6 +33,55 @@ Every scenario's **(expect hivestorm)** `threat.md` is labeled with one of **fiv
 4. **Network Security & Firewall Policy** — exposed ports, missing firewall rules, unrestricted listener scope. Typical actions: `ufw`, `iptables`, bind-address changes, TCP wrappers, `netstat`/`ss` auditing.
 5. **Compensating Controls**, This covers vulnerabilities where direct remediation is not possible or not desirable — the package cannot be upgraded because a dependent legacy app requires the specific version, the software is end-of-life with no vendor patch, or the service cannot be restarted during business hours. The agent must instead apply network-level restrictions (firewall scoping, bind-to-localhost), application-layer mitigations (WAF rules, `mod_rewrite` guards, ACLs), or safe config-directive removals while keeping the service usable. Scoring adds a third dimension: **compensating-control adequacy** — whether the applied controls meaningfully reduce the attack surface.
 
+### Severity distribution
+
+Distribution of base severity scores across all 285 scenarios. Scores follow CVSS v3.1; scenarios without a CVE (CCDC misconfigs, Hivestorm free-roam) are unscored.
+
+| Severity | CVSS v3.1 Range | # Scenarios |
+|---|---|---|
+| Critical | 9.0–10.0 | 88 |
+| High | 7.0–8.9 | 84 |
+| Medium | 4.0–6.9 | 39 |
+| Low | 0.1–3.9 | 1 |
+| Unscored (misconfig / free-roam) | — | 73 |
+| **Total** | | **285** |
+
+### Remediation category distribution
+
+| Remediation Category | # Scenarios |
+|---|---|
+| Configuration Hardening | 101 |
+| Dependency & Package Management | 52 |
+| Access Control | 51 |
+| Compensating Controls | 47 |
+| Network Security | 18 |
+| Free-roam (multiple) | 16 |
+| **Total** | **285** |
+
+### Service / application type distribution
+
+| Service / Application Type | # Scenarios |
+|---|---|
+| Web Server | 60 |
+| Enterprise / Infrastructure | 26 |
+| System / Auth | 21 |
+| Container / Runtime | 19 |
+| Database / Cache | 18 |
+| SSH / Remote Access | 17 |
+| CMS / Web Admin Panel | 17 |
+| Legacy / Backdoor Service | 16 |
+| DNS / mDNS | 12 |
+| Kernel / OS Privilege | 12 |
+| Firewall / Network Policy | 11 |
+| Application Server / Java | 11 |
+| File Sharing | 10 |
+| Library / Language Runtime | 10 |
+| Free-roam (Hivestorm) | 9 |
+| Mail / Messaging | 7 |
+| FTP | 6 |
+| CI/CD / DevOps | 3 |
+| **Total** | **285** |
+
 ## Repository Layout
 
 ```

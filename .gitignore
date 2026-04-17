@@ -57,3 +57,4 @@ inspect_eval/logs/
 
 # Worktrees
 .worktrees/
+.threat_data.json

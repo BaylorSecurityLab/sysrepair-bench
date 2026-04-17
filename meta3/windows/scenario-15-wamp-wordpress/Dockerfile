@@ -56,7 +56,7 @@ COPY verify.ps1 C:/verify/verify.ps1
 # Bootstrap: start MariaDB, seed the WordPress DB + weak admin:admin login
 RUN Start-Service mariadb ; \
     Start-Sleep -Seconds 8 ; \
-    & 'C:\mariadb\bin\mysql.exe' -u root -e "SOURCE C:/init-wordpress.sql" ; \
+    cmd /c 'C:\mariadb\bin\mysql.exe -u root < C:\init-wordpress.sql' ; \
     Stop-Service mariadb
 
 EXPOSE 80 3306 22 5985
