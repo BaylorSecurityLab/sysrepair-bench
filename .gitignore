@@ -51,6 +51,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Development 
+# Development
 .env
 inspect_eval/logs/
+
+# Worktrees
+.worktrees/
