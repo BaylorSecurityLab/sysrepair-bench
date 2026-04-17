@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Scenario 75: K8s RBAC cluster-admin ServiceAccount (misconfig)
 set -u
 

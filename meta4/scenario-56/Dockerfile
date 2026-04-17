@@ -4,10 +4,8 @@ FROM --platform=linux/amd64 internetsystemsconsortium/bind9:9.18
 # Without DNSSEC validation the resolver accepts forged DNS responses,
 # making clients vulnerable to cache poisoning attacks.
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        dnsutils curl netcat-openbsd && \
-    rm -rf /var/lib/apt/lists/*
+# bind9:9.18 is Alpine-based
+RUN apk add --no-cache bind-tools curl netcat-openbsd
 
 RUN mkdir -p /etc/bind
 

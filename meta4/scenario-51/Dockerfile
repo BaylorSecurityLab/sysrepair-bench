@@ -7,9 +7,8 @@ FROM --platform=linux/amd64 eclipse-mosquitto:2.0
 
 USER root
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends mosquitto-clients netcat-openbsd && \
-    rm -rf /var/lib/apt/lists/*
+# eclipse-mosquitto is Alpine-based
+RUN apk add --no-cache mosquitto-clients netcat-openbsd
 
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh

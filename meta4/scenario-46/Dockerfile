@@ -7,7 +7,11 @@ FROM --platform=linux/amd64 neo4j:3.4
 
 USER root
 
-RUN apt-get update && \
+# Redirect stale Debian repos to archive
+RUN sed -i 's|deb.debian.org|archive.debian.org|g; s|security.debian.org|archive.debian.org|g; /stretch-updates/d; /buster-updates/d' /etc/apt/sources.list 2>/dev/null; \
+    sed -i 's|deb.debian.org|archive.debian.org|g; s|security.debian.org|archive.debian.org|g' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+
+RUN apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y --no-install-recommends curl netcat-openbsd iptables && \
     rm -rf /var/lib/apt/lists/*
 

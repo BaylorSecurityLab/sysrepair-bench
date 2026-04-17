@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Scenario 79: K8s Secrets Plaintext in etcd — No Encryption-at-Rest (misconfig)
 set -u
 

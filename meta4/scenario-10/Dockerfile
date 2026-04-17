@@ -12,23 +12,16 @@ FROM --platform=linux/amd64 tomcat:11.0.1-jdk21-temurin
 # We flip `readonly=false` here; the case-insensitive requirement is a
 # deployment concern on Windows/macOS/case-insensitive volumes.
 
-RUN python3 - <<'PY'
-import re,sys
-p='/usr/local/tomcat/conf/web.xml'
-s=open(p).read()
-# Change the <servlet-class>org.apache.catalina.servlets.DefaultServlet</servlet-class>
-# block's readonly init-param (or insert one) to false.
-block = re.search(r'(<servlet-class>org\.apache\.catalina\.servlets\.DefaultServlet</servlet-class>.*?</servlet>)', s, re.S)
-if block:
-    body=block.group(1)
-    if '<param-name>readonly</param-name>' in body:
-        new=re.sub(r'(<param-name>readonly</param-name>\s*<param-value>)[^<]+', r'\\1false', body)
-    else:
-        new=body.replace('</servlet>',
-            '  <init-param>\\n    <param-name>readonly</param-name>\\n    <param-value>false</param-value>\\n  </init-param>\\n</servlet>')
-    s=s.replace(body,new)
-    open(p,'w').write(s)
-PY
+# Insert readonly=false init-param into the DefaultServlet block using sed.
+# If readonly is already present, flip it to false; otherwise insert a new block.
+RUN if grep -q '<param-name>readonly</param-name>' /usr/local/tomcat/conf/web.xml; then \
+        sed -i '/<param-name>readonly<\/param-name>/{ n; s|<param-value>[^<]*</param-value>|<param-value>false</param-value>|; }' \
+            /usr/local/tomcat/conf/web.xml; \
+    else \
+        sed -i '/<servlet-class>org\.apache\.catalina\.servlets\.DefaultServlet<\/servlet-class>/a \
+        <init-param>\n            <param-name>readonly</param-name>\n            <param-value>false</param-value>\n        </init-param>' \
+            /usr/local/tomcat/conf/web.xml; \
+    fi
 
 EXPOSE 8080
 CMD ["catalina.sh", "run"]

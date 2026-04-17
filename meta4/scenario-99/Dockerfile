@@ -10,12 +10,12 @@ FROM --platform=linux/amd64 debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     HADOOP_VERSION=3.3.4 \
     HADOOP_HOME=/opt/hadoop \
-    JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl wget ca-certificates \
-        openjdk-11-jre-headless \
+        openjdk-17-jre-headless \
         netcat-traditional && \
     rm -rf /var/lib/apt/lists/*
 

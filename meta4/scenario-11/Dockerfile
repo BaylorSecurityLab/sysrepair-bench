@@ -7,7 +7,7 @@ FROM --platform=linux/amd64 debian:bookworm-slim
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        openssh-server=1:9.2p1-2 ca-certificates && \
+        openssh-server ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /run/sshd && \
     echo 'root:toor' | chpasswd && \

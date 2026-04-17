@@ -4,8 +4,6 @@ FROM --platform=linux/amd64 rancher/k3s:latest
 # encryption-at-rest, so all Secrets are stored as base64-encoded plaintext
 # in the etcd datastore and can be read by any party with etcd access.
 
-RUN apk add --no-cache bash
-
 COPY start.sh /opt/start.sh
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/start.sh /opt/verify.sh

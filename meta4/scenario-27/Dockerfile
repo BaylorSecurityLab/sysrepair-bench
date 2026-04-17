@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git ca-certificates build-essential autoconf automake libtool \
-        gettext autopoint pkg-config && \
+        gettext autopoint pkg-config po4a doxygen && \
     rm -rf /var/lib/apt/lists/*
 
 # Build xz 5.6.1 from git (backdoor-free source tree)
@@ -27,7 +27,7 @@ RUN git clone --branch v5.6.1 --depth 1 \
         https://github.com/tukaani-project/xz.git /tmp/xz-src && \
     cd /tmp/xz-src && \
     ./autogen.sh && \
-    ./configure --prefix=/usr --disable-static && \
+    ./configure --prefix=/usr --libdir=/lib/x86_64-linux-gnu --disable-static && \
     make -j"$(nproc)" && \
     make install && \
     ldconfig && \

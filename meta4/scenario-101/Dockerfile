@@ -15,7 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl wget ca-certificates unzip \
-        openjdk-11-jre-headless \
+        openjdk-17-jre-headless \
         nginx iptables \
         netcat-traditional && \
     rm -rf /var/lib/apt/lists/*

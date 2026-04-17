@@ -7,9 +7,9 @@ FROM --platform=linux/amd64 elasticsearch:7.10.1
 
 USER root
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
+# elasticsearch:7.10.1 is CentOS 8 (EOL) — redirect to vault
+RUN sed -i 's|mirrorlist=|#mirrorlist=|g; s|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+RUN yum install -y curl && yum clean all
 
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh

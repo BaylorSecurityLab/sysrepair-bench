@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Scenario 77: K8s No Resource Limits — Unbounded Pod Consumption (misconfig)
 set -u
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Scenario 78: K8s NodePort Exposure — Internal Service Exposed Externally (misconfig)
 set -u
 

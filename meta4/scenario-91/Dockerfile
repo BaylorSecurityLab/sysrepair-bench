@@ -6,9 +6,8 @@ FROM --platform=linux/amd64 grafana/grafana:8.3.0
 
 USER root
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl nginx && \
-    rm -rf /var/lib/apt/lists/*
+# grafana:8.3.0 is Alpine-based
+RUN apk add --no-cache curl nginx
 
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh

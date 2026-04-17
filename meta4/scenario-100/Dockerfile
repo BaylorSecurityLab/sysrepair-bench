@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 debian:bookworm-slim
+FROM --platform=linux/amd64 debian:bullseye-slim
 
 # SaltStack 3000 — ClearFuncs Auth Bypass (CVE-2020-11651) — Compensating Controls
 # The salt-master ZeroMQ publisher (4505) and return bus (4506) lack authentication
@@ -12,12 +12,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl ca-certificates gnupg iptables \
-        python3 python3-pip python3-setuptools && \
+        python3 python3-pip python3-setuptools \
+        python3-dev gcc make autoconf && \
     rm -rf /var/lib/apt/lists/*
 
 # Install SaltStack 3000 (vulnerable version via pip)
-RUN pip3 install --break-system-packages "salt==3000" 2>/dev/null || \
-    pip3 install "salt==3000"
+RUN pip3 install distro && pip3 install "salt==3000"
 
 # Vulnerable master config: no publisher_acl, ports open to all
 RUN mkdir -p /etc/salt && cat > /etc/salt/master <<'EOF'

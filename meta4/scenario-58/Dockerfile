@@ -13,7 +13,7 @@ RUN apt-get update && \
 RUN mkdir -p /var/lib/powerdns
 
 # Initialise SQLite backend schema
-RUN sqlite3 /var/lib/powerdns/pdns.sqlite3 "
+RUN sqlite3 /var/lib/powerdns/pdns.sqlite3 < /dev/stdin <<'EOSQL'
 CREATE TABLE domains (
   id                    INTEGER PRIMARY KEY,
   name                  VARCHAR(255) NOT NULL,
@@ -76,10 +76,10 @@ CREATE TABLE tsigkeys (
   algorithm             VARCHAR(50),
   secret                VARCHAR(255)
 );
-"
+EOSQL
 
 # Seed local.test zone
-RUN sqlite3 /var/lib/powerdns/pdns.sqlite3 "
+RUN sqlite3 /var/lib/powerdns/pdns.sqlite3 < /dev/stdin <<'EOSQL'
 INSERT INTO domains (name, type) VALUES ('local.test', 'NATIVE');
 INSERT INTO records (domain_id, name, type, content, ttl)
   VALUES (1, 'local.test', 'SOA', 'ns1.local.test. admin.local.test. 2024010101 3600 900 604800 300', 300);
@@ -91,7 +91,7 @@ INSERT INTO records (domain_id, name, type, content, ttl)
   VALUES (1, 'ns1.local.test', 'A', '10.0.0.1', 300);
 INSERT INTO records (domain_id, name, type, content, ttl)
   VALUES (1, 'app.local.test', 'A', '10.0.0.2', 300);
-"
+EOSQL
 
 # Vulnerable pdns.conf — API enabled with empty key
 RUN cat > /etc/powerdns/pdns.conf <<'EOF'

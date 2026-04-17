@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -u
 
 # Start k3s WITHOUT encryption-at-rest (vulnerable default)

@@ -7,8 +7,11 @@ FROM --platform=linux/amd64 influxdb:1.7.6
 
 USER root
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
+# influxdb:1.7.6 is Debian stretch (EOL) — redirect to archive
+RUN sed -i 's|deb.debian.org|archive.debian.org|g; s|security.debian.org/debian-security|archive.debian.org/debian-security|g; /stretch-updates/d' /etc/apt/sources.list
+
+RUN apt-get -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true update && \
+    apt-get install -y --allow-unauthenticated --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Ensure [http] section has auth-enabled and an empty shared-secret

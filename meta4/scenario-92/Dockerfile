@@ -7,9 +7,8 @@ FROM --platform=linux/amd64 prom/prometheus:v2.40.0
 
 USER root
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
+# prom/prometheus is busybox-based; wget is available, curl is not
+# No package manager — tools are already bundled in busybox
 
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh

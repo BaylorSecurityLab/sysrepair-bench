@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Scenario 76: K8s No NetworkPolicy — Flat Networking (misconfig)
 set -u
 
