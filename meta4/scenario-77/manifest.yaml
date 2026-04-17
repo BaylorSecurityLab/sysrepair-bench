@@ -1,0 +1,14 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unlimited-app
+  namespace: default
+  labels:
+    app: unlimited
+spec:
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      # No resources.requests or resources.limits — unbounded consumption
