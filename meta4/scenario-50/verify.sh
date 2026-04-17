@@ -18,7 +18,14 @@ if [ ! -f "$KAFKA_CONF" ]; then
     exit 1
 fi
 
-if ! grep -q "sasl.enabled.mechanisms" "$KAFKA_CONF" 2>/dev/null; then
+SASL_OK=0
+if grep -q "sasl.enabled.mechanisms" "$KAFKA_CONF" 2>/dev/null; then
+    SASL_OK=1
+fi
+if printenv KAFKA_CFG_SASL_ENABLED_MECHANISMS 2>/dev/null | grep -qi 'PLAIN'; then
+    SASL_OK=1
+fi
+if [ "$SASL_OK" -eq 0 ]; then
     echo "FAIL [PoC]: server.properties does not set sasl.enabled.mechanisms." >&2
     exit 1
 fi

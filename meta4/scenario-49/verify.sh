@@ -6,6 +6,7 @@ set -u
 # PoC: /api/message without credentials must return 401
 ###############################################################################
 
+HTTP_CODE=""
 for i in 1 2 3 4 5; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8161/api/message 2>/dev/null)
     if [ "$HTTP_CODE" = "200" ]; then

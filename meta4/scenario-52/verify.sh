@@ -34,8 +34,8 @@ elif echo "$RESPONSE" | grep -q "^+OK"; then
     echo "FAIL [PoC]: Unauthenticated connection accepted by NATS server." >&2
     exit 1
 else
-    # Could not get a clear response — check if auth is configured and trust the config check
-    echo "PASS [PoC]: No +OK received for unauthenticated connection (authorization likely enforced)."
+    echo "FAIL [PoC]: No response from NATS server (timeout or connection refused); cannot confirm auth enforcement." >&2
+    exit 1
 fi
 
 ###############################################################################

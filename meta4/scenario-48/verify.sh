@@ -3,6 +3,15 @@
 set -u
 
 ###############################################################################
+# Pre-flight: verify NET_ADMIN capability (required for iptables checks)
+###############################################################################
+
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (required for iptables checks)." >&2
+    exit 1
+fi
+
+###############################################################################
 # PoC 1: ACTIVEMQ_OPTS must include SERIALIZABLE_PACKAGES restriction
 ###############################################################################
 

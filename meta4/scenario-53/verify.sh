@@ -5,6 +5,15 @@ set -u
 BROKER_CONF="/opt/rocketmq/conf/broker.conf"
 
 ###############################################################################
+# Pre-flight: verify NET_ADMIN capability (required for iptables checks)
+###############################################################################
+
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (required for iptables checks)." >&2
+    exit 1
+fi
+
+###############################################################################
 # PoC 1: iptables must have DROP rule for port 10911
 ###############################################################################
 

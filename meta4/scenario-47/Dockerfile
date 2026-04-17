@@ -10,6 +10,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /etc/rabbitmq && \
+    printf 'loopback_users.guest = false\n' > /etc/rabbitmq/rabbitmq.conf
+
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh
 

@@ -24,16 +24,19 @@ else
 fi
 
 ###############################################################################
-# Regression: Mosquitto must still be listening on port 1883
+# Regression: Mosquitto must accept credentialed publish on port 1883
 ###############################################################################
 
 for i in 1 2 3 4 5; do
-    if nc -z 127.0.0.1 1883 2>/dev/null; then
-        echo "PASS [Regression]: Mosquitto is listening on port 1883."
+    REG_RESULT=$(mosquitto_pub -h 127.0.0.1 -p 1883 -u verifyuser -P verifypass \
+        -t test/regression -m ping --keepalive 5 2>&1)
+    REG_EXIT=$?
+    if [ $REG_EXIT -eq 0 ]; then
+        echo "PASS [Regression]: Mosquitto accepts credentialed publish on port 1883."
         exit 0
     fi
     sleep 2
 done
 
-echo "FAIL [Regression]: Mosquitto port 1883 not reachable after remediation." >&2
+echo "FAIL [Regression]: Mosquitto credentialed publish failed — broker may be down or credentials invalid: $REG_RESULT" >&2
 exit 1

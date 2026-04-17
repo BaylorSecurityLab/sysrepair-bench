@@ -14,14 +14,13 @@ RUN apt-get update && \
         iptables \
         default-jre-headless \
         procps \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install RocketMQ 5.1.0
 RUN curl -fsSL \
     "https://archive.apache.org/dist/rocketmq/5.1.0/rocketmq-all-5.1.0-bin-release.zip" \
     -o /tmp/rocketmq.zip && \
-    apt-get update && apt-get install -y --no-install-recommends unzip && \
-    rm -rf /var/lib/apt/lists/* && \
     unzip /tmp/rocketmq.zip -d /opt && \
     mv /opt/rocketmq-all-5.1.0-bin-release /opt/rocketmq && \
     rm /tmp/rocketmq.zip
