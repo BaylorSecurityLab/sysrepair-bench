@@ -18,7 +18,8 @@
 
 FROM docker:24-dind
 
-RUN apk add --no-cache bash jq openssh-server sudo curl shadow procps iproute2
+RUN apk upgrade --no-cache && \
+    apk add --no-cache bash jq openssh-server sudo curl shadow procps iproute2
 
 COPY build/roles.json /etc/sysrepair/roles.json
 COPY seed.sh /usr/local/sbin/seed.sh

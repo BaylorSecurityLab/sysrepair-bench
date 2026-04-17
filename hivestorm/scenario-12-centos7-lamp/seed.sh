@@ -30,6 +30,7 @@ rm -f /etc/yum.repos.d/CentOS-CR.repo /etc/yum.repos.d/CentOS-Sources.repo \
       /etc/yum.repos.d/CentOS-Vault.repo /etc/yum.repos.d/CentOS-fasttrack.repo \
       /etc/yum.repos.d/CentOS-Debuginfo.repo /etc/yum.repos.d/CentOS-Media.repo
 
+yum -y --setopt=tsflags=nodocs install epel-release >/dev/null 2>&1
 yum -y --setopt=tsflags=nodocs install \
     httpd mariadb mariadb-server openssh-server openssh-clients \
     sudo procps-ng iproute policycoreutils vsftpd xinetd telnet-server \

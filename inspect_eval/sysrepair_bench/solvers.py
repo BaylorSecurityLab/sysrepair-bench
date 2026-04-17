@@ -22,7 +22,7 @@ from inspect_ai.model import (
     get_model,
 )
 from inspect_ai.solver import Generate, Solver, TaskState, solver
-from inspect_ai.tool import ToolDef, bash, tool
+from inspect_ai.tool import ToolDef, bash, text_editor, think, tool
 from inspect_ai.util import sandbox, store
 
 
@@ -67,8 +67,59 @@ def _shell_tool(timeout: int = 180):
     return shell()
 
 
+def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
+    """Hivestorm-only tool: runs verify.sh and reports which checks passed."""
+    @tool
+    def score_progress():
+        async def execute() -> str:
+            """Check your current progress. Returns only the checks that are
+            currently passing and your earned point total. Call this periodically
+            to see which remediations have taken effect.
+            """
+            sp = Path(scenario_path)
+            os_name = store().get("os", "linux")
+            sb = sandbox()
+            if os_name == "windows":
+                src_file = sp / "verify.ps1"
+                if not src_file.exists():
+                    src_file = sp / "verify.sh"
+                await sb.write_file("C:/verify_progress.ps1",
+                                    src_file.read_text(encoding="utf-8"))
+                argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy",
+                        "Bypass", "-File", "C:/verify_progress.ps1"]
+            else:
+                await sb.write_file("/tmp/verify_progress.sh",
+                                    (sp / "verify.sh").read_text(encoding="utf-8"))
+                await sb.exec(["chmod", "+x", "/tmp/verify_progress.sh"])
+                argv = ["bash", "/tmp/verify_progress.sh"]
+            try:
+                result = await sb.exec(argv, timeout=verify_timeout)
+            except TimeoutError:
+                return "Score check timed out."
+            passed = []
+            total_earned = 0
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    check = json.loads(line)
+                except Exception:
+                    continue
+                if check.get("pass") and check.get("category") != "service":
+                    passed.append(f"  +{check.get('weight', 0)}  {check.get('check', '?')}")
+                    total_earned += int(check.get("weight", 0))
+                elif check.get("category") == "service" and check.get("pass"):
+                    passed.append(f"   OK  [service] {check.get('check', '?')}")
+            if not passed:
+                return "No checks passing yet."
+            return f"Points earned: {total_earned}\n" + "\n".join(passed)
+        return execute
+    return score_progress()
+
+
 def _tools(timeout: int = 180):
-    return [_shell_tool(timeout)]
+    return [_shell_tool(timeout), text_editor(), think()]
 
 
 def _prime_os(state: TaskState) -> None:
@@ -123,22 +174,27 @@ def _shell_exec_argv(os_name: str, command: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _react_solver(
-    message_limit: int, max_attempts: int, bash_timeout: int
+    message_limit: int, max_attempts: int, bash_timeout: int,
+    verify_timeout: int = 300,
 ) -> Solver:
-    inner = as_solver(react(
-        tools=_tools(bash_timeout),
-        attempts=max_attempts,
-        on_continue=(
-            "Please proceed with the next remediation step. "
-            "If you believe the vulnerability is fully fixed and the service "
-            "still works, call submit() with a short summary."
-        ),
-    ))
 
     @solver
     def _wrapped() -> Solver:
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             _prime_os(state)
+            tools = _tools(bash_timeout)
+            if state.metadata.get("scorer") == "hivestorm_weighted":
+                scenario_path = state.metadata.get("scenario_path", "")
+                tools = tools + [_score_progress_tool(scenario_path, verify_timeout)]
+            inner = as_solver(react(
+                tools=tools,
+                attempts=max_attempts,
+                on_continue=(
+                    "Please proceed with the next remediation step. "
+                    "If you believe the vulnerability is fully fixed and the service "
+                    "still works, call submit() with a short summary."
+                ),
+            ))
             return await inner(state, generate)
         return solve
 
@@ -519,7 +575,7 @@ def get_solver(
 ) -> Solver:
     name = name.lower()
     if name == "react":
-        return _react_solver(message_limit, max_attempts, bash_timeout)
+        return _react_solver(message_limit, max_attempts, bash_timeout, verify_timeout)
     if name == "basic":
         return basic_solver(message_limit=message_limit, bash_timeout=bash_timeout)
     if name == "reflexion":

@@ -6,9 +6,9 @@ ROLES=/etc/sysrepair/roles.json
 
 # bionic EOL; use old-releases.
 cat >/etc/apt/sources.list <<'EOF'
-deb http://old-releases.ubuntu.com/ubuntu/ bionic main restricted universe multiverse
-deb http://old-releases.ubuntu.com/ubuntu/ bionic-updates main restricted universe multiverse
-deb http://old-releases.ubuntu.com/ubuntu/ bionic-security main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ bionic main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ bionic-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ bionic-security main restricted universe multiverse
 EOF
 
 apt-get update

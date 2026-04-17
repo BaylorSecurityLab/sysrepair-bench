@@ -56,49 +56,13 @@ presets:
     solver: plan_and_solve
     benchmarks: ["meta2"]
 
-  # Gemma 4 31B served via vLLM (OpenAI-compatible, --served-model-name gemma-4-31b).
+  # Gemma 4 31B via vLLM — all Linux benchmarks (ccdc + meta2 + meta3/ubuntu + vulnhub).
+  # 139 scenarios total. Tools: shell + text_editor + think.
   # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
-  # Tuned for ReAct over ccdc; bumps all timeouts vs defaults because Hardy
-  # containers + Gemma 4 thinking-mode traces run long.
-  ccdc_react_gemma4_31b:
+  react_gemma4_31b:
     model: openai/gemma-4-31b
     solver: react
-    benchmarks: ["ccdc"]
-    message_limit: 50
-    max_connections: 2
-    time_limit: 2400 # 40 min per scenario (thinking mode adds latency)
-    token_limit: 800000 # thinking blocks inflate token counts
-    bash_timeout: 240 # Samba/VNC on Hardy sometimes needs >2 min
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  # Gemma 4 31B served via vLLM (OpenAI-compatible, --served-model-name gemma-4-31b).
-  # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
-  # Tuned for ReAct over ccdc; bumps all timeouts vs defaults because Hardy
-  # containers + Gemma 4 thinking-mode traces run long.
-  meta2_react_gemma4_31b:
-    model: openai/gemma-4-31b
-    solver: react
-    benchmarks: ["meta2"]
-    message_limit: 50
-    max_connections: 2
-    time_limit: 2400 # 40 min per scenario (thinking mode adds latency)
-    token_limit: 800000 # thinking blocks inflate token counts
-    bash_timeout: 240 # Samba/VNC on Hardy sometimes needs >2 min
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  # Gemma 4 31B via vLLM — meta3 Ubuntu benchmark (19 scenarios, Ubuntu 14.04).
-  # Chef-based scenarios (05-07,09-10,13-15,17-19) need the full metasploitable3
-  # cookbook — see meta3/ubuntu/shared/cookbooks/metasploitable/. Missing internal
-  # recipes (mysql.rb, apache.rb, php_545.rb, etc.) must be ported from upstream
-  # https://github.com/rapid7/metasploitable3 before those scenarios can build.
-  meta3_ubuntu_react_gemma4_31b:
-    model: openai/gemma-4-31b
-    solver: react
-    benchmarks: ["meta3/ubuntu"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub"]
     message_limit: 50
     max_connections: 2
     time_limit: 2400
@@ -108,16 +72,26 @@ presets:
     fail_on_error: 0.25
     retry_on_error: 2
 
-  # Gemma 4 31B via vLLM — vulnhub benchmark (30 scenarios: Metasploitable2,
-  # Mr. Robot, Debian 11). These images have GNU timeout natively.
-  vulnhub_react_gemma4_31b:
+  # Hivestorm Linux — free-roam hardening (weighted partial credit).
+  # Requires: SEED=42 bash hivestorm/prepare.sh  (generates roles.json + task.md)
+  # Agent is NOT told what's wrong — must enumerate and remediate blind.
+  hivestorm_linux_gemma4_31b:
     model: openai/gemma-4-31b
     solver: react
-    benchmarks: ["vulnhub"]
-    message_limit: 50
+    scenarios:
+      - "hivestorm/scenario-01-debian9"
+      - "hivestorm/scenario-02-ubuntu1604"
+      - "hivestorm/scenario-06-debian9-postgres"
+      - "hivestorm/scenario-07-ubuntu1804-samba"
+      - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
+      - "hivestorm/scenario-10-ubuntu-faillock"
+      - "hivestorm/scenario-12-centos7-lamp"
+      - "hivestorm/scenario-15-docker-host"
+      - "hivestorm/scenario-16-nginx-phpfpm"
+    message_limit: 80
     max_connections: 2
-    time_limit: 2400
-    token_limit: 800000
+    time_limit: 3600
+    token_limit: 1000000
     bash_timeout: 240
     verify_timeout: 360
     fail_on_error: 0.25

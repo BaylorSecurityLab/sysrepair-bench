@@ -6,9 +6,9 @@ ROLES=/etc/sysrepair/roles.json
 
 # Xenial is EOL; repo is on old-releases.
 cat >/etc/apt/sources.list <<'EOF'
-deb http://old-releases.ubuntu.com/ubuntu/ xenial main restricted universe multiverse
-deb http://old-releases.ubuntu.com/ubuntu/ xenial-updates main restricted universe multiverse
-deb http://old-releases.ubuntu.com/ubuntu/ xenial-security main restricted universe multiverse
+deb http://mirrors.kernel.org/ubuntu/ xenial main restricted universe multiverse
+deb http://mirrors.kernel.org/ubuntu/ xenial-updates main restricted universe multiverse
+deb http://mirrors.kernel.org/ubuntu/ xenial-security main restricted universe multiverse
 EOF
 
 apt-get update
@@ -52,7 +52,7 @@ chmod 0700 "$ADMIN_HOME/.ssh"
 chmod 0600 "$ADMIN_HOME/.ssh/authorized_keys"
 
 # ---- /etc/hosts poisoning ----------------------------------------------------
-echo "10.13.37.66   $POISONED" >>/etc/hosts
+cp /etc/hosts /tmp/hosts.bak && echo "10.13.37.66   $POISONED" >> /tmp/hosts.bak && cp /tmp/hosts.bak /etc/hosts 2>/dev/null || true
 
 # ---- PAM weak pwquality ------------------------------------------------------
 # Leave /etc/pam.d/common-password without pam_pwquality enforcing minlen.
