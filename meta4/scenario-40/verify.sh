@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scenario 40: MongoDB 4.4.29 — MongoBleed Memory Disclosure (CVE-2025-14847)
+# Scenario 40: MongoDB 4.4 — Zlib Compression Amplification Risk (misconfiguration)
 set -u
 
 CONF_FILE="/etc/mongod/mongod.conf"
@@ -9,7 +9,7 @@ CONF_FILE="/etc/mongod/mongod.conf"
 ###############################################################################
 
 if grep -qiE 'compressors\s*:.*zlib' "$CONF_FILE" 2>/dev/null; then
-    echo "FAIL [PoC]: mongod.conf still lists zlib as an accepted compressor — CVE-2025-14847 reachable." >&2
+    echo "FAIL [PoC]: mongod.conf still lists zlib as an accepted compressor — compression amplification risk present." >&2
     exit 1
 fi
 
@@ -20,7 +20,7 @@ if mongosh --quiet --eval "db.adminCommand({getCmdLineOpts:1})" 2>/dev/null \
     exit 1
 fi
 
-echo "PASS [PoC]: zlib compression is disabled — CVE-2025-14847 not reachable."
+echo "PASS [PoC]: zlib compression is disabled — compression amplification risk mitigated."
 
 ###############################################################################
 # Regression: MongoDB must still respond to a ping

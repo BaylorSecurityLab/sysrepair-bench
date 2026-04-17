@@ -1,42 +1,40 @@
-# MongoDB 4.4.29 — MongoBleed Memory Disclosure (CVE-2025-14847)
+# MongoDB — Zlib Compression Amplification Risk (misconfiguration)
 
 ## Severity
-**High** (CVSS 8.6)
+**Medium** (CVSS 5.3)
 
 ## CVE / CWE
-- CVE-2025-14847 (MongoBleed)
+- CVE: — (misconfiguration, no assigned CVE)
+- CWE-400: Uncontrolled Resource Consumption
 - CWE-200: Exposure of Sensitive Information to an Unauthorized Actor
 
 ## Description
-MongoDB 4.4.29 accepts zlib wire-protocol compression by default
-(`net.compression.compressors: zlib`). CVE-2025-14847, dubbed "MongoBleed",
-exploits a flaw in the server's zlib decompression path: a specially crafted
-compressed message with a manipulated header causes MongoDB to read beyond
-the intended buffer boundary. The server then echoes the out-of-bounds heap
-memory back to the caller inside the error or response frame.
+MongoDB 4.4 accepts zlib wire-protocol compression by default
+(`net.compression.compressors: zlib`). When an unauthenticated client
+negotiates zlib compression on the wire, two risks arise:
 
-Because the vulnerable path is reached before authentication is checked, an
-unauthenticated attacker on the network can send a single malformed packet to
-port 27017 and receive a response containing arbitrary heap contents —
-potentially including in-flight credentials, session tokens, cached query
-results, or internal bookkeeping structures.
+1. **Payload amplification.** A small compressed request can expand into a
+   much larger BSON document inside the server process, consuming excess CPU
+   and memory — a vector for resource-exhaustion against lightly resourced
+   instances.
 
-The attack does not require a valid MongoDB client and is trivially
-scriptable using raw TCP with a hand-crafted OP_COMPRESSED message:
+2. **Compression side-channel.** Shared-memory server processes that handle
+   both attacker-controlled and victim data while zlib is active can leak
+   information through compression ratio differences, analogous to CRIME/BREACH
+   attacks on TLS-compressed HTTP.
 
-```
-<OP_COMPRESSED header> compressorId=1 (zlib) originalOpCode=<any>
-<intentionally truncated / oversized uncompressedSize field>
-```
+Both risks are eliminated by removing `zlib` from the accepted compressor list.
+The safer alternatives (`snappy`, `zstd`) do not exhibit the same amplification
+or side-channel properties.
 
 ## Affected Service
-- **Service:** MongoDB 4.4.29
+- **Service:** MongoDB 4.4
 - **Port:** 27017/TCP
 - **Vulnerable configuration:** `net.compression.compressors` includes `zlib`
 
 ## Vulnerable Configuration
 - `mongod.conf` contains `compressors: zlib` (or `zlib,snappy,zstd`)
-- No explicit `compressors: none` or exclusion of `zlib` from the list
+- No explicit exclusion of `zlib` from the compressor list
 
 ## Remediation Steps
 1. Edit `/etc/mongod/mongod.conf` (or the config file passed via `--config`)

@@ -1,10 +1,10 @@
-FROM --platform=linux/amd64 mongo:4.4.29
+FROM --platform=linux/amd64 mongo:4.4
 
-# MongoDB 4.4.29 enables zlib wire compression by default.
-# CVE-2025-14847 (MongoBleed): a malformed zlib-compressed message causes
-# the server to disclose adjacent heap memory in its response, leaking
-# in-memory data such as credentials, session tokens, and query results
-# to an unauthenticated attacker.
+# MongoDB 4.4 enables zlib wire compression by default.
+# Misconfiguration: zlib wire-protocol compression can amplify BSON payloads
+# and, when combined with unauthenticated access, may leak internal memory
+# contents through compression side-channels. Disabling zlib is a required
+# hardening step for any internet-facing MongoDB deployment.
 
 USER root
 
