@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,40 @@ from inspect_ai import eval as inspect_eval
 from .task import sysrepair_bench
 
 DEFAULT_RUNS = Path(__file__).resolve().parents[1] / "runs.yaml"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Shared base images that child scenario Dockerfiles reference by tag. If a run
+# touches any meta2 scenario, ensure the base is built locally — Inspect AI's
+# per-sample `docker build` will otherwise try to pull it from a registry and
+# fail. Each entry maps `image tag -> build context directory`.
+BASE_IMAGES = {
+    "sysrepair/meta2-hardy:latest": REPO_ROOT / "meta2" / "_base",
+}
+
+
+def _ensure_base_images(cfg: dict) -> None:
+    """Build any shared base images that the selected scenarios depend on."""
+    benchmarks = cfg.get("benchmarks") or []
+    scenarios = cfg.get("scenarios") or []
+    touches_meta2 = (
+        "meta2" in benchmarks
+        or any(s.startswith("meta2/") for s in scenarios)
+        or not benchmarks and not scenarios  # defaults include meta2
+    )
+    if not touches_meta2:
+        return
+    tag = "sysrepair/meta2-hardy:latest"
+    ctx = BASE_IMAGES[tag]
+    # Check local presence (suppress stderr if docker missing; let inspect's own
+    # error handling surface the problem instead of swallowing it here).
+    probe = subprocess.run(
+        ["docker", "image", "inspect", tag],
+        capture_output=True, text=True,
+    )
+    if probe.returncode == 0:
+        return
+    print(f"[pre-build] {tag} missing; building from {ctx} ...")
+    subprocess.run(["docker", "build", "-t", tag, str(ctx)], check=True)
 
 
 def _load(runs_path: Path, preset_name: str) -> dict:
@@ -40,6 +75,7 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
 
     cfg = _load(Path(args.runs), args.preset)
+    _ensure_base_images(cfg)
 
     models = cfg.get("models") or ([cfg["model"]] if cfg.get("model") else [])
     solvers = cfg.get("solvers") or ([cfg.get("solver", "react")])

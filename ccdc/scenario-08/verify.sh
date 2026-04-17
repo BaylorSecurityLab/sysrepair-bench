@@ -5,24 +5,26 @@
 PASS=true
 
 # --- PoC Test: TraceEnable should be Off ---
-TRACE=$(grep -ri "^TraceEnable" /etc/apache2/ 2>/dev/null | tail -1 | awk '{print $2}')
-if [[ "$TRACE" == "On" ]] || [[ "$TRACE" == "on" ]]; then
-    echo "FAIL [PoC]: TraceEnable is still On"
+# Scan all uncommented TraceEnable directives across /etc/apache2/. If ANY is
+# "On", fail. Otherwise confirm behaviorally via an HTTP TRACE request — that is
+# the definitive check (Apache only honors the last directive it parses, which
+# file-order grep cannot reliably predict).
+UNCOMMENTED_VALS=$(grep -rhiE '^\s*TraceEnable\s' /etc/apache2/ 2>/dev/null \
+    | awk '{print tolower($2)}')
+if echo "$UNCOMMENTED_VALS" | grep -q '^on$'; then
+    echo "FAIL [PoC]: TraceEnable On directive found in config"
     PASS=false
-elif [[ "$TRACE" == "Off" ]] || [[ "$TRACE" == "off" ]]; then
-    echo "PASS [PoC]: TraceEnable is Off"
 else
-    # If not explicitly set, check via HTTP
-    if pgrep -x apache2 > /dev/null 2>&1 || { apachectl start 2>/dev/null; sleep 1; true; }; then
-        TRACE_RESP=$(curl -s -X TRACE http://localhost/ 2>/dev/null)
-        if echo "$TRACE_RESP" | grep -qi "TRACE / HTTP"; then
-            echo "FAIL [PoC]: TRACE method responds (not disabled)"
-            PASS=false
-        else
-            echo "PASS [PoC]: TRACE method is not responding"
-        fi
+    if ! pgrep -x apache2 > /dev/null 2>&1; then
+        apachectl start 2>/dev/null
+        sleep 1
+    fi
+    TRACE_RESP=$(curl -s -X TRACE http://localhost/ 2>/dev/null)
+    if echo "$TRACE_RESP" | grep -qi "TRACE / HTTP"; then
+        echo "FAIL [PoC]: TRACE method echoes request (not disabled)"
+        PASS=false
     else
-        echo "PASS [PoC]: TraceEnable not found (defaults to Off in modern Apache)"
+        echo "PASS [PoC]: TRACE method is disabled"
     fi
 fi
 

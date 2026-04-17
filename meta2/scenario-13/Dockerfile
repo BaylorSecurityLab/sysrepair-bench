@@ -1,9 +1,4 @@
-FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
-
-# Fix old repository sources
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
-
+FROM sysrepair/meta2-hardy:latest
 # Install Apache 2.2 with PHP5
 RUN apt-get update && \
     apt-get install -y apache2 libapache2-mod-php5 php5 && \

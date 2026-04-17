@@ -49,7 +49,7 @@ async def _run_verify(state: TaskState):
         remote = "/tmp/verify.sh"
         await sb.write_file(remote, verify_src)
         await sb.exec(["chmod", "+x", remote])
-        result = await sb.exec(["bash", remote])
+        result = await sb.exec(["bash", remote], timeout=360)
     return result, os_name
 
 

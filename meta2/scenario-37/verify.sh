@@ -6,7 +6,7 @@
 
 set -u
 
-IPT=$(iptables -S 2>/dev/null || true)
+IPT=$(iptables-save 2>/dev/null || true)
 if [ -z "$IPT" ]; then
     echo "FAIL [PoC]: iptables not usable in this container (need --cap-add=NET_ADMIN)."
     exit 1

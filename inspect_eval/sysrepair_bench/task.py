@@ -17,6 +17,21 @@ from inspect_ai.util._sandbox.compose import (
 from .scorer import dispatch_scorer
 from .solvers import get_solver
 
+
+class _SysRepairService(ComposeService):
+    """ComposeService extended with cap_add so scenarios that need to manage
+    firewall state (ufw / iptables / nftables in scenario-29 etc.) can do so
+    without running the whole container privileged."""
+
+    cap_add: list[str] | None = None
+
+
+class _SysRepairComposeConfig(ComposeConfig):
+    """ComposeConfig with a typed ``services`` dict of _SysRepairService so the
+    cap_add field survives Pydantic's polymorphic dump (declared-type wins)."""
+
+    services: dict[str, _SysRepairService]
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARKS = ("meta2", "vulnhub", "ccdc")
 
@@ -109,6 +124,16 @@ def _discover_scenarios(
             p = (REPO_ROOT / s).resolve() if not Path(s).is_absolute() else Path(s)
             if not p.exists():
                 raise FileNotFoundError(f"Scenario not found: {p}")
+            if not (p / "Dockerfile").exists():
+                raise ValueError(
+                    f"'{s}' is not a valid scenario (no Dockerfile at {p}). "
+                    f"If you meant to run every scenario under it, use "
+                    f"`benchmarks: [\"{s}\"]` instead of `scenarios:`."
+                )
+            if not ((p / "verify.sh").exists() or (p / "verify.ps1").exists()):
+                raise ValueError(
+                    f"'{s}' is missing verify.sh / verify.ps1 at {p}."
+                )
             selected.append(p)
         return selected
 
@@ -165,9 +190,9 @@ def _build_sample(scenario_dir: Path) -> Sample:
         )
         scorer_kind = "binary"
 
-    compose_cfg = ComposeConfig(
+    compose_cfg = _SysRepairComposeConfig(
         services={
-            "default": ComposeService(
+            "default": _SysRepairService(
                 build=ComposeBuild(
                     context=str(scenario_dir.resolve()),
                     dockerfile=dockerfile.name,
@@ -175,6 +200,7 @@ def _build_sample(scenario_dir: Path) -> Sample:
                 command="tail -f /dev/null",
                 init=True,
                 network_mode="bridge",
+                cap_add=["NET_ADMIN"],
             )
         }
     )

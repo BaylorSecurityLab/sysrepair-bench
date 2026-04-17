@@ -5,13 +5,13 @@
 
 set -u
 
-IPT=$(iptables -S 2>/dev/null || true)
+IPT=$(iptables-save 2>/dev/null || true)
 if [ -z "$IPT" ]; then
     echo "FAIL [PoC]: iptables not usable (container needs --cap-add=NET_ADMIN)."
     exit 1
 fi
 
-if ! echo "$IPT" | grep -qE '^-P INPUT DROP'; then
+if ! echo "$IPT" | grep -qE '(^-P INPUT DROP|^:INPUT DROP)'; then
     echo "FAIL [PoC]: INPUT policy is not DROP."
     echo "$IPT"
     exit 1

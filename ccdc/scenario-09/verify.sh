@@ -5,11 +5,16 @@
 PASS=true
 
 # --- PoC Test: server_tokens should be off ---
-TOKENS=$(grep -rE '^\s*server_tokens' /etc/nginx/nginx.conf /etc/nginx/conf.d/ /etc/nginx/sites-enabled/ 2>/dev/null | grep -v '#' | tail -1)
-if echo "$TOKENS" | grep -qi 'on'; then
+# Extract the effective value of server_tokens (strip filename, directive name, trailing ;)
+TOKEN_VAL=$(grep -rhE '^\s*server_tokens\b' \
+        /etc/nginx/nginx.conf /etc/nginx/conf.d/ /etc/nginx/sites-enabled/ 2>/dev/null \
+    | grep -v '^\s*#' \
+    | tail -1 \
+    | sed -E 's/^\s*server_tokens\s+//; s/\s*;.*$//')
+if [[ "$TOKEN_VAL" == "on" ]]; then
     echo "FAIL [PoC]: server_tokens is still on"
     PASS=false
-elif echo "$TOKENS" | grep -qi 'off'; then
+elif [[ "$TOKEN_VAL" == "off" ]]; then
     echo "PASS [PoC]: server_tokens is off"
 else
     # Check via HTTP header

@@ -1,9 +1,4 @@
-FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
-
-# Fix old repository sources
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
-
+FROM sysrepair/meta2-hardy:latest
 # Install x11vnc and dependencies (no display manager needed for headless)
 RUN apt-get update && \
     apt-get install -y x11vnc xvfb openssh-server net-tools && \

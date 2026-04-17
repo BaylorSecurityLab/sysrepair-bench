@@ -1,9 +1,4 @@
-FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
-
-# Fix old repository URLs
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
-
+FROM sysrepair/meta2-hardy:latest
 # Install OpenSSH server
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server && \

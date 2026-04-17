@@ -1,9 +1,4 @@
-FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
-
-# Fix old repository sources
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
-
+FROM sysrepair/meta2-hardy:latest
 # Install Postfix (select internet site config non-interactively)
 RUN apt-get update && \
     echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-selections && \

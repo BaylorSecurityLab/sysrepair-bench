@@ -1,5 +1,4 @@
-FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
-
+FROM sysrepair/meta2-hardy:latest
 # Fix package repositories to use old-releases and enable multiverse
 # (default-jdk does not exist in Ubuntu 8.04 Hardy — introduced in Ubuntu 10.04)
 RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \

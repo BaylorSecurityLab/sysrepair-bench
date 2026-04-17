@@ -1,9 +1,4 @@
-FROM --platform=linux/amd64 lpenz/ubuntu-hardy-amd64
-
-# Fix old repository URLs
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
-
+FROM sysrepair/meta2-hardy:latest
 # Install MySQL server non-interactively with empty root password
 RUN apt-get update && \
     echo "mysql-server mysql-server/root_password password " | debconf-set-selections && \
