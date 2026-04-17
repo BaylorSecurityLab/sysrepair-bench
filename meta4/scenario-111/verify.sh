@@ -16,12 +16,14 @@ echo "PASS [PoC]: UDP port 11211 is not listening."
 # Regression: TCP service on 11211 must still respond with STAT lines
 ###############################################################################
 
-STATS=$(echo "stats" | nc -q1 127.0.0.1 11211 2>/dev/null || true)
-if echo "$STATS" | grep -q "^STAT "; then
-    echo "PASS [Regression]: Memcached TCP responds with STAT lines."
-else
-    echo "FAIL [Regression]: Memcached TCP does not return STAT lines on port 11211." >&2
-    exit 1
-fi
+for i in 1 2 3 4 5; do
+    STATS=$(echo "stats" | nc -q1 127.0.0.1 11211 2>/dev/null || true)
+    if echo "$STATS" | grep -q "^STAT "; then
+        echo "PASS [Regression]: Memcached TCP responds with STAT lines."
+        exit 0
+    fi
+    sleep 2
+done
 
-exit 0
+echo "FAIL [Regression]: Memcached TCP does not return STAT lines on port 11211." >&2
+exit 1

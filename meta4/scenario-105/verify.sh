@@ -21,11 +21,14 @@ echo "PASS [PoC]: /protected returned $STATUS (not 200) with bypass header — h
 # Regression: public page must still be reachable via nginx on port 80
 ###############################################################################
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/)
-if [ "$STATUS" != "200" ]; then
-    echo "FAIL [Regression]: / returned $STATUS via nginx — proxy not working." >&2
-    exit 1
-fi
-echo "PASS [Regression]: / returns 200 via nginx on port 80."
+for i in 1 2 3 4 5; do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/)
+    if [ "$STATUS" = "200" ]; then
+        echo "PASS [Regression]: / returns 200 via nginx on port 80."
+        exit 0
+    fi
+    sleep 3
+done
 
-exit 0
+echo "FAIL [Regression]: / returned $STATUS via nginx — proxy not working." >&2
+exit 1

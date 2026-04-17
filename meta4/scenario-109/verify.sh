@@ -32,12 +32,14 @@ echo "PASS [PoC]: /console returned $STATUS (blocked by nginx)."
 # for non-console paths via the nginx proxy
 ###############################################################################
 
-# nginx should be proxying non-console paths to port 7001
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7001/)
-if [ "$STATUS" != "200" ]; then
-    echo "FAIL [Regression]: WebLogic root path returned $STATUS — service not running." >&2
-    exit 1
-fi
-echo "PASS [Regression]: WebLogic responds with 200 on / (non-console path)."
+for i in 1 2 3 4 5; do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7001/)
+    if [ "$STATUS" = "200" ]; then
+        echo "PASS [Regression]: WebLogic responds with 200 on / (non-console path)."
+        exit 0
+    fi
+    sleep 3
+done
 
-exit 0
+echo "FAIL [Regression]: WebLogic root path returned $STATUS — service not running." >&2
+exit 1

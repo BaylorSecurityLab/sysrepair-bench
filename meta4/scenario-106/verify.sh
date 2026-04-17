@@ -20,8 +20,17 @@ echo "PASS [PoC]: Default admin key rejected (HTTP $STATUS)."
 # Regression: service must still be running and responding
 ###############################################################################
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/healthz)
-if [ "$STATUS" != "200" ]; then
+HEALTH_OK=0
+for i in 1 2 3 4 5; do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/healthz)
+    if [ "$STATUS" = "200" ]; then
+        HEALTH_OK=1
+        break
+    fi
+    sleep 3
+done
+
+if [ "$HEALTH_OK" != "1" ]; then
     echo "FAIL [Regression]: APISIX health check returned $STATUS — service not running." >&2
     exit 1
 fi

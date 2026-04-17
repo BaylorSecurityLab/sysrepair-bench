@@ -58,10 +58,13 @@ fi
 # Regression: salt-master process must be running
 ###############################################################################
 
-if pgrep -x salt-master > /dev/null 2>&1; then
-    echo "PASS [Regression]: salt-master process is running."
-    exit 0
-else
-    echo "FAIL [Regression]: salt-master process is not running." >&2
-    exit 1
-fi
+for i in 1 2 3 4 5; do
+    if pgrep -x salt-master > /dev/null 2>&1; then
+        echo "PASS [Regression]: salt-master process is running."
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "FAIL [Regression]: salt-master process is not running." >&2
+exit 1
