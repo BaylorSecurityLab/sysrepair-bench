@@ -4,16 +4,6 @@ FROM --platform=linux/amd64 redis:7-alpine
 # Redis ships with no requirepass, allowing any network client to
 # read/write ArgoCD session tokens and application state.
 
-# Seed: store a fake ArgoCD session token on startup
-RUN cat > /docker-entrypoint-initdb.d/seed.sh 2>/dev/null <<'BASH' || \
-    (mkdir -p /data && cat > /data/seed.sh <<'BASH2'
-#!/bin/sh
-redis-cli SET "argocd:session:token:admin" "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhcmdvY2QiLCJzdWIiOiJhZG1pbiIsImV4cCI6OTk5OTk5OTk5OX0.faketoken" 2>/dev/null || true
-redis-cli SET "argocd:app:guestbook" '{"name":"guestbook","namespace":"default","status":"Healthy"}' 2>/dev/null || true
-BASH2
-chmod +x /data/seed.sh)
-BASH
-
 # Use a custom start script that seeds data after Redis starts
 RUN cat > /start.sh <<'BASH'
 #!/bin/sh
