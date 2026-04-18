@@ -19,11 +19,11 @@ from .solvers import get_solver
 
 
 class _SysRepairService(ComposeService):
-    """ComposeService extended with cap_add so scenarios that need to manage
-    firewall state (ufw / iptables / nftables in scenario-29 etc.) can do so
-    without running the whole container privileged."""
+    """ComposeService extended with cap_add and privileged so scenarios that
+    need firewall state (iptables/nftables) or full kernel access (k3s) work."""
 
     cap_add: list[str] | None = None
+    privileged: bool | None = None
 
 
 class _SysRepairComposeConfig(ComposeConfig):
@@ -204,6 +204,11 @@ def _build_sample(scenario_dir: Path) -> Sample:
         build_context = str(scenario_dir.resolve())
         dockerfile_path = dockerfile.name
 
+    # Detect scenarios that need full privileged mode (k3s requires it)
+    needs_privileged = "k3s" in dockerfile.read_text(
+        encoding="utf-8", errors="ignore"
+    ).lower()
+
     compose_cfg = _SysRepairComposeConfig(
         services={
             "default": _SysRepairService(
@@ -211,10 +216,14 @@ def _build_sample(scenario_dir: Path) -> Sample:
                     context=build_context,
                     dockerfile=dockerfile_path,
                 ),
-                command="tail -f /dev/null",
+                # Clear any base-image ENTRYPOINT so the keepalive command
+                # runs directly (otherwise ENTRYPOINT + command = crash).
+                entrypoint=[""],
+                command="sleep infinity",
                 init=True,
                 network_mode="bridge",
                 cap_add=["NET_ADMIN"],
+                privileged=True if needs_privileged else None,
             )
         }
     )

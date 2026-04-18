@@ -6,7 +6,7 @@ FROM --platform=linux/amd64 hashicorp/vault:1.13.3
 
 USER root
 
-RUN apk add --no-cache bash curl
+RUN apk add --no-cache bash curl coreutils
 
 RUN mkdir -p /vault/data /vault/config && chmod 755 /vault/data
 

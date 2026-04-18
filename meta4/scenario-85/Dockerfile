@@ -6,7 +6,7 @@ FROM --platform=linux/amd64 hashicorp/vault:1.13.3
 
 USER root
 
-RUN apk add --no-cache bash procps curl
+RUN apk add --no-cache bash procps curl coreutils
 
 COPY verify.sh /opt/verify.sh
 RUN chmod +x /opt/verify.sh
