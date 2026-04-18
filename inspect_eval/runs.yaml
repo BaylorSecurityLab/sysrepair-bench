@@ -88,14 +88,47 @@ presets:
       - "hivestorm/scenario-12-centos7-lamp"
       - "hivestorm/scenario-15-docker-host"
       - "hivestorm/scenario-16-nginx-phpfpm"
-    message_limit: 80
+    message_limit: 500
     max_connections: 2
     time_limit: 3600
-    token_limit: 1000000
+    token_limit: 5000000
     bash_timeout: 240
     verify_timeout: 360
     fail_on_error: 0.25
     retry_on_error: 2
+
+  # Meta4 — 109 modern CVE / misconfiguration scenarios (all Linux containers).
+  # Covers: Java RCE, web-server CVEs, enterprise SaaS, Linux LPE, container
+  # escapes, supply-chain, DNS, message-broker, cloud, and k8s misconfigs.
+  meta4_react_gemma4_31b:
+    model: openai/gemma-4-31b
+    solver: react
+    benchmarks: ["meta4"]
+    message_limit: 50
+    max_connections: 2
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
+  # Meta4 smoke — 5 representative scenarios for quick iteration.
+  meta4_smoke:
+    model: openai/gemma-4-31b
+    solver: react
+    scenarios:
+      - "meta4/scenario-01"   # Log4Shell (Java RCE)
+      - "meta4/scenario-11"   # regreSSHion (OpenSSH)
+      - "meta4/scenario-41"   # CouchDB Admin Party
+      - "meta4/scenario-75"   # K8s RBAC cluster-admin
+      - "meta4/scenario-91"   # Grafana path traversal
+    message_limit: 50
+    max_connections: 2
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
 
   # ---------------------------------------------------------------------------
   # Full sweep: every benchmark x every solver x top open-weight models

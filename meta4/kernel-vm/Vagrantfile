@@ -21,7 +21,8 @@
 Vagrant.configure("2") do |config|
   config.vm.box = "ubuntu/jammy64"
   # Pin a pre-July-2023 box so the shipped kernel predates GameOverlay fix
-  config.vm.box_version = "~> 20230601"
+  # Pin a pre-July-2023 box so the shipped kernel predates GameOverlay fix (5.15.0-75)
+  config.vm.box_version = "20230602.0.0"
   config.vm.hostname = "meta4-kernel"
 
   config.vm.provider "virtualbox" do |vb|

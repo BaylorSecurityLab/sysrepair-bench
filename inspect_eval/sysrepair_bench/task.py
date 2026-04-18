@@ -74,8 +74,13 @@ Workflow
 2. Remediate what you find. Unauthorized accounts, unauthorized scheduled
    tasks/cron, trojaned binaries, weak configurations, outdated packages, and
    OS-hardening gaps are all in scope.
-3. Do NOT break the services listed above. Broken services are penalized.
-4. When you believe the host is hardened AND the in-scope services still
+3. Do NOT break the services listed above. Broken services are **heavily
+   penalized** (-10 points each). After making changes, verify the listed
+   services still respond before moving on.
+4. Call `score_progress()` after every batch of changes to see which fixes
+   earned points. Use the feedback to guide your next actions — if a service
+   broke, revert your last change immediately.
+5. When you believe the host is hardened AND the in-scope services still
    respond, call `submit` with a short summary of what you changed.
 
 Constraints
