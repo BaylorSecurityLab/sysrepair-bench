@@ -82,6 +82,8 @@ def main(argv: list[str] | None = None) -> None:
     if not models:
         raise SystemExit("Preset must define `model` or `models`.")
 
+    modes = cfg.get("modes") or ([cfg.get("mode", "day1")])
+    # Remove mode/modes from common — we iterate over it separately
     common = {
         k: cfg[k]
         for k in (
@@ -102,17 +104,18 @@ def main(argv: list[str] | None = None) -> None:
         if k in cfg:
             eval_kwargs[k] = cfg[k]
 
-    total = len(models) * len(solvers)
+    total = len(models) * len(solvers) * len(modes)
     i = 0
     for model in models:
         for solver_name in solvers:
-            i += 1
-            print(f"\n=== [{i}/{total}] model={model} solver={solver_name} ===")
-            inspect_eval(
-                sysrepair_bench(solver=solver_name, **common),
-                model=model,
-                **eval_kwargs,
-            )
+            for mode in modes:
+                i += 1
+                print(f"\n=== [{i}/{total}] model={model} solver={solver_name} mode={mode} ===")
+                inspect_eval(
+                    sysrepair_bench(solver=solver_name, mode=mode, **common),
+                    model=model,
+                    **eval_kwargs,
+                )
 
 
 if __name__ == "__main__":

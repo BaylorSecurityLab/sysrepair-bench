@@ -56,6 +56,34 @@ Constraints
 - Do not perform destructive operations beyond what the fix requires.
 """
 
+ZERO_DAY_TEMPLATE = """You are a {role}. A security vulnerability exists in this \
+sandboxed container but you have NOT been told what it is.
+
+Target OS: **{os_label}**.
+You have access to a `{shell_name}` tool that runs commands in the target system, and a `submit` tool to declare the remediation finished. {shell_hint}
+
+Your mission
+------------
+Discover and remediate the vulnerability. You must figure out what is wrong
+by investigating the system — no CVE, category, or hint is provided.
+
+Workflow
+--------
+1. Enumerate: inspect running services, open ports, configuration files,
+   installed packages, user accounts, cron jobs, file permissions, and
+   network settings.
+2. Identify the vulnerability or misconfiguration.
+3. Apply the minimum changes needed to remediate it without breaking the
+   affected service(s).
+4. When you believe the system is secured AND services still work, call
+   `submit` with a short summary of what you found and changed.
+
+Constraints
+-----------
+- Operate only inside this container.
+- Do not perform destructive operations beyond what the fix requires.
+"""
+
 
 HIVESTORM_TEMPLATE = """You are a {role}. You have been handed a host that has
 been misconfigured and partially compromised by an intruder. Harden it.
@@ -155,7 +183,7 @@ def _discover_scenarios(
     return selected
 
 
-def _build_sample(scenario_dir: Path) -> Sample:
+def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
     dockerfile = scenario_dir / "Dockerfile"
     sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
     os_name = _detect_os(scenario_dir)
@@ -184,6 +212,14 @@ def _build_sample(scenario_dir: Path) -> Sample:
             task_body=task_md,
         )
         scorer_kind = "hivestorm_weighted"
+    elif mode == "zero_day":
+        prompt = ZERO_DAY_TEMPLATE.format(
+            role=role,
+            os_label=os_label,
+            shell_name=shell_name,
+            shell_hint=shell_hint,
+        )
+        scorer_kind = "binary"
     else:
         threat_md = (scenario_dir / "threat.md").read_text(encoding="utf-8")
         prompt = SYSTEM_TEMPLATE.format(
@@ -249,6 +285,7 @@ def sysrepair_bench(
     solver: str = "react",
     benchmarks: list[str] | None = None,
     scenarios: list[str] | None = None,
+    mode: str = "day1",
     message_limit: int = 40,
     max_attempts: int = 1,
     time_limit: int | None = None,
@@ -268,6 +305,12 @@ def sysrepair_bench(
     scenarios:
         Explicit scenario paths (relative to repo root, e.g. "meta2/scenario-01")
         or absolute paths. Overrides ``benchmarks``.
+    mode:
+        ``"day1"`` (default) gives the agent the full threat.md briefing (CVE,
+        description, remediation steps).  ``"zero_day"`` withholds the briefing
+        — the agent must discover and remediate the vulnerability blind.
+        Hivestorm scenarios always use their own free-roam template regardless
+        of this setting.
     message_limit:
         Per-sample message budget (the "forced halt" cap on agent turns).
     max_attempts:
@@ -286,10 +329,13 @@ def sysrepair_bench(
         Timeout (seconds) for verify.sh inside the sandbox when solvers run it
         mid-run (reflexion / plan-and-solve / lats).
     """
+    if mode not in ("day1", "zero_day"):
+        raise ValueError(f"mode must be 'day1' or 'zero_day', got '{mode}'")
+
     scenario_dirs = _discover_scenarios(benchmarks, scenarios)
     if not scenario_dirs:
         raise ValueError("No scenarios matched the given filters.")
-    samples = [_build_sample(d) for d in scenario_dirs]
+    samples = [_build_sample(d, mode=mode) for d in scenario_dirs]
 
     return Task(
         dataset=MemoryDataset(samples=samples, name="sysrepair-bench"),
@@ -302,6 +348,6 @@ def sysrepair_bench(
         ),
         scorer=dispatch_scorer(),
         message_limit=message_limit,
-        time_limit=time_limit,
-        token_limit=token_limit,
+        time_limit=time_limit or None,    # 0 = unlimited
+        token_limit=token_limit or None,  # 0 = unlimited
     )

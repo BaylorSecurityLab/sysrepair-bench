@@ -56,17 +56,38 @@ presets:
     solver: plan_and_solve
     benchmarks: ["meta2"]
 
-  # Gemma 4 31B via vLLM — all Linux benchmarks (ccdc + meta2 + meta3/ubuntu + vulnhub).
-  # 139 scenarios total. Tools: shell + text_editor + think.
-  # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
-  react_gemma4_31b:
+  # ── Day-1 mode: agent receives full threat.md briefing (CVE + remediation) ──
+  # Tests execution capability: can the agent apply a known fix correctly?
+  # 255 scenarios × 5 solvers = 1,275 runs.
+  all_solvers_gemma4_31b_day1:
     model: openai/gemma-4-31b
-    solver: react
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub"]
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    mode: day1
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
     message_limit: 50
     max_connections: 2
-    time_limit: 2400
-    token_limit: 800000
+    time_limit: 2400          # 40 min — agent knows what to fix
+    token_limit: 800000       # ~800k tokens suffices with briefing
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
+  # ── Zero-day mode: no briefing — agent must discover + remediate blind ──
+  # Tests discovery + execution: enumerate → identify → remediate.
+  # Following CVE-Bench / ZeroDayBench convention: same parameters as day-1
+  # except token_limit and time_limit are uncapped so the accuracy gap purely
+  # measures information disclosure, not resource starvation.
+  # 255 scenarios × 5 solvers = 1,275 runs.
+  all_solvers_gemma4_31b_zero_day:
+    model: openai/gemma-4-31b
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    mode: zero_day
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    message_limit: 100        # matches ZeroDayBench (100 turns)
+    max_connections: 2
+    time_limit: 0             # unlimited — avoid confounding the ablation
+    token_limit: 0            # unlimited — avoid confounding the ablation
     bash_timeout: 240
     verify_timeout: 360
     fail_on_error: 0.25
@@ -97,32 +118,16 @@ presets:
     fail_on_error: 0.25
     retry_on_error: 2
 
-  # Meta4 — 109 modern CVE / misconfiguration scenarios (all Linux containers).
-  # Covers: Java RCE, web-server CVEs, enterprise SaaS, Linux LPE, container
-  # escapes, supply-chain, DNS, message-broker, cloud, and k8s misconfigs.
-  meta4_react_gemma4_31b:
-    model: openai/gemma-4-31b
-    solver: react
-    benchmarks: ["meta4"]
-    message_limit: 50
-    max_connections: 2
-    time_limit: 2400
-    token_limit: 800000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
   # Meta4 smoke — 5 representative scenarios for quick iteration.
   meta4_smoke:
     model: openai/gemma-4-31b
     solver: react
     scenarios:
-      - "meta4/scenario-01"   # Log4Shell (Java RCE)
-      - "meta4/scenario-11"   # regreSSHion (OpenSSH)
-      - "meta4/scenario-41"   # CouchDB Admin Party
-      - "meta4/scenario-75"   # K8s RBAC cluster-admin
-      - "meta4/scenario-91"   # Grafana path traversal
+      - "meta4/scenario-01" # Log4Shell (Java RCE)
+      - "meta4/scenario-11" # regreSSHion (OpenSSH)
+      - "meta4/scenario-41" # CouchDB Admin Party
+      - "meta4/scenario-75" # K8s RBAC cluster-admin
+      - "meta4/scenario-91" # Grafana path traversal
     message_limit: 50
     max_connections: 2
     time_limit: 2400
