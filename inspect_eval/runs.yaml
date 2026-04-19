@@ -165,3 +165,43 @@ presets:
     verify_timeout: 360
     fail_on_error: 0.25 # allow a few flaky samples before aborting
     retry_on_error: 2
+
+  # ── MiniMax M2.7 via Token Plan (Max-Highspeed: 15k req / 5hr) ──────────
+  # Set in .env:
+  #   OPENAI_BASE_URL=https://api.minimax.chat/v1
+  #   OPENAI_API_KEY=<your-minimax-key>
+  minimax_smoke:
+    model: openai/MiniMax-M2.7-highspeed
+    solver: react
+    scenarios: ["meta2/scenario-01"]
+    message_limit: 20
+    request_limit: 15000      # Max-Highspeed tier: 15k requests per 5hr
+    request_window: 18000     # 5 hours in seconds
+
+  minimax_day1:
+    model: openai/MiniMax-M2.7-highspeed
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    mode: day1
+    benchmarks: ["meta2"]
+    message_limit: 50
+    max_connections: 2
+    request_limit: 15000
+    request_window: 18000
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
+
+  # Use this preset when you have an unlimited / pay-per-token key:
+  minimax_unlimited:
+    model: openai/MiniMax-M2.7
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    mode: day1
+    benchmarks: ["meta2"]
+    message_limit: 50
+    max_connections: 4
+    request_limit: 0          # 0 = no rate limiting
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360

@@ -14,6 +14,7 @@ from inspect_ai.util._sandbox.compose import (
     ComposeService,
 )
 
+from .rate_limiter import init_rate_limiter
 from .scorer import dispatch_scorer
 from .solvers import get_solver
 
@@ -292,6 +293,8 @@ def sysrepair_bench(
     token_limit: int | None = None,
     bash_timeout: int = 180,
     verify_timeout: int = 300,
+    request_limit: int = 0,
+    request_window: int = 18_000,
 ) -> Task:
     """SysRepair-Bench task.
 
@@ -328,9 +331,17 @@ def sysrepair_bench(
     verify_timeout:
         Timeout (seconds) for verify.sh inside the sandbox when solvers run it
         mid-run (reflexion / plan-and-solve / lats).
+    request_limit:
+        Max API requests per sliding window.  0 = unlimited (no rate limiting).
+        Set to match your provider plan (e.g. 15000 for MiniMax Max tier).
+    request_window:
+        Sliding window size in seconds.  Default 18000 (5 hours) to match
+        MiniMax Token Plan windows.
     """
     if mode not in ("day1", "zero_day"):
         raise ValueError(f"mode must be 'day1' or 'zero_day', got '{mode}'")
+
+    init_rate_limiter(request_limit=request_limit, window_seconds=request_window)
 
     scenario_dirs = _discover_scenarios(benchmarks, scenarios)
     if not scenario_dirs:

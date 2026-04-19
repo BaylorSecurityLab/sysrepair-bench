@@ -95,6 +95,8 @@ def main(argv: list[str] | None = None) -> None:
             "token_limit",
             "bash_timeout",
             "verify_timeout",
+            "request_limit",
+            "request_window",
         )
         if k in cfg
     }
