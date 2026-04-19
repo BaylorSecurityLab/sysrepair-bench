@@ -25,6 +25,14 @@ from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.tool import ToolDef, bash, text_editor, think, tool
 from inspect_ai.util import sandbox, store
 
+from .rate_limiter import get_rate_limiter
+
+
+async def _rate_limited_generate(generate: Generate, state: TaskState) -> TaskState:
+    """Call generate() after acquiring a rate-limiter slot."""
+    await get_rate_limiter().acquire()
+    return await generate(state)
+
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -300,6 +308,13 @@ def _react_solver(
             if state.metadata.get("scorer") == "hivestorm_weighted":
                 scenario_path = state.metadata.get("scenario_path", "")
                 tools = tools + [_score_progress_tool(scenario_path, verify_timeout)]
+
+            rl = get_rate_limiter()
+
+            async def throttled_generate(state: TaskState, **kwargs) -> TaskState:
+                await rl.acquire()
+                return await generate(state, **kwargs)
+
             inner = as_solver(react(
                 tools=tools,
                 attempts=max_attempts,
@@ -309,7 +324,7 @@ def _react_solver(
                     "still works, call submit() with a short summary."
                 ),
             ))
-            return await inner(state, generate)
+            return await inner(state, throttled_generate)
         return solve
 
     return _wrapped()
@@ -325,7 +340,7 @@ def basic_solver(message_limit: int = 40, bash_timeout: int = 180) -> Solver:
         _prime_os(state)
         state.tools = _tools(bash_timeout)
         for _ in range(message_limit):
-            state = await generate(state)
+            state = await _rate_limited_generate(generate, state)
             last = state.messages[-1] if state.messages else None
             if isinstance(last, ChatMessageAssistant) and not last.tool_calls:
                 # Treat assistant text without tool calls as completion.
@@ -390,6 +405,7 @@ def reflexion_solver(
                 "Identify (a) the root cause, (b) the wrong assumption, "
                 "(c) a corrected strategy. Be concrete and short."
             )
+            await get_rate_limiter().acquire()
             ref = await model.generate(
                 input=[
                     ChatMessageSystem(content="You are a strict technical auditor."),
@@ -427,6 +443,7 @@ def plan_and_solve_solver(
             '{"steps": [{"id": 1, "description": "...", "command": "single bash cmd"}, ...]}\n'
             f"Maximum {max_plan_steps} steps, in dependency order."
         )
+        await get_rate_limiter().acquire()
         plan_resp = await model.generate(
             input=[
                 ChatMessageSystem(content=state.input_text),
@@ -478,6 +495,7 @@ def plan_and_solve_solver(
                     f"stderr: {result.stderr[:300]}\n"
                     f"Provide ONE corrected {shell_word} command, no markdown, no explanation."
                 )
+                await get_rate_limiter().acquire()
                 fix_resp = await model.generate(
                     input=[
                         ChatMessageSystem(content=state.input_text),
@@ -580,6 +598,7 @@ def lats_solver(
                 f'Return JSON: {{"commands": ["cmd1", ...]}} with {num_expansions} '
                 f"distinct candidate {shell_word} commands that each make different progress."
             )
+            await get_rate_limiter().acquire()
             resp = await model.generate(
                 input=[
                     ChatMessageSystem(content=state.input_text),
@@ -630,6 +649,7 @@ def lats_solver(
                 "score=1 means significant progress; fatal=true if container is broken."
             )
             try:
+                await get_rate_limiter().acquire()
                 resp = await model.generate(
                     input=[
                         ChatMessageSystem(content=state.input_text),
