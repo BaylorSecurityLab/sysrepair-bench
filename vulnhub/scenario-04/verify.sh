@@ -22,6 +22,21 @@ fi
 
 echo "PASS [PoC]: Manager app has IP restriction."
 
+# Behavioral test: attempt login with default weak credentials — must NOT succeed
+TOMCAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u admin:admin "http://localhost:8080/manager/html" 2>/dev/null)
+if [ "$TOMCAT_CODE" = "200" ]; then
+    echo "FAIL [PoC]: Login with admin:admin returned 200 — weak creds still work."
+    exit 1
+fi
+echo "PASS [PoC]: admin:admin login rejected (HTTP $TOMCAT_CODE)."
+
+TOMCAT_CODE2=$(curl -s -o /dev/null -w "%{http_code}" -u tomcat:tomcat "http://localhost:8080/manager/html" 2>/dev/null)
+if [ "$TOMCAT_CODE2" = "200" ]; then
+    echo "FAIL [PoC]: Login with tomcat:tomcat returned 200 — weak creds still work."
+    exit 1
+fi
+echo "PASS [PoC]: tomcat:tomcat login rejected (HTTP $TOMCAT_CODE2)."
+
 if pgrep -f 'catalina\|tomcat' > /dev/null 2>&1; then
     echo "PASS [Regression]: Tomcat is running."
 else

@@ -17,6 +17,19 @@ else
     echo "PASS [PoC]: local-infile is disabled"
 fi
 
+# --- PoC Behavioral Test: Verify local_infile is OFF at runtime ---
+if pgrep -x mysqld > /dev/null 2>&1; then
+    RUNTIME_LOCAL_INFILE=$(mysql -u root -e "SHOW VARIABLES LIKE 'local_infile';" 2>/dev/null | grep -i 'local_infile' | awk '{print $2}')
+    if [[ "$RUNTIME_LOCAL_INFILE" =~ ^(OFF|off|0)$ ]]; then
+        echo "PASS [PoC]: local_infile is OFF at runtime"
+    elif [ -n "$RUNTIME_LOCAL_INFILE" ]; then
+        echo "FAIL [PoC]: local_infile is '$RUNTIME_LOCAL_INFILE' at runtime (should be OFF)"
+        PASS=false
+    else
+        echo "INFO [PoC]: Could not query runtime local_infile (MySQL may require auth)"
+    fi
+fi
+
 # --- Regression Test: MySQL should be running and accessible ---
 if pgrep -x mysqld > /dev/null 2>&1; then
     echo "PASS [Regression]: mysqld process is running"

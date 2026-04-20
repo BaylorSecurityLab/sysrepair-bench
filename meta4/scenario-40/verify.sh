@@ -22,6 +22,20 @@ fi
 
 echo "PASS [PoC]: zlib compression is disabled — compression amplification risk mitigated."
 
+# PoC (behavioral): verify runtime compressor settings via serverStatus
+for i in 1 2 3 4 5; do
+    COMPRESSOR_INFO=$(mongosh --quiet --eval "db.serverStatus().network" 2>/dev/null || true)
+    if [ -n "$COMPRESSOR_INFO" ]; then
+        if echo "$COMPRESSOR_INFO" | grep -qi 'zlib'; then
+            echo "FAIL [PoC]: Running MongoDB reports zlib in network compressors." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Running MongoDB does not report zlib compression."
+        break
+    fi
+    sleep 2
+done
+
 ###############################################################################
 # Regression: MongoDB must still respond to a ping
 ###############################################################################

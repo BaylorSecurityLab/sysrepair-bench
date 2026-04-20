@@ -14,7 +14,13 @@ else
     echo "PASS [PoC]: allow-transfer is restricted"
 fi
 
-# Try actual zone transfer if BIND is running
+# --- PoC Behavioral Test: Zone transfer MUST be denied (mandatory) ---
+# Ensure BIND is running for this test
+if ! pgrep -x named > /dev/null 2>&1; then
+    named -u bind 2>/dev/null
+    sleep 1
+fi
+
 if pgrep -x named > /dev/null 2>&1; then
     AXFR_RESULT=$(dig @127.0.0.1 example.com AXFR +short 2>/dev/null)
     if [ -n "$AXFR_RESULT" ] && ! echo "$AXFR_RESULT" | grep -qi "Transfer failed\|refused"; then
@@ -23,6 +29,9 @@ if pgrep -x named > /dev/null 2>&1; then
     else
         echo "PASS [PoC]: Zone transfer is denied"
     fi
+else
+    echo "FAIL [PoC]: BIND is not running — cannot verify zone transfer is denied"
+    PASS=false
 fi
 
 # --- Regression Test: BIND should resolve DNS queries ---

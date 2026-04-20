@@ -22,6 +22,18 @@ else
         SAFE=1
     fi
 fi
+# Behavioral test: attempt unshare -U as unprivileged user
+if [ "$SAFE" = "0" ]; then
+    if command -v unshare >/dev/null 2>&1; then
+        if su -s /bin/sh -c "unshare -U echo exploitable" nobody 2>/dev/null | grep -q "exploitable"; then
+            echo "FAIL [PoC]: unprivileged user namespaces still work — nf_tables exploit surface open." >&2
+            exit 1
+        else
+            echo "PASS [PoC]: unprivileged unshare -U blocked (behavioral test)."
+            SAFE=1
+        fi
+    fi
+fi
 [ "$SAFE" = "1" ] || { echo "FAIL [PoC]: kernel $KV vulnerable and no userns restriction." >&2; exit 1; }
 
 nft list tables >/dev/null 2>&1 && { echo "PASS [Regression]: nft functional."; exit 0; }

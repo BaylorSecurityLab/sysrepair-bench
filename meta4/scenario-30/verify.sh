@@ -20,6 +20,24 @@ if [ "${#SK}" -lt 16 ]; then
 fi
 echo "PASS [PoC]: SECRET_KEY is non-default and >= 16 chars."
 
+# PoC (behavioral): attempt SQL injection on the /users/v1/login endpoint
+# When VULNERABLE=1, the app allows SQLi; with VULNERABLE=0, it should reject.
+for i in $(seq 1 10); do
+    if curl -sf -o /dev/null -m 2 "$BASE/"; then
+        SQLI_RESP=$(curl -s -m 5 -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin'\'' OR 1=1--","password":"x"}' \
+            "$BASE/users/v1/login" 2>/dev/null || true)
+        if echo "$SQLI_RESP" | grep -q 'token'; then
+            echo "FAIL [PoC]: SQL injection on /users/v1/login succeeded — VULNERABLE mode still active." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: SQL injection on /users/v1/login rejected."
+        break
+    fi
+    sleep 1
+done
+
 # Regression
 for i in $(seq 1 20); do
     curl -sf -o /dev/null -m 2 "$BASE/" && { echo "PASS [Regression]: VAmPI reachable on 5000."; exit 0; }

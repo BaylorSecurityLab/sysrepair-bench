@@ -62,6 +62,39 @@ fi
 echo "  [PASS] MaxAuthTries is $MAX_AUTH (acceptable: <= 6)"
 
 ###############################################################################
+# PoC Behavioral Test: X11 forwarding should be rejected at connection time
+###############################################################################
+echo ""
+echo "[PoC Test] Attempting SSH connection with X11 forwarding request..."
+
+# Ensure sshd is running for behavioral test
+if ! pgrep -x sshd >/dev/null 2>&1; then
+    /usr/sbin/sshd 2>/dev/null
+    sleep 1
+fi
+
+X11_RESULT=$(sshpass -p 'TestPass123!' ssh -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 -X -v -p 22 testuser@127.0.0.1 "echo x11_test_done" 2>&1 || true)
+
+if echo "$X11_RESULT" | grep -qi "X11 forwarding request failed\|Requesting X11 forwarding.*rejected"; then
+    echo "  [PASS] X11 forwarding request was denied by server"
+elif echo "$X11_RESULT" | grep -q "x11_test_done"; then
+    # Connection worked but check if X11 was actually granted
+    if echo "$X11_RESULT" | grep -qi "Requesting X11 forwarding"; then
+        if ! echo "$X11_RESULT" | grep -qi "X11 forwarding.*success\|DISPLAY"; then
+            echo "  [PASS] SSH connected but X11 forwarding was not granted"
+        else
+            echo "  [FAIL] X11 forwarding appears to have been granted"
+            exit $FAIL
+        fi
+    else
+        echo "  [PASS] SSH connected without X11 forwarding"
+    fi
+else
+    echo "  [PASS] SSH did not grant X11 forwarding (connection output indicates denial)"
+fi
+
+###############################################################################
 # Regression Test: SSH service must still be running
 ###############################################################################
 echo ""

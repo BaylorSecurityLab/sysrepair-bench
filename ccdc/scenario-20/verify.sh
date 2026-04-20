@@ -31,6 +31,23 @@ if [ -f "$WP_CONFIG" ]; then
     fi
 fi
 
+# --- PoC Behavioral Test: Theme/plugin editor endpoint should not be accessible ---
+# Start Apache if not running
+if ! pgrep -x apache2 > /dev/null 2>&1; then
+    apachectl start 2>/dev/null
+    sleep 1
+fi
+
+if command -v curl > /dev/null 2>&1; then
+    EDITOR_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 http://localhost/wp-admin/theme-editor.php 2>/dev/null || true)
+    if [[ "$EDITOR_CODE" == "200" ]]; then
+        echo "FAIL [PoC]: wp-admin/theme-editor.php returns HTTP 200 (editor may be accessible)"
+        PASS=false
+    else
+        echo "PASS [PoC]: wp-admin/theme-editor.php returns HTTP $EDITOR_CODE (not directly accessible)"
+    fi
+fi
+
 # --- Regression Test: Apache should be serving the WordPress site ---
 if ! pgrep -x apache2 > /dev/null 2>&1; then
     apachectl start 2>/dev/null

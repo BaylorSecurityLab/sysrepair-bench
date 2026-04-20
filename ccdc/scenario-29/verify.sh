@@ -39,6 +39,34 @@ if command -v ufw > /dev/null 2>&1; then
     fi
 fi
 
+# --- PoC Behavioral Test: Check iptables for SSH allow rule (non-ufw path) ---
+if ! command -v ufw > /dev/null 2>&1 || ! ufw status 2>/dev/null | grep -qi "active"; then
+    # ufw not active — check iptables directly
+    if command -v iptables > /dev/null 2>&1; then
+        SSH_IPTABLES=$(iptables -L INPUT -n 2>/dev/null | grep -E 'dpt:22|dport 22' || true)
+        if [ -n "$SSH_IPTABLES" ]; then
+            echo "PASS [PoC]: iptables has SSH (port 22) rule in INPUT chain"
+        else
+            echo "INFO [PoC]: No explicit SSH rule in iptables INPUT chain (may use different port or ACCEPT policy)"
+        fi
+
+        # Check default INPUT policy
+        INPUT_POLICY=$(iptables -L INPUT -n 2>/dev/null | head -1 | awk '{print $4}' | tr -d ')')
+        if [[ "$INPUT_POLICY" == "DROP" ]] || [[ "$INPUT_POLICY" == "REJECT" ]]; then
+            echo "PASS [PoC]: iptables INPUT default policy is $INPUT_POLICY"
+        elif [ -n "$INPUT_POLICY" ]; then
+            # Check if there are DROP/REJECT rules at the end (effective deny)
+            DROP_RULES=$(iptables -L INPUT -n 2>/dev/null | grep -cE 'DROP|REJECT' || true)
+            if [ "$DROP_RULES" -gt 0 ]; then
+                echo "PASS [PoC]: iptables has DROP/REJECT rules in INPUT chain"
+            else
+                echo "FAIL [PoC]: iptables INPUT policy is $INPUT_POLICY with no DROP/REJECT rules"
+                PASS=false
+            fi
+        fi
+    fi
+fi
+
 # --- Regression Test: SSH and web server should be accessible ---
 if pgrep -x sshd > /dev/null 2>&1 || pgrep -x nginx > /dev/null 2>&1; then
     echo "PASS [Regression]: Services are running"

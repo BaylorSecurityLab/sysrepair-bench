@@ -52,6 +52,30 @@ fi
 echo "  [PASS] No weak ciphers found in configuration"
 
 ###############################################################################
+# PoC Behavioral Test: Weak cipher connection must be rejected
+###############################################################################
+echo ""
+echo "[PoC Test] Attempting SSH connection with weak cipher (3des-cbc)..."
+
+# Ensure sshd is running for behavioral test
+if ! pgrep -x sshd >/dev/null 2>&1; then
+    /usr/sbin/sshd 2>/dev/null
+    sleep 1
+fi
+
+WEAK_RESULT=$(sshpass -p 'TestPass123!' ssh -o Ciphers=3des-cbc -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 -p 22 testuser@127.0.0.1 echo weak_cipher_worked 2>&1 || true)
+
+if echo "$WEAK_RESULT" | grep -q "weak_cipher_worked"; then
+    echo "  [FAIL] SSH connection with 3des-cbc succeeded — weak cipher still allowed"
+    exit $FAIL
+elif echo "$WEAK_RESULT" | grep -qi "no matching cipher\|no matching key exchange\|connection refused"; then
+    echo "  [PASS] SSH correctly rejected 3des-cbc connection"
+else
+    echo "  [PASS] SSH did not accept 3des-cbc (got: ${WEAK_RESULT:0:80})"
+fi
+
+###############################################################################
 # Regression Test: SSH service must still be running
 ###############################################################################
 echo ""

@@ -35,6 +35,28 @@ else
     echo "PASS [PoC]: MySQL bind-address is set to $BIND_ADDR."
 fi
 
+# Behavioral test: verify MySQL bind address at runtime
+RUNTIME_BIND=$(mysql -u root -e "SHOW VARIABLES LIKE 'bind_address';" 2>/dev/null | grep bind_address | awk '{print $2}')
+if [ -n "$RUNTIME_BIND" ]; then
+    if [ "$RUNTIME_BIND" = "0.0.0.0" ] || [ "$RUNTIME_BIND" = "*" ]; then
+        echo "FAIL [PoC]: MySQL runtime bind_address is '$RUNTIME_BIND' (listening on all interfaces)."
+        exit 1
+    else
+        echo "PASS [PoC]: MySQL runtime bind_address is '$RUNTIME_BIND' (behavioral check)."
+    fi
+else
+    # Could not query runtime variable (root password set, which is expected after fix)
+    # Fall back to checking listening socket via netstat/ss
+    if netstat -tlnp 2>/dev/null | grep ':3306' | grep -q '0.0.0.0:3306'; then
+        echo "FAIL [PoC]: MySQL is listening on 0.0.0.0:3306 (all interfaces, runtime check)."
+        exit 1
+    elif netstat -tlnp 2>/dev/null | grep -q ':3306'; then
+        echo "PASS [PoC]: MySQL is not listening on all interfaces (runtime socket check)."
+    else
+        echo "INFO [PoC]: Could not verify bind address at runtime."
+    fi
+fi
+
 ###############################################################################
 # Regression Check: Ensure MySQL is running and functional
 ###############################################################################

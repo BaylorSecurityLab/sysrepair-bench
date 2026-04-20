@@ -25,6 +25,38 @@ if grep -q '"Anonymous"\|'\''Anonymous'\''' "$SERVER_SCRIPT" 2>/dev/null; then
 fi
 echo "PASS [PoC]: Anonymous authentication is disabled."
 
+# PoC (behavioral): attempt unauthenticated OPC-UA connection
+# If available, use Python opcua client to verify anonymous access is denied
+if /opt/venv/bin/python3 -c "
+from opcua import Client
+import sys
+try:
+    c = Client('opc.tcp://127.0.0.1:4840')
+    c.set_security_string('')
+    c.connect()
+    c.disconnect()
+    sys.exit(1)  # Should not succeed
+except Exception:
+    sys.exit(0)  # Connection rejected — good
+" 2>/dev/null; then
+    echo "PASS [PoC]: Unauthenticated OPC-UA connection rejected."
+elif python3 -c "
+from opcua import Client
+import sys
+try:
+    c = Client('opc.tcp://127.0.0.1:4840')
+    c.connect()
+    c.disconnect()
+    sys.exit(1)
+except Exception:
+    sys.exit(0)
+" 2>/dev/null; then
+    echo "PASS [PoC]: Unauthenticated OPC-UA connection rejected."
+else
+    echo "FAIL [PoC]: Unauthenticated OPC-UA connection succeeded — anonymous auth may still be enabled." >&2
+    exit 1
+fi
+
 ###############################################################################
 # Regression: OPC-UA server must be listening on port 4840
 ###############################################################################

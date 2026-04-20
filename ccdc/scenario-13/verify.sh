@@ -30,6 +30,24 @@ else
     fi
 fi
 
+# --- PoC Behavioral Test: Verify trust auth is gone by attempting connection with wrong password ---
+# Ensure PostgreSQL is running for this test
+if ! pgrep -x postgres > /dev/null 2>&1; then
+    su -c "pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') start" postgres 2>/dev/null
+    sleep 2
+fi
+
+if pgrep -x postgres > /dev/null 2>&1; then
+    # If trust is removed, a wrong password should be rejected
+    TRUST_TEST=$(PGPASSWORD=wrong_password_verify psql -h 127.0.0.1 -U postgres -c "SELECT 1" 2>/dev/null && echo "ok" || echo "denied")
+    if [[ "$TRUST_TEST" == "ok" ]]; then
+        echo "FAIL [PoC]: PostgreSQL accepted connection with wrong password (trust auth likely still active)"
+        PASS=false
+    else
+        echo "PASS [PoC]: PostgreSQL rejected connection with wrong password (trust auth removed)"
+    fi
+fi
+
 # --- Regression Test: PostgreSQL should be running ---
 if pgrep -x postgres > /dev/null 2>&1; then
     echo "PASS [Regression]: PostgreSQL is running"

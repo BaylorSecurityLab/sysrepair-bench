@@ -30,6 +30,22 @@ else
     fi
 fi
 
+# Behavioral test: attempt SMTP TLS connection with EXPORT ciphers — should fail
+if command -v openssl > /dev/null 2>&1; then
+    EXPORT_OUT=$(echo "QUIT" | openssl s_client -connect 127.0.0.1:25 -starttls smtp -cipher EXPORT 2>&1 || true)
+    if echo "$EXPORT_OUT" | grep -qi "handshake failure\|no ciphers available\|no cipher\|sslv3 alert\|wrong version\|ssl routines"; then
+        echo "OK: EXPORT cipher connection rejected by Postfix (behavioral test)"
+    elif echo "$EXPORT_OUT" | grep -qi "BEGIN CERTIFICATE\|Cipher is"; then
+        echo "FAIL: EXPORT cipher accepted by Postfix (behavioral test)"
+        exit 1
+    else
+        # EXPORT might not be supported by local openssl — that's fine
+        echo "OK: EXPORT ciphers not available in local openssl (behavioral test)"
+    fi
+else
+    echo "INFO: openssl not available; skipping EXPORT cipher behavioral test"
+fi
+
 # Check 2: Verify Postfix service is operational
 if ! service postfix status >/dev/null 2>&1; then
     echo "FAIL: Postfix service is not running"

@@ -56,6 +56,22 @@ presets:
     solver: plan_and_solve
     benchmarks: ["meta2"]
 
+  # ── Both modes: day-1 + zero-day in a single run ──
+  # 255 scenarios × 5 solvers × 2 modes = 2,550 runs.
+  all_solvers_gemma4_31b:
+    model: openai/gemma-4-31b
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    modes: ["day1", "zero_day"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    message_limit: 100
+    max_connections: 2
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
   # ── Day-1 mode: agent receives full threat.md briefing (CVE + remediation) ──
   # Tests execution capability: can the agent apply a known fix correctly?
   # 255 scenarios × 5 solvers = 1,275 runs.
@@ -66,8 +82,8 @@ presets:
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
     message_limit: 50
     max_connections: 2
-    time_limit: 2400          # 40 min — agent knows what to fix
-    token_limit: 800000       # ~800k tokens suffices with briefing
+    time_limit: 2400 # 40 min — agent knows what to fix
+    token_limit: 800000 # ~800k tokens suffices with briefing
     bash_timeout: 240
     verify_timeout: 360
     fail_on_error: 0.25
@@ -84,10 +100,10 @@ presets:
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     mode: zero_day
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 100        # matches ZeroDayBench (100 turns)
+    message_limit: 100 # matches ZeroDayBench (100 turns)
     max_connections: 2
-    time_limit: 0             # unlimited — avoid confounding the ablation
-    token_limit: 0            # unlimited — avoid confounding the ablation
+    time_limit: 0 # unlimited — avoid confounding the ablation
+    token_limit: 0 # unlimited — avoid confounding the ablation
     bash_timeout: 240
     verify_timeout: 360
     fail_on_error: 0.25
@@ -166,23 +182,23 @@ presets:
     fail_on_error: 0.25 # allow a few flaky samples before aborting
     retry_on_error: 2
 
-  # ── MiniMax M2.7 via Token Plan (Max-Highspeed: 15k req / 5hr) ──────────
+  # ── MiniMax M2.7 via Token Plan (Max: 15k req / 5hr, ~50 TPS) ────────────
   # Set in .env:
-  #   OPENAI_BASE_URL=https://api.minimax.chat/v1
-  #   OPENAI_API_KEY=<your-minimax-key>
+  #   OPENAI_BASE_URL=https://api.minimax.io/v1
+  #   OPENAI_API_KEY=<your-minimax-token-plan-key>
   minimax_smoke:
-    model: openai/MiniMax-M2.7-highspeed
+    model: openai/MiniMax-M2.7
     solver: react
     scenarios: ["meta2/scenario-01"]
-    message_limit: 20
-    request_limit: 15000      # Max-Highspeed tier: 15k requests per 5hr
+    message_limit: 30
+    request_limit: 15000      # Max tier: 15k requests per 5hr
     request_window: 18000     # 5 hours in seconds
 
   minimax_day1:
-    model: openai/MiniMax-M2.7-highspeed
+    model: openai/MiniMax-M2.7
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     mode: day1
-    benchmarks: ["meta2"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
     message_limit: 50
     max_connections: 2
     request_limit: 15000
@@ -191,17 +207,77 @@ presets:
     token_limit: 800000
     bash_timeout: 240
     verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
+  minimax_zero_day:
+    model: openai/MiniMax-M2.7
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    mode: zero_day
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    message_limit: 100
+    max_connections: 2
+    request_limit: 15000
+    request_window: 18000
+    time_limit: 0             # unlimited
+    token_limit: 0            # unlimited
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
+  minimax_both_modes:
+    model: openai/MiniMax-M2.7
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    modes: ["day1", "zero_day"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    message_limit: 100
+    max_connections: 2
+    request_limit: 15000
+    request_window: 18000
+    time_limit: 2400
+    token_limit: 800000
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
+
+  minimax_hivestorm:
+    model: openai/MiniMax-M2.7
+    solver: react
+    scenarios:
+      - "hivestorm/scenario-01-debian9"
+      - "hivestorm/scenario-02-ubuntu1604"
+      - "hivestorm/scenario-06-debian9-postgres"
+      - "hivestorm/scenario-07-ubuntu1804-samba"
+      - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
+      - "hivestorm/scenario-10-ubuntu-faillock"
+      - "hivestorm/scenario-12-centos7-lamp"
+      - "hivestorm/scenario-15-docker-host"
+      - "hivestorm/scenario-16-nginx-phpfpm"
+    message_limit: 500
+    max_connections: 2
+    request_limit: 15000
+    request_window: 18000
+    time_limit: 3600
+    token_limit: 5000000
+    bash_timeout: 240
+    verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2
 
   # Use this preset when you have an unlimited / pay-per-token key:
   minimax_unlimited:
     model: openai/MiniMax-M2.7
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    mode: day1
-    benchmarks: ["meta2"]
-    message_limit: 50
+    modes: ["day1", "zero_day"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    message_limit: 100
     max_connections: 4
     request_limit: 0          # 0 = no rate limiting
     time_limit: 2400
     token_limit: 800000
     bash_timeout: 240
     verify_timeout: 360
+    fail_on_error: 0.25
+    retry_on_error: 2

@@ -19,6 +19,15 @@ if ! grep -qE "smtpd_forbid_bare_newline\s*=\s*yes" "$MAIN_CF" 2>/dev/null; then
 fi
 echo "PASS [PoC]: smtpd_forbid_bare_newline = yes is set in main.cf."
 
+# PoC (behavioral): verify Postfix runtime config includes smtpd_forbid_bare_newline
+RUNTIME_CFG=$(postconf smtpd_forbid_bare_newline 2>/dev/null || true)
+if echo "$RUNTIME_CFG" | grep -q 'smtpd_forbid_bare_newline = yes'; then
+    echo "PASS [PoC]: Postfix runtime confirms smtpd_forbid_bare_newline = yes."
+elif echo "$RUNTIME_CFG" | grep -q 'smtpd_forbid_bare_newline'; then
+    echo "FAIL [PoC]: Postfix runtime smtpd_forbid_bare_newline is not 'yes': $RUNTIME_CFG" >&2
+    exit 1
+fi
+
 ###############################################################################
 # Regression: Postfix must still accept EHLO on port 25
 ###############################################################################

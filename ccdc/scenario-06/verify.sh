@@ -22,6 +22,21 @@ else
     echo "PASS [PoC]: ServerSignature is Off"
 fi
 
+# --- PoC Behavioral Test: Check HTTP Server header for version disclosure ---
+# Start Apache if not running for the behavioral test
+if ! pgrep -x apache2 > /dev/null 2>&1; then
+    apachectl start 2>/dev/null
+    sleep 1
+fi
+
+SERVER_HDR=$(curl -sI http://localhost/ 2>/dev/null | grep -i '^Server:' || true)
+if echo "$SERVER_HDR" | grep -qE 'Apache/[0-9]'; then
+    echo "FAIL [PoC]: Server header exposes version: $SERVER_HDR"
+    PASS=false
+else
+    echo "PASS [PoC]: Server header does not expose Apache version ($SERVER_HDR)"
+fi
+
 # --- Regression Test: Apache should serve pages ---
 # Start Apache if not running
 if ! pgrep -x apache2 > /dev/null 2>&1; then

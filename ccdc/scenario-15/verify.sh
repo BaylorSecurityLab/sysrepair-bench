@@ -22,6 +22,36 @@ else
     echo "PASS [PoC]: Anonymous access is disabled"
 fi
 
+# --- PoC Behavioral Test: Anonymous FTP login should be denied ---
+# Ensure vsftpd is running for this test
+if ! pgrep -x vsftpd > /dev/null 2>&1; then
+    /usr/sbin/vsftpd /etc/vsftpd.conf &
+    sleep 1
+fi
+
+if pgrep -x vsftpd > /dev/null 2>&1; then
+    if command -v curl > /dev/null 2>&1; then
+        ANON_TEST=$(curl -s --connect-timeout 5 ftp://localhost/ --user anonymous: 2>/dev/null)
+        ANON_EXIT=$?
+        if [ $ANON_EXIT -eq 0 ] && [ -n "$ANON_TEST" ]; then
+            echo "FAIL [PoC]: Anonymous FTP login succeeded"
+            PASS=false
+        else
+            echo "PASS [PoC]: Anonymous FTP login denied"
+        fi
+    elif command -v ftp > /dev/null 2>&1; then
+        ANON_TEST=$(echo -e "user anonymous\npass\nls\nquit" | ftp -n 127.0.0.1 2>&1 || true)
+        if echo "$ANON_TEST" | grep -qi "Login failed\|Not logged in\|530"; then
+            echo "PASS [PoC]: Anonymous FTP login denied"
+        else
+            echo "FAIL [PoC]: Anonymous FTP login may have succeeded"
+            PASS=false
+        fi
+    else
+        echo "INFO [PoC]: Neither curl nor ftp available, skipping anonymous login behavioral test"
+    fi
+fi
+
 # --- Regression Test: vsftpd should be running ---
 if pgrep -x vsftpd > /dev/null 2>&1; then
     echo "PASS [Regression]: vsftpd process is running"

@@ -21,7 +21,46 @@ if echo "$ANON_SETTING" | grep -qi "YES"; then
     exit 1
 fi
 
-echo "PASS [PoC]: anonymous_enable is set to NO."
+echo "PASS [PoC]: anonymous_enable is set to NO (config check)."
+
+# Behavioral test: attempt anonymous FTP login and verify it is rejected
+# Ensure vsftpd is running first
+if ! pgrep -x vsftpd > /dev/null 2>&1; then
+    /etc/init.d/vsftpd start > /dev/null 2>&1
+    sleep 1
+fi
+
+if command -v nc > /dev/null 2>&1; then
+    # Send anonymous login attempt via netcat
+    FTP_OUT=$(printf "USER anonymous\r\nPASS anonymous@\r\nQUIT\r\n" | nc -w 5 127.0.0.1 21 2>/dev/null || true)
+
+    if echo "$FTP_OUT" | grep -q "^230"; then
+        echo "FAIL [PoC]: Anonymous FTP login succeeded (server returned 230)."
+        exit 1
+    elif echo "$FTP_OUT" | grep -q "^530\|^5[0-9][0-9].*[Ll]ogin\|^332"; then
+        echo "PASS [PoC]: Anonymous FTP login rejected by server (behavioral test)."
+    elif echo "$FTP_OUT" | grep -q "^220"; then
+        # Server responded but we did not see a clear accept/reject; check more carefully
+        if echo "$FTP_OUT" | grep -q "^230"; then
+            echo "FAIL [PoC]: Anonymous FTP login succeeded."
+            exit 1
+        else
+            echo "PASS [PoC]: Anonymous FTP login not accepted (behavioral test)."
+        fi
+    else
+        echo "WARN [PoC]: Could not determine FTP anonymous login status via nc. Output: $FTP_OUT"
+    fi
+elif command -v curl > /dev/null 2>&1; then
+    CURL_OUT=$(curl -s --connect-timeout 5 ftp://anonymous:anonymous@127.0.0.1/ 2>&1 || true)
+    if echo "$CURL_OUT" | grep -qi "drwx\|total\|index\|ftp>"; then
+        echo "FAIL [PoC]: Anonymous FTP login succeeded via curl."
+        exit 1
+    else
+        echo "PASS [PoC]: Anonymous FTP login rejected (curl behavioral test)."
+    fi
+else
+    echo "INFO [PoC]: Neither nc nor curl available; skipping FTP behavioral test."
+fi
 
 ###############################################################################
 # Regression Check: Ensure vsftpd is running and functional

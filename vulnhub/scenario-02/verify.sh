@@ -21,6 +21,14 @@ fi
 
 echo "PASS [PoC]: mod_security2 module is loaded."
 
+# Behavioral test: send a SQL injection payload — WAF must block it
+SQLI_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost/search.php?q=1%20OR%201%3D1" 2>/dev/null)
+if [ "$SQLI_CODE" = "200" ]; then
+    echo "FAIL [PoC]: SQLi payload returned 200 — WAF did not block the request."
+    exit 1
+fi
+echo "PASS [PoC]: SQLi payload blocked (HTTP $SQLI_CODE)."
+
 # Check if the PHP script still has raw SQL concatenation
 SEARCH_PHP="/var/www/html/search.php"
 if [ -f "$SEARCH_PHP" ]; then

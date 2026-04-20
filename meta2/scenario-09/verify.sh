@@ -43,6 +43,51 @@ else
     fi
 fi
 
+# Behavioral test: verify VNC is not accessible unencrypted on port 5900
+# If VNC is not running, also verify it is not in any autostart scripts
+if [ -z "$VNC_PID" ]; then
+    # VNC not running — verify it is not configured to autostart unencrypted
+    AUTOSTART_VULNERABLE=0
+
+    # Check common autostart locations
+    for INITSCRIPT in /etc/init.d/x11vnc /etc/rc.local /etc/rc2.d/*vnc* /etc/rc3.d/*vnc*; do
+        if [ -f "$INITSCRIPT" ] && grep -q 'x11vnc' "$INITSCRIPT" 2>/dev/null; then
+            if ! grep -qi '\-ssl' "$INITSCRIPT" 2>/dev/null; then
+                echo "FAIL [PoC]: Unencrypted x11vnc autostart found in $INITSCRIPT."
+                AUTOSTART_VULNERABLE=1
+            fi
+        fi
+    done
+
+    # Check crontab
+    if crontab -l 2>/dev/null | grep -q 'x11vnc'; then
+        if ! crontab -l 2>/dev/null | grep 'x11vnc' | grep -qi '\-ssl'; then
+            echo "FAIL [PoC]: Unencrypted x11vnc found in crontab."
+            AUTOSTART_VULNERABLE=1
+        fi
+    fi
+
+    if [ "$AUTOSTART_VULNERABLE" -eq 1 ]; then
+        exit 1
+    fi
+    echo "PASS [PoC]: VNC not running and no unencrypted autostart entries found (behavioral check)."
+else
+    # VNC is running — try to connect to port 5900 without SSL
+    if command -v nc > /dev/null 2>&1; then
+        VNC_BANNER=$(echo "" | nc -w 3 127.0.0.1 5900 2>/dev/null || true)
+        if echo "$VNC_BANNER" | grep -qi "RFB"; then
+            # VNC responds with RFB protocol — check if this is on an externally-bound socket
+            LISTEN_ADDR=$(netstat -tlnp 2>/dev/null | grep ':5900' | awk '{print $4}')
+            if echo "$LISTEN_ADDR" | grep -q '0.0.0.0:5900'; then
+                echo "FAIL [PoC]: Unencrypted VNC responds on 0.0.0.0:5900 (behavioral test)."
+                exit 1
+            else
+                echo "PASS [PoC]: VNC on port 5900 is bound to localhost only (behavioral test)."
+            fi
+        fi
+    fi
+fi
+
 ##############################################################################
 # Regression Check: SSH must still provide remote access
 ##############################################################################

@@ -35,6 +35,16 @@ else
     exit 1
 fi
 
+# PoC (behavioral): verify Dovecot runtime config includes ssl_required=yes
+if command -v doveconf >/dev/null 2>&1; then
+    RUNTIME_SSL=$(doveconf -n ssl 2>/dev/null | grep -oE 'required|yes|no' || true)
+    if [ "$RUNTIME_SSL" = "no" ]; then
+        echo "FAIL [PoC]: Dovecot runtime ssl setting is 'no' — plaintext connections allowed." >&2
+        exit 1
+    fi
+    echo "PASS [PoC]: Dovecot runtime ssl=$RUNTIME_SSL."
+fi
+
 ###############################################################################
 # PoC 3: iptables must block ports 143 and/or 993 from untrusted sources
 ###############################################################################

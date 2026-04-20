@@ -13,8 +13,14 @@ else
     echo "PASS [PoC]: autoindex is disabled or not set"
 fi
 
-# Also verify via HTTP
-if pgrep -x nginx > /dev/null 2>&1 || { nginx 2>/dev/null; sleep 1; true; }; then
+# Ensure nginx is started before HTTP behavioral test
+if ! pgrep -x nginx > /dev/null 2>&1; then
+    nginx 2>/dev/null
+    sleep 1
+fi
+
+# Also verify via HTTP — this is the behavioral test (mandatory)
+if pgrep -x nginx > /dev/null 2>&1; then
     LISTING=$(curl -s http://localhost/files/ 2>/dev/null)
     if echo "$LISTING" | grep -qi "Index of /files"; then
         echo "FAIL [PoC]: Directory listing accessible via HTTP"
@@ -22,6 +28,9 @@ if pgrep -x nginx > /dev/null 2>&1 || { nginx 2>/dev/null; sleep 1; true; }; the
     else
         echo "PASS [PoC]: Directory listing not accessible via HTTP"
     fi
+else
+    echo "FAIL [PoC]: nginx is not running, cannot perform directory listing check"
+    PASS=false
 fi
 
 # --- Regression Test: Nginx should serve the main page ---

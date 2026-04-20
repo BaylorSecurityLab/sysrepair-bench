@@ -50,6 +50,41 @@ for ini in $PHP_INI $FPM_INIS; do
     break
 done
 
+# --- PoC Behavioral Test: Verify dangerous functions are disabled at runtime ---
+EXEC_TEST=$(php -r "echo function_exists('exec') ? 'enabled' : 'disabled';" 2>/dev/null || true)
+if [[ "$EXEC_TEST" == "enabled" ]]; then
+    echo "FAIL [PoC]: exec() is still callable at PHP runtime"
+    PASS=false
+elif [[ "$EXEC_TEST" == "disabled" ]]; then
+    echo "PASS [PoC]: exec() is disabled at PHP runtime"
+fi
+
+SYSTEM_TEST=$(php -r "echo function_exists('system') ? 'enabled' : 'disabled';" 2>/dev/null || true)
+if [[ "$SYSTEM_TEST" == "enabled" ]]; then
+    echo "FAIL [PoC]: system() is still callable at PHP runtime"
+    PASS=false
+elif [[ "$SYSTEM_TEST" == "disabled" ]]; then
+    echo "PASS [PoC]: system() is disabled at PHP runtime"
+fi
+
+# --- PoC Behavioral Test: Verify expose_php is Off via HTTP headers ---
+# Start PHP-FPM and nginx if not running
+if ! pgrep -x nginx > /dev/null 2>&1; then
+    service $(ls /etc/init.d/ 2>/dev/null | grep php.*fpm | head -1) start 2>/dev/null || true
+    nginx 2>/dev/null || true
+    sleep 1
+fi
+
+if pgrep -x nginx > /dev/null 2>&1 && command -v curl > /dev/null 2>&1; then
+    XPOWERED=$(curl -sI http://localhost/index.php 2>/dev/null | grep -i '^X-Powered-By:' || true)
+    if echo "$XPOWERED" | grep -qi 'PHP'; then
+        echo "FAIL [PoC]: X-Powered-By header exposes PHP version: $XPOWERED"
+        PASS=false
+    else
+        echo "PASS [PoC]: X-Powered-By header does not expose PHP"
+    fi
+fi
+
 # --- Regression Test: PHP should still execute ---
 RESULT=$(php -r "echo 'PHP_OK';" 2>/dev/null)
 if [[ "$RESULT" == "PHP_OK" ]]; then

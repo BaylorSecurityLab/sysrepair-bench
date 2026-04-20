@@ -27,6 +27,21 @@ if grep -rqE "pipelining_advertise_hosts\s*=\s*\*" "$EXIM_CONF_DIR" 2>/dev/null;
 fi
 echo "PASS [PoC]: pipelining_advertise_hosts is not wildcarded to all hosts."
 
+# PoC (behavioral): verify EHLO response does not advertise CHUNKING
+# CHUNKING must be disabled to prevent SMTP smuggling
+for i in 1 2 3 4 5; do
+    EHLO_RESP=$(echo "EHLO test" | nc -q1 127.0.0.1 25 2>/dev/null || true)
+    if echo "$EHLO_RESP" | grep -q "^250"; then
+        if echo "$EHLO_RESP" | grep -qi 'CHUNKING'; then
+            echo "FAIL [PoC]: Exim still advertises CHUNKING in EHLO response." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Exim EHLO response does not advertise CHUNKING."
+        break
+    fi
+    sleep 2
+done
+
 ###############################################################################
 # Regression: Exim must accept EHLO on port 25
 ###############################################################################

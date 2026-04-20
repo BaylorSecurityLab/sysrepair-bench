@@ -27,6 +27,29 @@ fi
 
 echo "PASS [PoC]: secret_key is set to a non-default value."
 
+# PoC (behavioral): attempt to forge a session cookie with the known default key
+# If secret_key is still 'temporary_key', forged cookies would be accepted
+for i in $(seq 1 10); do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:8080/ 2>/dev/null || echo "000")
+    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
+        FORGE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            -b 'session=.eJyrVkrOz0nVUcrPL0lVslIqS8wpTgUAP24HaA.AAAAAA.forged' \
+            http://localhost:8080/admin/ 2>/dev/null || echo "000")
+        if [ "$FORGE_CODE" = "200" ]; then
+            FORGE_BODY=$(curl -s -m 5 \
+                -b 'session=.eJyrVkrOz0nVUcrPL0lVslIqS8wpTgUAP24HaA.AAAAAA.forged' \
+                http://localhost:8080/admin/ 2>/dev/null || true)
+            if echo "$FORGE_BODY" | grep -qi 'dag\|airflow.*admin'; then
+                echo "FAIL [PoC]: Forged session cookie accepted — secret_key may be default." >&2
+                exit 1
+            fi
+        fi
+        echo "PASS [PoC]: Forged session cookie rejected (HTTP $FORGE_CODE)."
+        break
+    fi
+    sleep 5
+done
+
 ###############################################################################
 # Regression: Airflow webserver must still respond on port 8080
 ###############################################################################

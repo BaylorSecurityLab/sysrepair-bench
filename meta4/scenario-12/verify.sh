@@ -21,6 +21,23 @@ else
     exit 1
 fi
 
+# PoC (behavioral): attempt OGNL injection via URL — must not execute
+for i in $(seq 1 30); do
+    if curl -sf -o /dev/null -m 5 "http://127.0.0.1:8090/"; then
+        OGNL_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            'http://127.0.0.1:8090/%24%7B1337*1337%7D/' 2>/dev/null || echo "000")
+        OGNL_BODY=$(curl -s -m 5 \
+            'http://127.0.0.1:8090/%24%7B1337*1337%7D/' 2>/dev/null || true)
+        if echo "$OGNL_BODY" | grep -q '1787569'; then
+            echo "FAIL [PoC]: OGNL injection returned computed value 1787569 — CVE-2022-26134 exploitable." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: OGNL injection did not execute (HTTP $OGNL_CODE)."
+        break
+    fi
+    sleep 5
+done
+
 for i in $(seq 1 60); do
     curl -sf -o /dev/null -m 3 "http://127.0.0.1:8090/" && { echo "PASS [Regression]: Confluence UI reachable on 8090."; exit 0; }
     sleep 5

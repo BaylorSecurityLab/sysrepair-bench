@@ -32,6 +32,19 @@ else
     echo "OK: RMI registry is not running (service disabled)"
 fi
 
+# Behavioral test: verify the security property is active at runtime
+if [ -n "$RMI_RUNNING" ]; then
+    # Check the actual JVM system property via /proc cmdline
+    for PID in $(pgrep -f rmiregistry 2>/dev/null); do
+        CMDLINE=$(cat /proc/$PID/cmdline 2>/dev/null | tr '\0' ' ')
+        if echo "$CMDLINE" | grep -q "useCodebaseOnly=false"; then
+            echo "FAIL: RMI process $PID running with useCodebaseOnly=false (runtime behavioral test)"
+            exit 1
+        fi
+    done
+    echo "OK: No RMI process found with useCodebaseOnly=false at runtime (behavioral test)"
+fi
+
 # Check 2: If RMI port is listening, verify it's restricted or secured
 if netstat -ln 2>/dev/null | grep -q ":1099 "; then
     echo "WARNING: Port 1099 is listening"

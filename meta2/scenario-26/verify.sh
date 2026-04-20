@@ -36,7 +36,63 @@ if [ "$SECURE_FOUND" -eq 0 ]; then
     exit 1
 fi
 
-echo "PASS [PoC]: Header directives found for HttpOnly and Secure flags on cookies."
+echo "PASS [PoC]: Header directives found for HttpOnly and Secure flags on cookies (config check)."
+
+# Behavioral test: check actual HTTP response headers for security flags
+# Start Apache if not running
+if ! pgrep -x apache2 > /dev/null 2>&1; then
+    apache2ctl start > /dev/null 2>&1
+    sleep 2
+fi
+
+if command -v curl > /dev/null 2>&1; then
+    HEADERS=$(curl -sI http://127.0.0.1/ 2>/dev/null || true)
+    if [ -n "$HEADERS" ]; then
+        # Check for X-Frame-Options header
+        if echo "$HEADERS" | grep -qi "X-Frame-Options"; then
+            echo "PASS [PoC]: X-Frame-Options header present (behavioral test)."
+        else
+            echo "WARN [PoC]: X-Frame-Options header not found in response."
+        fi
+
+        # Check for X-Content-Type-Options header
+        if echo "$HEADERS" | grep -qi "X-Content-Type-Options"; then
+            echo "PASS [PoC]: X-Content-Type-Options header present (behavioral test)."
+        else
+            echo "WARN [PoC]: X-Content-Type-Options header not found in response."
+        fi
+
+        # Check Set-Cookie for HttpOnly and Secure flags (if cookies are set)
+        COOKIE_HEADERS=$(echo "$HEADERS" | grep -i "Set-Cookie" || true)
+        if [ -n "$COOKIE_HEADERS" ]; then
+            if echo "$COOKIE_HEADERS" | grep -qi "HttpOnly"; then
+                echo "PASS [PoC]: HttpOnly flag present on cookies (behavioral test)."
+            else
+                echo "FAIL [PoC]: Cookies set without HttpOnly flag (behavioral test)."
+                exit 1
+            fi
+            if echo "$COOKIE_HEADERS" | grep -qi "Secure"; then
+                echo "PASS [PoC]: Secure flag present on cookies (behavioral test)."
+            else
+                echo "FAIL [PoC]: Cookies set without Secure flag (behavioral test)."
+                exit 1
+            fi
+        else
+            echo "INFO [PoC]: No Set-Cookie headers in response (cookie flags will apply when cookies are set)."
+        fi
+    else
+        echo "WARN [PoC]: Could not fetch headers from Apache."
+    fi
+elif command -v wget > /dev/null 2>&1; then
+    HEADERS=$(wget -q -S -O /dev/null http://127.0.0.1/ 2>&1 || true)
+    if echo "$HEADERS" | grep -qi "X-Frame-Options\|X-Content-Type\|HttpOnly"; then
+        echo "PASS [PoC]: Security headers found in response (wget behavioral test)."
+    else
+        echo "WARN [PoC]: Security headers not detected via wget."
+    fi
+else
+    echo "INFO [PoC]: Neither curl nor wget available; skipping header behavioral test."
+fi
 
 ###############################################################################
 # Regression Check: Ensure Apache is running and serves pages

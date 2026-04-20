@@ -21,6 +21,17 @@ fi
 
 [ "$SAFE" = "1" ] || { echo "FAIL [PoC]: openssh-server $PKG_VER vulnerable and no LoginGraceTime 0 mitigation." >&2; exit 1; }
 
+# PoC (behavioral): verify LoginGraceTime at runtime via sshd -T
+RUNTIME_LGT=$(/usr/sbin/sshd -T 2>/dev/null | awk '/^logingracetime /{print $2}')
+if [ -n "$RUNTIME_LGT" ] && [ "$RUNTIME_LGT" != "0" ]; then
+    # If pkg is not upgraded, LoginGraceTime must be 0 at runtime
+    if [ -n "$PKG_VER" ] && ! ver_ge "$PKG_VER" "1:9.2p1-2+deb12u3"; then
+        echo "FAIL [PoC]: sshd runtime LoginGraceTime is $RUNTIME_LGT (not 0) on vulnerable $PKG_VER." >&2
+        exit 1
+    fi
+fi
+echo "PASS [PoC]: sshd runtime config verified."
+
 if ! pgrep -x sshd >/dev/null 2>&1; then
     /usr/sbin/sshd -D -e &
     sleep 1

@@ -23,6 +23,23 @@ else
     fi
 fi
 
+# --- PoC Behavioral Test: Verify PostgreSQL is not listening on all interfaces ---
+# Ensure PostgreSQL is running for this test
+if ! pgrep -x postgres > /dev/null 2>&1; then
+    su -c "pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') start" postgres 2>/dev/null
+    sleep 2
+fi
+
+PG_LISTEN=$(ss -tlnp 2>/dev/null | grep ':5432' || true)
+if echo "$PG_LISTEN" | grep -qE '0\.0\.0\.0:5432|\*:5432'; then
+    echo "FAIL [PoC]: PostgreSQL is listening on 0.0.0.0:5432 at runtime"
+    PASS=false
+elif [ -n "$PG_LISTEN" ]; then
+    echo "PASS [PoC]: PostgreSQL is bound to a restricted address at runtime"
+else
+    echo "INFO [PoC]: PostgreSQL port 5432 not detected in ss output (service may not be running)"
+fi
+
 # --- Regression Test: PostgreSQL should be running and accessible locally ---
 if pgrep -x postgres > /dev/null 2>&1; then
     echo "PASS [Regression]: PostgreSQL is running"

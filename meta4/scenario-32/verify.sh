@@ -28,6 +28,19 @@ fi
 
 echo "PASS [PoC]: no Terrapin-vulnerable ciphers or MACs in sshd config."
 
+# PoC (behavioral): attempt to negotiate chacha20-poly1305 cipher via openssl/ssh
+# If the cipher is disabled, the connection will fail to negotiate it.
+if command -v ssh >/dev/null 2>&1; then
+    CIPHER_TEST=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=3 \
+        -c chacha20-poly1305@openssh.com localhost true 2>&1 || true)
+    if echo "$CIPHER_TEST" | grep -qi 'no matching cipher\|unable to negotiate'; then
+        echo "PASS [PoC]: sshd rejects chacha20-poly1305 cipher negotiation."
+    elif echo "$CIPHER_TEST" | grep -qi 'permission denied'; then
+        echo "FAIL [PoC]: sshd accepted chacha20-poly1305 cipher (auth reached)." >&2
+        exit 1
+    fi
+fi
+
 # --- Regression: sshd must still accept connections on port 22 ---
 for i in 1 2 3 4 5; do
     if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=3 \

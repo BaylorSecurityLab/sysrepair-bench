@@ -22,6 +22,23 @@ else
     exit 1
 fi
 
+# PoC (behavioral): verify example_bash_operator DAG is not available
+# CVE-2020-11978 exploits the example DAG; if load_examples=False, it should not exist
+for i in $(seq 1 10); do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:8080/ 2>/dev/null || echo "000")
+    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
+        DAG_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            "http://localhost:8080/api/v1/dags/example_bash_operator" 2>/dev/null || echo "000")
+        if [ "$DAG_CODE" = "200" ]; then
+            echo "FAIL [PoC]: example_bash_operator DAG is still present — load_examples may not be effective." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: example_bash_operator DAG not found (HTTP $DAG_CODE)."
+        break
+    fi
+    sleep 5
+done
+
 ###############################################################################
 # Regression: Airflow webserver must still respond on port 8080
 ###############################################################################

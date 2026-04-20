@@ -41,6 +41,28 @@ fi
 echo "PoC failed (vulnerability remediated) - Redis configuration is secure"
 
 echo ""
+echo "=== PoC Behavioral Test: Unauthenticated Redis access should be denied ==="
+
+# Start Redis if not running
+if ! pgrep -x redis-server > /dev/null 2>&1; then
+    redis-server "$REDIS_CONF" --daemonize yes 2>/dev/null
+    sleep 1
+fi
+
+if pgrep -x redis-server > /dev/null 2>&1; then
+    # Try PING without authentication — should require auth
+    NOAUTH_RESULT=$(redis-cli -h 127.0.0.1 PING 2>/dev/null || true)
+    if [ "$NOAUTH_RESULT" = "PONG" ]; then
+        echo "FAIL: Unauthenticated PING returned PONG — Redis has no auth"
+        exit 1
+    elif echo "$NOAUTH_RESULT" | grep -qi "NOAUTH\|ERR.*authentication\|denied"; then
+        echo "PASS: Unauthenticated PING correctly requires authentication"
+    else
+        echo "PASS: Unauthenticated PING did not return PONG (got: $NOAUTH_RESULT)"
+    fi
+fi
+
+echo ""
 echo "=== Regression Test: Redis works locally ==="
 
 # Start Redis if not running (it may have been restarted with new config)

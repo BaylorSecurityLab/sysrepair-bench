@@ -31,6 +31,15 @@ fi
 
 echo "PASS [PoC]: User-defined functions are disabled."
 
+# PoC (behavioral): attempt unauthenticated CQL connection
+UNAUTH_RESULT=$(cqlsh localhost -e "DESCRIBE KEYSPACES;" 2>&1 || true)
+if echo "$UNAUTH_RESULT" | grep -qE 'system_schema|system_auth|system_distributed' && \
+   ! echo "$UNAUTH_RESULT" | grep -qi 'error\|credentials\|unauthorized'; then
+    echo "FAIL [PoC]: Unauthenticated CQL connection succeeded — AllowAllAuthenticator may still be active." >&2
+    exit 1
+fi
+echo "PASS [PoC]: Unauthenticated CQL connection rejected."
+
 ###############################################################################
 # Regression: CQL native transport must be reachable on 9042
 ###############################################################################

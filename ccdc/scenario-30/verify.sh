@@ -16,26 +16,38 @@ fi
 if pgrep -x fail2ban-server > /dev/null 2>&1 || pgrep -f fail2ban > /dev/null 2>&1; then
     echo "PASS [PoC]: fail2ban is running"
 else
-    echo "FAIL [PoC]: fail2ban is not running"
-    PASS=false
+    # Try to start fail2ban
+    fail2ban-server -b 2>/dev/null || fail2ban-client start 2>/dev/null || true
+    sleep 1
+    if pgrep -x fail2ban-server > /dev/null 2>&1 || pgrep -f fail2ban > /dev/null 2>&1; then
+        echo "PASS [PoC]: fail2ban started successfully"
+    else
+        echo "FAIL [PoC]: fail2ban is not running and could not be started"
+        PASS=false
+    fi
 fi
 
-# --- PoC Test: SSH jail should be enabled ---
-if [ -f /etc/fail2ban/jail.local ] || [ -f /etc/fail2ban/jail.d/sshd.conf ]; then
-    if fail2ban-client status sshd 2>/dev/null | grep -q "Status"; then
-        echo "PASS [PoC]: SSH jail is active in fail2ban"
-    else
-        # Check config file
+# --- PoC Primary Test: fail2ban-client status sshd should show active jail ---
+F2B_STATUS=$(fail2ban-client status sshd 2>/dev/null || true)
+if echo "$F2B_STATUS" | grep -q "Status"; then
+    echo "PASS [PoC]: SSH jail is active (fail2ban-client status sshd confirms)"
+    # Extract and report details
+    TOTAL_BANNED=$(echo "$F2B_STATUS" | grep "Currently banned" | awk '{print $NF}')
+    echo "INFO [PoC]: Currently banned IPs: ${TOTAL_BANNED:-0}"
+else
+    # Fallback: Check config files
+    if [ -f /etc/fail2ban/jail.local ] || [ -f /etc/fail2ban/jail.d/sshd.conf ]; then
         if grep -rqE '^\[sshd\]' /etc/fail2ban/jail.local /etc/fail2ban/jail.d/ 2>/dev/null; then
-            echo "PASS [PoC]: SSH jail is configured"
+            echo "FAIL [PoC]: SSH jail is configured but fail2ban-client cannot confirm it is active"
+            PASS=false
         else
-            echo "FAIL [PoC]: SSH jail is not configured"
+            echo "FAIL [PoC]: SSH jail is not configured in jail files"
             PASS=false
         fi
+    else
+        echo "FAIL [PoC]: No fail2ban jail configuration found and fail2ban-client reports no sshd jail"
+        PASS=false
     fi
-else
-    echo "FAIL [PoC]: No fail2ban jail configuration found"
-    PASS=false
 fi
 
 # --- Regression Test: SSH should still be running ---

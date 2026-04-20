@@ -98,6 +98,37 @@ else
     echo "[PoC] PASS: Password quality settings meet security requirements."
 fi
 
+# --- PoC Behavioral Test: Verify PAM is configured with pam_pwquality ---
+echo ""
+echo "[PoC] Checking PAM configuration for pam_pwquality..."
+
+PAM_PWQUALITY_FOUND=false
+for pam_file in /etc/pam.d/common-password /etc/pam.d/system-auth /etc/pam.d/passwd; do
+    if [ -f "$pam_file" ] && grep -qE '^\s*(password\s+.*)?pam_pwquality\.so' "$pam_file" 2>/dev/null; then
+        PAM_PWQUALITY_FOUND=true
+        echo "[PoC] PASS: pam_pwquality.so is configured in $pam_file"
+
+        # Verify key parameters are passed to the PAM module
+        PAM_LINE=$(grep -E 'pam_pwquality\.so' "$pam_file" | grep -v '^\s*#' | tail -1)
+        if echo "$PAM_LINE" | grep -q 'retry='; then
+            echo "[PoC] PASS: retry parameter found in PAM config"
+        else
+            echo "[PoC] INFO: retry parameter not in PAM line (default applies)"
+        fi
+        break
+    fi
+done
+
+if ! $PAM_PWQUALITY_FOUND; then
+    echo "[PoC] FAIL: pam_pwquality.so not found in any PAM password config"
+    POC_FAIL=1
+fi
+
+if [ "$POC_FAIL" -eq 1 ]; then
+    echo "[PoC] RESULT: PAM not properly configured for password quality."
+    exit 1
+fi
+
 # --- Regression Test: Ensure password changes still work ---
 echo ""
 echo "[Regression] Checking that password management still functions..."

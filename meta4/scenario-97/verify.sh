@@ -21,6 +21,27 @@ else
     exit 1
 fi
 
+# PoC (behavioral): attempt to access the Timelion API endpoint
+# If timelion is disabled, the endpoint should return 404 or be unavailable
+for i in $(seq 1 10); do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:5601/ 2>/dev/null || echo "000")
+    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
+        TIMELION_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            -X POST "http://localhost:5601/api/timelion/run" \
+            -H 'Content-Type: application/json' \
+            -H 'kbn-xsrf: true' \
+            -d '{"sheet":[".es(*)"],"time":{"from":"now-1h","to":"now"}}' \
+            2>/dev/null || echo "000")
+        if [ "$TIMELION_CODE" = "200" ]; then
+            echo "FAIL [PoC]: Timelion API endpoint returned 200 — timelion may still be enabled." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Timelion API endpoint returned $TIMELION_CODE (disabled)."
+        break
+    fi
+    sleep 5
+done
+
 ###############################################################################
 # Regression: Kibana UI must still respond on port 5601
 ###############################################################################

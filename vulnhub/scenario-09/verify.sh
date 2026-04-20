@@ -12,6 +12,17 @@ else
         fi
     fi
 fi
+
+# Behavioral test: attempt command injection via POST — must be blocked
+if pgrep -x apache2 > /dev/null 2>&1; then
+    CMD_OUT=$(curl -s -d "cmd=id" "http://localhost/cmd.php" 2>/dev/null)
+    if echo "$CMD_OUT" | grep -q 'uid='; then
+        echo "FAIL [PoC]: Command injection via POST succeeded — 'id' command ran."
+        exit 1
+    fi
+    echo "PASS [PoC]: Command injection via POST blocked."
+fi
+
 if pgrep -x apache2 > /dev/null 2>&1; then
     echo "PASS [Regression]: Apache running."
 else

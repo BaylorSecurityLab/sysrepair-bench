@@ -28,6 +28,14 @@ if grep -rq 'hide-identity:.*no\|hide-version:.*no' /etc/unbound/ 2>/dev/null; t
 fi
 echo "PASS [PoC]: Version disclosure suppressed."
 
+# PoC (behavioral): verify version.bind query is suppressed
+VER_BIND=$(dig +short @127.0.0.1 version.bind CH TXT 2>/dev/null || true)
+if echo "$VER_BIND" | grep -qi 'unbound'; then
+    echo "FAIL [PoC]: version.bind query returns Unbound version — hide-version not effective." >&2
+    exit 1
+fi
+echo "PASS [PoC]: version.bind query does not disclose Unbound version."
+
 ###############################################################################
 # Regression: Local zone must still resolve from localhost
 ###############################################################################

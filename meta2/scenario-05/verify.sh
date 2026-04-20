@@ -50,6 +50,38 @@ else
     exit 1
 fi
 
+# Behavioral test: verify that cleartext FTP login is rejected and TLS is required
+# Ensure vsftpd is running first
+if ! pgrep -x vsftpd > /dev/null 2>&1; then
+    /etc/init.d/vsftpd start > /dev/null 2>&1
+    sleep 1
+fi
+
+if command -v openssl > /dev/null 2>&1; then
+    # Test 1: Attempt STARTTLS on FTP — should succeed (TLS available)
+    TLS_OUT=$(echo "QUIT" | openssl s_client -connect 127.0.0.1:21 -starttls ftp 2>&1 || true)
+    if echo "$TLS_OUT" | grep -qi "BEGIN CERTIFICATE\|SSL handshake\|Verify return"; then
+        echo "PASS [PoC]: FTP server supports STARTTLS (behavioral test)."
+    else
+        echo "WARN [PoC]: Could not verify STARTTLS on FTP via openssl."
+    fi
+fi
+
+if command -v nc > /dev/null 2>&1; then
+    # Test 2: Attempt cleartext login — should be rejected if force_local_logins_ssl=YES
+    CLEAR_OUT=$(printf "USER ftpuser\r\nPASS ftppass123\r\nQUIT\r\n" | nc -w 5 127.0.0.1 21 2>/dev/null || true)
+    if echo "$CLEAR_OUT" | grep -q "^230"; then
+        echo "FAIL [PoC]: Cleartext FTP login succeeded — TLS not enforced."
+        exit 1
+    elif echo "$CLEAR_OUT" | grep -q "^530\|^534\|^5[0-9][0-9].*SSL\|^5[0-9][0-9].*TLS"; then
+        echo "PASS [PoC]: Cleartext FTP login rejected — TLS required (behavioral test)."
+    else
+        echo "INFO [PoC]: Cleartext login result inconclusive. Output: $CLEAR_OUT"
+    fi
+else
+    echo "INFO [PoC]: nc not available; skipping cleartext login behavioral test."
+fi
+
 ###############################################################################
 # Regression Check: Ensure vsftpd is running and functional
 ###############################################################################

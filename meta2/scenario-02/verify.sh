@@ -28,7 +28,34 @@ for mac in $WEAK_MACS; do
     fi
 done
 
-echo "PASS [PoC]: No weak MACs found in sshd_config MACs directive."
+echo "PASS [PoC]: No weak MACs found in sshd_config MACs directive (config check)."
+
+# Behavioral test: attempt an SSH connection requesting a weak MAC
+# and confirm the server rejects it.
+# Ensure sshd is running first
+if ! pgrep -x sshd > /dev/null 2>&1; then
+    /etc/init.d/ssh start > /dev/null 2>&1
+    sleep 1
+fi
+
+SSH_WEAK_MAC_OUT=$(ssh -v -o MACs=hmac-md5 -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@127.0.0.1 echo test 2>&1 || true)
+
+if echo "$SSH_WEAK_MAC_OUT" | grep -qi "no matching mac"; then
+    echo "PASS [PoC]: Server rejected weak MAC 'hmac-md5' at connection time."
+elif echo "$SSH_WEAK_MAC_OUT" | grep -qi "Permission denied\|password:"; then
+    # Got past MAC negotiation - the weak MAC was accepted
+    echo "FAIL [PoC]: Server accepted weak MAC 'hmac-md5' (got to authentication stage)."
+    exit 1
+else
+    # Check verbose output for which MAC was negotiated
+    SSH_VERBOSE=$(ssh -v -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@127.0.0.1 true 2>&1 || true)
+    if echo "$SSH_VERBOSE" | grep -qi "MAC.*hmac-md5"; then
+        echo "FAIL [PoC]: Weak MAC 'hmac-md5' observed in SSH negotiation."
+        exit 1
+    else
+        echo "PASS [PoC]: Weak MAC 'hmac-md5' not accepted by server."
+    fi
+fi
 
 ###############################################################################
 # Regression Check: Ensure sshd is running and functional

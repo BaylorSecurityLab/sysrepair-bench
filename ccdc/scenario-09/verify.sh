@@ -4,32 +4,39 @@
 
 PASS=true
 
-# --- PoC Test: server_tokens should be off ---
-# Extract the effective value of server_tokens (strip filename, directive name, trailing ;)
+# --- PoC Primary Test: Check HTTP Server header for version disclosure ---
+# Start nginx if not running
+if ! pgrep -x nginx > /dev/null 2>&1; then
+    nginx 2>/dev/null
+    sleep 1
+fi
+
+if pgrep -x nginx > /dev/null 2>&1; then
+    SERVER_HDR=$(curl -sI http://localhost/ 2>/dev/null | grep -i "^Server:" || true)
+    if echo "$SERVER_HDR" | grep -qE 'nginx/[0-9]'; then
+        echo "FAIL [PoC]: Server header exposes version: $SERVER_HDR"
+        PASS=false
+    else
+        echo "PASS [PoC]: Server header does not expose nginx version ($SERVER_HDR)"
+    fi
+else
+    echo "FAIL [PoC]: nginx is not running, cannot perform HTTP header check"
+    PASS=false
+fi
+
+# --- PoC Secondary Test: server_tokens should be off in config ---
 TOKEN_VAL=$(grep -rhE '^\s*server_tokens\b' \
         /etc/nginx/nginx.conf /etc/nginx/conf.d/ /etc/nginx/sites-enabled/ 2>/dev/null \
     | grep -v '^\s*#' \
     | tail -1 \
     | sed -E 's/^\s*server_tokens\s+//; s/\s*;.*$//')
 if [[ "$TOKEN_VAL" == "on" ]]; then
-    echo "FAIL [PoC]: server_tokens is still on"
+    echo "FAIL [PoC]: server_tokens is still 'on' in config"
     PASS=false
 elif [[ "$TOKEN_VAL" == "off" ]]; then
-    echo "PASS [PoC]: server_tokens is off"
+    echo "PASS [PoC]: server_tokens is 'off' in config"
 else
-    # Check via HTTP header
-    if pgrep -x nginx > /dev/null 2>&1 || { nginx 2>/dev/null; sleep 1; true; }; then
-        SERVER_HDR=$(curl -sI http://localhost/ 2>/dev/null | grep -i "^Server:")
-        if echo "$SERVER_HDR" | grep -qE 'nginx/[0-9]'; then
-            echo "FAIL [PoC]: Server header exposes version: $SERVER_HDR"
-            PASS=false
-        else
-            echo "PASS [PoC]: Server header does not expose version"
-        fi
-    else
-        echo "FAIL [PoC]: Cannot determine server_tokens setting"
-        PASS=false
-    fi
+    echo "INFO [PoC]: server_tokens value in config: '${TOKEN_VAL:-not set}' (HTTP header check is primary)"
 fi
 
 # --- Regression Test: Nginx should serve pages ---

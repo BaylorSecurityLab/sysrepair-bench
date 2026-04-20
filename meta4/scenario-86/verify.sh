@@ -32,6 +32,17 @@ else
     exit 1
 fi
 
+# PoC (behavioral): verify /vault/data is not readable by non-vault users
+if id nobody >/dev/null 2>&1; then
+    READABLE=$(su -s /bin/sh nobody -c 'ls /vault/data 2>&1' 2>/dev/null || echo "denied")
+    if echo "$READABLE" | grep -qi 'denied\|permission'; then
+        echo "PASS [PoC]: /vault/data not readable by unprivileged user."
+    elif [ -n "$READABLE" ] && ! echo "$READABLE" | grep -qi 'denied'; then
+        echo "FAIL [PoC]: /vault/data is readable by unprivileged user." >&2
+        exit 1
+    fi
+fi
+
 ###############################################################################
 # Regression: Vault must still be responding
 ###############################################################################

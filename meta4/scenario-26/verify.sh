@@ -29,6 +29,15 @@ fi
 
 echo "PASS [PoC]: privileged flag removed and docker.sock not mounted into app."
 
+# PoC (behavioral): verify that /var/run/docker.sock is not accessible from this container
+if [ -S /var/run/docker.sock ]; then
+    if curl -sf --unix-socket /var/run/docker.sock http://localhost/version >/dev/null 2>&1; then
+        echo "FAIL [PoC]: Docker socket is accessible inside the container." >&2
+        exit 1
+    fi
+fi
+echo "PASS [PoC]: Docker socket is not accessible from this container."
+
 # Regression: compose file must still be syntactically valid
 if command -v docker-compose >/dev/null 2>&1; then
     docker-compose -f "$CF" config >/dev/null 2>&1 && { echo "PASS [Regression]: compose config valid."; exit 0; }

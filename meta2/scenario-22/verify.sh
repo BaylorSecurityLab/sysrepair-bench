@@ -42,6 +42,34 @@ else
     exit 1
 fi
 
+# Behavioral test: verify STARTTLS is offered (or TLS is properly disabled)
+if command -v nc > /dev/null 2>&1; then
+    EHLO_OUT=$(echo "EHLO test" | nc -w 5 127.0.0.1 25 2>/dev/null || true)
+    if [ -n "$EHLO_OUT" ]; then
+        TLS_ENABLED_CONF=$(postconf smtpd_use_tls 2>/dev/null | grep -i yes || true)
+        if [ -n "$TLS_ENABLED_CONF" ]; then
+            # TLS is enabled in config — STARTTLS should be offered
+            if echo "$EHLO_OUT" | grep -qi "STARTTLS"; then
+                echo "OK: STARTTLS is offered in EHLO response (behavioral test)"
+            else
+                echo "FAIL: TLS is configured but STARTTLS not offered in EHLO response"
+                exit 1
+            fi
+        else
+            # TLS disabled is an acceptable remediation for the STARTTLS injection CVE
+            if echo "$EHLO_OUT" | grep -qi "STARTTLS"; then
+                echo "WARNING: TLS config says disabled but STARTTLS still offered"
+            else
+                echo "OK: TLS is disabled and STARTTLS is not offered (behavioral test)"
+            fi
+        fi
+    else
+        echo "WARNING: Could not get EHLO response from SMTP server"
+    fi
+else
+    echo "INFO: nc not available; skipping STARTTLS behavioral test"
+fi
+
 # Check 2: Verify Postfix service is still operational
 if ! service postfix status >/dev/null 2>&1; then
     echo "FAIL: Postfix service is not running"

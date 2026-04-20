@@ -12,6 +12,18 @@ if ! grep -q '^[[:space:]]*acl[[:space:]]' /Corefile 2>/dev/null; then
 fi
 echo "PASS [PoC]: Corefile contains an 'acl' directive."
 
+# PoC (behavioral): verify external recursive queries are blocked
+# The ACL should restrict which sources can query
+EXT_RESULT=$(dig +short @127.0.0.1 google.com A 2>/dev/null || true)
+EXT_STATUS=$(dig @127.0.0.1 google.com A 2>/dev/null | grep -c 'REFUSED' || true)
+if [ "$EXT_STATUS" -gt 0 ]; then
+    echo "PASS [PoC]: External recursive query returns REFUSED — ACL is active."
+elif [ -z "$EXT_RESULT" ]; then
+    echo "PASS [PoC]: External recursive query returned no result — ACL may be active."
+else
+    echo "WARN [PoC]: External query returned a result — ACL may not be fully restrictive."
+fi
+
 ###############################################################################
 # Regression: local.test A record must still resolve from localhost
 ###############################################################################

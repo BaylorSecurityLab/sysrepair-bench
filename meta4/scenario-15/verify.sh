@@ -14,6 +14,24 @@ else
     exit 1
 fi
 
+# PoC (behavioral): attempt CLI @file read via /cli endpoint
+# A patched Jenkins disables args4j @-expansion
+for i in $(seq 1 15); do
+    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/login"; then
+        CLI_RESP=$(curl -s -m 5 -X POST \
+            "http://127.0.0.1:8080/cli?remoting=false" \
+            -d '<hudson><command>help @/etc/passwd</command></hudson>' \
+            -H 'Content-Type: application/xml' 2>/dev/null || true)
+        if echo "$CLI_RESP" | grep -q 'root:'; then
+            echo "FAIL [PoC]: Jenkins CLI @file read returned /etc/passwd content." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Jenkins CLI @file read did not leak /etc/passwd."
+        break
+    fi
+    sleep 2
+done
+
 for i in $(seq 1 30); do
     curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/login" && { echo "PASS [Regression]: Jenkins 8080 reachable."; exit 0; }
     sleep 2

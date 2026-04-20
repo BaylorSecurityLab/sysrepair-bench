@@ -23,6 +23,21 @@ else
         SAFE=1
     fi
 fi
+# Behavioral test: verify the SUID marker file cannot be overwritten
+# (chattr +i should prevent writes regardless of kernel state)
+if [ "$SAFE" = "0" ] && [ -f /opt/suid-marker ]; then
+    if cp /opt/suid-marker /tmp/suid-marker-test 2>/dev/null; then
+        if echo "tampered" > /opt/suid-marker 2>/dev/null; then
+            echo "FAIL [PoC]: SUID marker file is writable — no immutable protection." >&2
+            # Restore from backup
+            cp /tmp/suid-marker-test /opt/suid-marker 2>/dev/null || true
+            rm -f /tmp/suid-marker-test
+            exit 1
+        fi
+        rm -f /tmp/suid-marker-test
+        echo "PASS [PoC]: SUID marker file is write-protected (behavioral test)."
+    fi
+fi
 [ "$SAFE" = "1" ] || { echo "FAIL [PoC]: kernel $KV vulnerable and no +i on /opt/suid-marker." >&2; exit 1; }
 
 OUT=$(/opt/suid-marker 2>/dev/null || true)

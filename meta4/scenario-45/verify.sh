@@ -29,6 +29,23 @@ fi
 
 echo "PASS [PoC]: shared-secret is non-empty — forged JWT tokens will be rejected."
 
+# PoC (behavioral): attempt to use a forged JWT with empty secret
+# Generate a JWT signed with empty key — a vulnerable InfluxDB accepts it
+FORGED_JWT="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFkbWluIiwiZXhwIjo5OTk5OTk5OTk5fQ.QKxRnnBHnunsQ_3T2IWbIFEZT8aU7WMjsBSvP2mTjJo"
+for i in 1 2 3 4 5; do
+    HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer $FORGED_JWT" \
+        "http://localhost:8086/query?q=SHOW+DATABASES" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "FAIL [PoC]: Forged JWT with empty secret accepted (HTTP 200) — CVE-2019-20933 still exploitable." >&2
+        exit 1
+    elif [ "$HTTP_CODE" != "000" ]; then
+        echo "PASS [PoC]: Forged JWT rejected (HTTP $HTTP_CODE)."
+        break
+    fi
+    sleep 2
+done
+
 ###############################################################################
 # Regression: InfluxDB HTTP API must respond on 8086
 ###############################################################################

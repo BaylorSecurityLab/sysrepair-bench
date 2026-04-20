@@ -31,6 +31,28 @@ else
     PASS=false
 fi
 
+# --- PoC Behavioral Test: Verify TLS is enforced on FTP connections ---
+# Ensure vsftpd is running for this test
+if ! pgrep -x vsftpd > /dev/null 2>&1; then
+    /usr/sbin/vsftpd /etc/vsftpd.conf &
+    sleep 1
+fi
+
+if pgrep -x vsftpd > /dev/null 2>&1 && command -v curl > /dev/null 2>&1; then
+    # Try plain FTP (no TLS) — should fail if TLS is forced
+    PLAIN_TEST=$(curl -s --connect-timeout 5 ftp://localhost/ --user testuser:TestPass123! 2>&1 || true)
+    PLAIN_EXIT=$?
+    # Try FTP with explicit TLS — should succeed
+    TLS_TEST=$(curl -s --connect-timeout 5 ftp://localhost/ --user testuser:TestPass123! --ftp-ssl --insecure 2>&1 || true)
+    TLS_EXIT=$?
+    if [ $PLAIN_EXIT -eq 0 ] && ! echo "$PLAIN_TEST" | grep -qi "error\|fail\|refused\|denied"; then
+        echo "FAIL [PoC]: Plain FTP (no TLS) connection succeeded — TLS not enforced"
+        PASS=false
+    else
+        echo "PASS [PoC]: Plain FTP (no TLS) connection correctly rejected"
+    fi
+fi
+
 # --- Regression Test: vsftpd should be running ---
 if pgrep -x vsftpd > /dev/null 2>&1; then
     echo "PASS [Regression]: vsftpd process is running"

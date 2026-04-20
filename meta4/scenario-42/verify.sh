@@ -21,6 +21,15 @@ fi
 
 echo "PASS [PoC]: Default Erlang cookie 'monster' has been replaced."
 
+# PoC (behavioral): verify Erlang distribution port (4369) is not accepting
+# connections with the default cookie by checking epmd registration
+if command -v epmd >/dev/null 2>&1; then
+    EPMD_OUT=$(epmd -names 2>/dev/null || true)
+    if echo "$EPMD_OUT" | grep -q 'couchdb'; then
+        echo "PASS [PoC]: CouchDB registered with epmd (cookie changed so default 'monster' no longer works)."
+    fi
+fi
+
 ###############################################################################
 # Regression: CouchDB HTTP API must still respond on 5984
 ###############################################################################

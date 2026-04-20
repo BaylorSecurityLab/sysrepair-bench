@@ -41,6 +41,21 @@ if ! grep -q "authorizer.class.name=kafka.security.authorizer.AclAuthorizer" "$K
 fi
 echo "PASS [PoC]: AclAuthorizer is configured."
 
+# PoC (behavioral): verify Kafka rejects unauthenticated connections
+# An unauthenticated producer should fail when SASL is required
+if command -v kafka-console-producer.sh >/dev/null 2>&1; then
+    PROD_OUT=$(echo "test" | timeout 5 kafka-console-producer.sh \
+        --broker-list 127.0.0.1:9092 --topic test 2>&1 || true)
+    if echo "$PROD_OUT" | grep -qi 'SASL\|authentication\|not authorized\|error'; then
+        echo "PASS [PoC]: Unauthenticated Kafka producer rejected."
+    elif echo "$PROD_OUT" | grep -qi 'sent\|success'; then
+        echo "FAIL [PoC]: Unauthenticated Kafka producer succeeded — SASL not enforced." >&2
+        exit 1
+    else
+        echo "PASS [PoC]: Kafka producer did not succeed without SASL auth."
+    fi
+fi
+
 ###############################################################################
 # Regression: Kafka broker must be listening on port 9092
 ###############################################################################

@@ -22,6 +22,35 @@ else
     echo "PASS [PoC]: skip-grant-tables is not set"
 fi
 
+# --- PoC Behavioral Test: skip-grant-tables should be gone at runtime ---
+# If mysqld is running, verify skip-grant-tables is not active by attempting
+# unauthenticated access — should fail if auth is enforced
+if pgrep -x mysqld > /dev/null 2>&1; then
+    SKIP_GRANT_TEST=$(mysql -u root --skip-password -e "SELECT 1" 2>/dev/null && echo "ok" || echo "denied")
+    if [[ "$SKIP_GRANT_TEST" == "ok" ]]; then
+        # This could mean skip-grant-tables is active OR root has no password.
+        # Check more specifically: try an obviously-wrong password
+        WRONG_PW_TEST=$(mysql -u root -p'__wrong_pw_verify__' -e "SELECT 1" 2>/dev/null && echo "ok" || echo "denied")
+        if [[ "$WRONG_PW_TEST" == "ok" ]]; then
+            echo "FAIL [PoC]: MySQL accepts any credentials — skip-grant-tables likely still active"
+            PASS=false
+        else
+            echo "PASS [PoC]: MySQL root can connect without password but rejects wrong passwords (auth is enforced)"
+        fi
+    else
+        echo "PASS [PoC]: Unauthenticated MySQL access denied (skip-grant-tables is off)"
+    fi
+fi
+
+# --- PoC Behavioral Test: Verify bind address at runtime ---
+LISTEN_ADDR=$(ss -tlnp 2>/dev/null | grep ':3306' || true)
+if echo "$LISTEN_ADDR" | grep -qE '0\.0\.0\.0:3306|\*:3306'; then
+    echo "FAIL [PoC]: MySQL is listening on 0.0.0.0:3306 at runtime"
+    PASS=false
+elif [ -n "$LISTEN_ADDR" ]; then
+    echo "PASS [PoC]: MySQL is bound to a restricted address at runtime"
+fi
+
 # --- Regression Test: MySQL should be running and accessible locally ---
 if pgrep -x mysqld > /dev/null 2>&1; then
     echo "PASS [Regression]: mysqld process is running"

@@ -23,6 +23,19 @@ else
         SAFE=1
     fi
 fi
+# Behavioral test: attempt unshare -U as unprivileged user
+# If unprivileged_userns_clone=0, this should fail
+if [ "$SAFE" = "0" ]; then
+    if command -v unshare >/dev/null 2>&1; then
+        if su -s /bin/sh -c "unshare -U echo exploitable" nobody 2>/dev/null | grep -q "exploitable"; then
+            echo "FAIL [PoC]: unprivileged user namespaces still work — OverlayFS LPE attack surface open." >&2
+            exit 1
+        else
+            echo "PASS [PoC]: unprivileged unshare -U blocked (behavioral test)."
+            SAFE=1
+        fi
+    fi
+fi
 [ "$SAFE" = "1" ] || { echo "FAIL [PoC]: kernel $(uname -r) vulnerable and user namespaces not restricted." >&2; exit 1; }
 
 /opt/marker-bash -c 'exit 0' && { echo "PASS [Regression]: marker-bash executes."; exit 0; }

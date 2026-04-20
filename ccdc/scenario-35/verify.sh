@@ -63,6 +63,35 @@ else
     fi
 
     echo "[PoC] All checks passed - NFS vulnerability remediated (secured)."
+
+    # --- PoC Behavioral Test: Verify NFS exports at runtime ---
+    if command -v showmount > /dev/null 2>&1; then
+        SHOWMOUNT_OUT=$(showmount -e localhost 2>/dev/null || true)
+        if echo "$SHOWMOUNT_OUT" | grep -qE '^\/' ; then
+            # Exports exist — check for wildcard
+            if echo "$SHOWMOUNT_OUT" | grep -qE '\*|Everyone|0\.0\.0\.0/0'; then
+                echo "[PoC] FAIL: showmount shows wildcard export at runtime"
+                exit 1
+            else
+                echo "[PoC] PASS: showmount shows restricted exports at runtime"
+            fi
+        else
+            echo "[PoC] PASS: No NFS exports visible at runtime"
+        fi
+    elif [ -f /var/lib/nfs/etab ]; then
+        # Fallback: check the runtime export table
+        if grep -qE '\*\(' /var/lib/nfs/etab 2>/dev/null; then
+            echo "[PoC] FAIL: /var/lib/nfs/etab shows wildcard export"
+            exit 1
+        elif grep -q 'no_root_squash' /var/lib/nfs/etab 2>/dev/null; then
+            echo "[PoC] FAIL: /var/lib/nfs/etab contains no_root_squash"
+            exit 1
+        else
+            echo "[PoC] PASS: /var/lib/nfs/etab shows properly restricted exports"
+        fi
+    else
+        echo "[PoC] INFO: Neither showmount nor /var/lib/nfs/etab available for runtime check"
+    fi
 fi
 
 # ──────────────────────────────────────────────

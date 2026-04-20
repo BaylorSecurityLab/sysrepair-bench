@@ -28,13 +28,34 @@ if ! ver_ge "$VER" "5.3.18"; then
 fi
 
 # All spring-* jars in the WAR must also be upgraded
-for j in "$APP_LIB"/spring-*.jar 2>/dev/null; do
+for j in "$APP_LIB"/spring-*.jar; do
     [ -f "$j" ] || continue
     v=$(basename "$j" | sed -E 's/^spring-[a-z]+-([0-9.]+)\.jar$/\1/')
     [ "$v" = "$(basename "$j")" ] && continue
     ver_ge "$v" "5.3.18" || { echo "FAIL [PoC]: $j still at $v." >&2; exit 1; }
 done
 echo "PASS [PoC]: spring-core upgraded to $VER (>= 5.3.18)."
+
+# PoC (behavioral): attempt the Spring4Shell class-loader parameter injection
+# A patched Spring Framework ignores the class.module chain; verify it does not
+# write a shell JSP (or return 400 for the invalid parameter).
+for i in $(seq 1 15); do
+    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/app/greet?name=test"; then
+        EXPLOIT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            "http://127.0.0.1:8080/app/greet?class.module.classLoader.resources.context.parent.pipeline.first.pattern=VERIFY_PROBE&class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp&class.module.classLoader.resources.context.parent.pipeline.first.directory=webapps/ROOT&class.module.classLoader.resources.context.parent.pipeline.first.prefix=verify_probe&class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=" \
+            2>/dev/null || echo "000")
+        # Check that the probe JSP was NOT written
+        PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 3 \
+            "http://127.0.0.1:8080/verify_probe.jsp" 2>/dev/null || echo "000")
+        if [ "$PROBE_CODE" = "200" ]; then
+            echo "FAIL [PoC]: Spring4Shell exploit wrote verify_probe.jsp — class-loader injection still works." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Spring4Shell class-loader injection did not write a JSP (probe returned $PROBE_CODE)."
+        break
+    fi
+    sleep 2
+done
 
 # Regression: /app/greet must still work
 for i in $(seq 1 30); do

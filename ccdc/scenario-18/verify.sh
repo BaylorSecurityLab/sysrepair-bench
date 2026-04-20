@@ -24,6 +24,24 @@ else
     echo "PASS [PoC]: map to guest is not 'Bad User'"
 fi
 
+# --- PoC Behavioral Test: Anonymous/guest SMB access should be denied ---
+# Ensure smbd is running for this test
+if ! pgrep -x smbd > /dev/null 2>&1; then
+    smbd --foreground --no-process-group &
+    sleep 1
+fi
+
+if pgrep -x smbd > /dev/null 2>&1 && command -v smbclient > /dev/null 2>&1; then
+    # Try to connect as guest (no password) to the private share
+    GUEST_TEST=$(smbclient //127.0.0.1/private -N -c "ls" 2>&1 || true)
+    if echo "$GUEST_TEST" | grep -qiE 'NT_STATUS_ACCESS_DENIED|NT_STATUS_LOGON_FAILURE|NT_STATUS_BAD_NETWORK_NAME'; then
+        echo "PASS [PoC]: Guest SMB access to private share is denied"
+    else
+        echo "FAIL [PoC]: Guest SMB access to private share succeeded or was not clearly denied"
+        PASS=false
+    fi
+fi
+
 # --- Regression Test: Samba should be running ---
 if pgrep -x smbd > /dev/null 2>&1; then
     echo "PASS [Regression]: smbd process is running"

@@ -41,6 +41,26 @@ if [ "$MITIGATED" != "1" ]; then
 fi
 
 ###############################################################################
+# PoC (behavioral): send a JNDI payload and verify Solr does NOT attempt lookup
+# A patched instance returns a normal error response without hanging or crashing.
+###############################################################################
+
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -sf -o /dev/null -m 3 http://127.0.0.1:8983/solr/admin/info/system; then
+        # Solr is up — send JNDI payload
+        JNDI_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            'http://127.0.0.1:8983/solr/admin/cores?action=${jndi:ldap://127.0.0.1:1/a}' 2>/dev/null || echo "000")
+        if [ "$JNDI_CODE" = "000" ]; then
+            echo "FAIL [PoC]: Solr hung or crashed on JNDI payload — lookup may still be active." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Solr returned HTTP $JNDI_CODE for JNDI payload (no hang/crash)."
+        break
+    fi
+    sleep 2
+done
+
+###############################################################################
 # Regression: Solr must still respond on 8983
 ###############################################################################
 

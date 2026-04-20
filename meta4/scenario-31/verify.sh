@@ -30,6 +30,26 @@ fi
 
 [ "$SAFE" = "1" ] || { echo "FAIL [PoC]: vulnerable really-simple-ssl still installed." >&2; exit 1; }
 
+# PoC (behavioral): attempt REST API 2FA bypass (CVE-2024-10924)
+# The vulnerable plugin allows authentication bypass via the REST API
+for i in $(seq 1 15); do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://127.0.0.1/ 2>/dev/null || echo 000)
+    case "$CODE" in 200|301|302)
+        BYPASS_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            -X POST "http://127.0.0.1/wp-json/reallysimplessl/v1/two_fa/skip_onboarding" \
+            -H 'Content-Type: application/json' \
+            -d '{"user_id":1,"login_nonce":"bypass"}' 2>/dev/null || echo "000")
+        if [ "$BYPASS_CODE" = "200" ]; then
+            echo "FAIL [PoC]: REST API 2FA bypass endpoint returned 200 — CVE-2024-10924 may be exploitable." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: REST API 2FA bypass endpoint returned $BYPASS_CODE (not 200)."
+        break
+        ;;
+    esac
+    sleep 2
+done
+
 # Regression: WordPress front page must respond
 for i in $(seq 1 30); do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://127.0.0.1/ 2>/dev/null || echo 000)

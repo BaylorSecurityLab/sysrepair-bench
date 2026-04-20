@@ -67,7 +67,34 @@ else
         exit 1
     fi
 
-    echo "PASS [PoC]: All default passwords have been changed."
+    echo "PASS [PoC]: All default passwords have been changed (shadow check)."
+fi
+
+# Behavioral test: try SSH login with known weak credentials via sshpass if available
+if ! pgrep -x sshd > /dev/null 2>&1; then
+    /etc/init.d/ssh start > /dev/null 2>&1
+    sleep 1
+fi
+
+if command -v sshpass > /dev/null 2>&1; then
+    for PAIR in "msfadmin:msfadmin" "user:user" "root:root"; do
+        B_USER=$(echo "$PAIR" | cut -d: -f1)
+        B_PASS=$(echo "$PAIR" | cut -d: -f2)
+
+        # Skip if user does not exist
+        if ! id "$B_USER" > /dev/null 2>&1; then
+            continue
+        fi
+
+        SSHPASS_OUT=$(sshpass -p "$B_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$B_USER"@127.0.0.1 echo LOGIN_OK 2>&1 || true)
+        if echo "$SSHPASS_OUT" | grep -q "LOGIN_OK"; then
+            echo "FAIL [PoC]: SSH login succeeded for '$B_USER' with default password (behavioral test)."
+            exit 1
+        fi
+    done
+    echo "PASS [PoC]: No default credential SSH logins succeeded (behavioral test)."
+else
+    echo "INFO [PoC]: sshpass not available; skipping SSH login behavioral test."
 fi
 
 ###############################################################################

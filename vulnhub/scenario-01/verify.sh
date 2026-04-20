@@ -42,6 +42,23 @@ done
 
 echo "PASS [PoC]: Cipher suite does not include weak ciphers."
 
+# Behavioral test: actually try deprecated protocols against the running server
+if pgrep -x apache2 > /dev/null 2>&1 || { apachectl start > /dev/null 2>&1; sleep 1; pgrep -x apache2 > /dev/null 2>&1; }; then
+    # Test SSLv3 — connection must fail
+    if openssl s_client -connect localhost:443 -ssl3 </dev/null 2>&1 | grep -qi 'BEGIN CERTIFICATE\|Secure Renegotiation IS supported'; then
+        echo "FAIL [PoC]: SSLv3 connection succeeded — protocol not disabled."
+        exit 1
+    fi
+    echo "PASS [PoC]: SSLv3 connection correctly rejected."
+
+    # Test TLSv1.0 — connection must fail
+    if openssl s_client -connect localhost:443 -tls1 </dev/null 2>&1 | grep -qi 'BEGIN CERTIFICATE\|Secure Renegotiation IS supported'; then
+        echo "FAIL [PoC]: TLSv1.0 connection succeeded — protocol not disabled."
+        exit 1
+    fi
+    echo "PASS [PoC]: TLSv1.0 connection correctly rejected."
+fi
+
 ###############################################################################
 # Regression Check: Apache is running
 ###############################################################################

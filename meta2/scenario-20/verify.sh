@@ -23,7 +23,34 @@ for INCFILE in $SMB_INCLUDES; do
     fi
 done
 
-echo "PASS: 'username map script' directive has been removed"
+echo "PASS: 'username map script' directive has been removed (config check)"
+
+# Behavioral test: attempt to exploit metacharacter injection via smbclient
+# Ensure Samba is running
+if ! pidof smbd > /dev/null 2>&1; then
+    /etc/init.d/samba start > /dev/null 2>&1 || smbd -D > /dev/null 2>&1
+    sleep 2
+fi
+
+if command -v smbclient > /dev/null 2>&1; then
+    # Create a marker file that would be created if command injection succeeds
+    MARKER="/tmp/.samba_exploit_test_$$"
+    rm -f "$MARKER"
+
+    # Attempt metacharacter injection in username — if vulnerable, the backtick
+    # command would execute and create the marker file
+    smbclient //127.0.0.1/tmp -U "/=\`touch ${MARKER}\`" -N 2>/dev/null || true
+
+    if [ -f "$MARKER" ]; then
+        rm -f "$MARKER"
+        echo "FAIL: Metacharacter injection via smbclient username succeeded (behavioral test)"
+        exit $FAIL
+    fi
+    rm -f "$MARKER"
+    echo "PASS: Metacharacter injection via smbclient username did not execute (behavioral test)"
+else
+    echo "INFO: smbclient not available; skipping metacharacter injection behavioral test"
+fi
 
 ##############################################
 # Regression Check: Samba must still be running and shares accessible

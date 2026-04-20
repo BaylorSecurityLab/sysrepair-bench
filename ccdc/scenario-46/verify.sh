@@ -57,6 +57,55 @@ else
     echo "[PoC] PASS: All password aging values are within acceptable limits."
 fi
 
+# --- PoC Behavioral Test: Verify password aging is applied to testuser ---
+echo ""
+echo "[PoC] Checking actual password aging applied to testuser..."
+
+if command -v chage > /dev/null 2>&1 && id testuser > /dev/null 2>&1; then
+    CHAGE_OUT=$(chage -l testuser 2>/dev/null || true)
+    if [ -n "$CHAGE_OUT" ]; then
+        # Check Maximum number of days between password change
+        APPLIED_MAX=$(echo "$CHAGE_OUT" | grep -i "Maximum number of days" | awk -F: '{print $2}' | tr -d ' ')
+        if [ -n "$APPLIED_MAX" ] && [ "$APPLIED_MAX" != "" ]; then
+            if [ "$APPLIED_MAX" -gt 90 ] 2>/dev/null; then
+                echo "[PoC] FAIL: testuser PASS_MAX_DAYS is $APPLIED_MAX (should be <= 90)."
+                POC_FAIL=1
+            else
+                echo "[PoC] PASS: testuser PASS_MAX_DAYS is $APPLIED_MAX (<= 90)."
+            fi
+        fi
+
+        # Check Minimum number of days between password change
+        APPLIED_MIN=$(echo "$CHAGE_OUT" | grep -i "Minimum number of days" | awk -F: '{print $2}' | tr -d ' ')
+        if [ -n "$APPLIED_MIN" ] && [ "$APPLIED_MIN" != "" ]; then
+            if [ "$APPLIED_MIN" -lt 7 ] 2>/dev/null; then
+                echo "[PoC] FAIL: testuser PASS_MIN_DAYS is $APPLIED_MIN (should be >= 7)."
+                POC_FAIL=1
+            else
+                echo "[PoC] PASS: testuser PASS_MIN_DAYS is $APPLIED_MIN (>= 7)."
+            fi
+        fi
+
+        # Check warning days
+        APPLIED_WARN=$(echo "$CHAGE_OUT" | grep -i "Number of days of warning" | awk -F: '{print $2}' | tr -d ' ')
+        if [ -n "$APPLIED_WARN" ] && [ "$APPLIED_WARN" != "" ]; then
+            if [ "$APPLIED_WARN" -lt 7 ] 2>/dev/null; then
+                echo "[PoC] FAIL: testuser PASS_WARN_AGE is $APPLIED_WARN (should be >= 7)."
+                POC_FAIL=1
+            else
+                echo "[PoC] PASS: testuser PASS_WARN_AGE is $APPLIED_WARN (>= 7)."
+            fi
+        fi
+
+        if [ "$POC_FAIL" -eq 1 ]; then
+            echo "[PoC] RESULT: Password aging not properly applied to testuser."
+            exit 1
+        fi
+    fi
+else
+    echo "[PoC] INFO: chage or testuser not available, skipping applied-aging behavioral test."
+fi
+
 # --- Regression Test: Ensure users can still change passwords ---
 echo ""
 echo "[Regression] Checking that password management still works..."

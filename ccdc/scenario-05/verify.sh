@@ -33,6 +33,30 @@ else
     PASS=false
 fi
 
+# --- PoC Behavioral Test: Verify password-only login behavior ---
+# Ensure sshd is running for behavioral test
+if ! pgrep -x sshd > /dev/null 2>&1; then
+    /usr/sbin/sshd 2>/dev/null
+    sleep 1
+fi
+
+if command -v sshpass > /dev/null 2>&1; then
+    # If PasswordAuthentication is disabled, password-only SSH should fail
+    if [[ "$PWAUTH" == "no" ]]; then
+        PWD_RESULT=$(sshpass -p 'password123' ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o ConnectTimeout=5 sysadmin@127.0.0.1 echo ok 2>&1 || true)
+        if [[ "$PWD_RESULT" == "ok" ]]; then
+            echo "FAIL [PoC]: Password-only login succeeded despite PasswordAuthentication=no"
+            PASS=false
+        else
+            echo "PASS [PoC]: Password-only login correctly denied"
+        fi
+    else
+        echo "INFO [PoC]: PasswordAuthentication is still on; password-only login test skipped"
+    fi
+else
+    echo "INFO [PoC]: sshpass not available, skipping behavioral password-only login test"
+fi
+
 # --- Regression Test: SSH service should still be functional ---
 if pgrep -x sshd > /dev/null 2>&1; then
     echo "PASS [Regression]: sshd process is running"

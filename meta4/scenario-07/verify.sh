@@ -38,6 +38,22 @@ else
     exit 1
 fi
 
+# PoC (behavioral): attempt partial PUT upload — must be rejected (403/405)
+for i in $(seq 1 10); do
+    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/"; then
+        PUT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+            -X PUT -H 'Content-Range: bytes 0-3/4' \
+            -d 'TEST' "http://127.0.0.1:8080/verify_probe.txt" 2>/dev/null || echo "000")
+        if [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ]; then
+            echo "FAIL [PoC]: Partial PUT succeeded (HTTP $PUT_CODE) — readonly=false still active." >&2
+            exit 1
+        fi
+        echo "PASS [PoC]: Partial PUT rejected (HTTP $PUT_CODE) — readonly or patched."
+        break
+    fi
+    sleep 2
+done
+
 # Regression: Tomcat must still respond on 8080
 for i in $(seq 1 20); do
     curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/" && { echo "PASS [Regression]: Tomcat HTTP 8080 reachable."; exit 0; }

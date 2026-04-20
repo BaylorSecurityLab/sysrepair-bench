@@ -27,7 +27,40 @@ for cipher in $WEAK_CIPHERS; do
     fi
 done
 
-echo "PASS [PoC]: No weak ciphers found in sshd_config Ciphers directive."
+echo "PASS [PoC]: No weak ciphers found in sshd_config Ciphers directive (config check)."
+
+# Behavioral test: actually attempt an SSH connection with a weak cipher
+# and confirm the server rejects it.
+# Ensure sshd is running first
+if ! pgrep -x sshd > /dev/null 2>&1; then
+    /etc/init.d/ssh start > /dev/null 2>&1
+    sleep 1
+fi
+
+# Try connecting with arcfour cipher; the server should reject it
+SSH_WEAK_OUT=$(ssh -v -c arcfour -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@127.0.0.1 echo test 2>&1 || true)
+
+if echo "$SSH_WEAK_OUT" | grep -qi "no matching cipher\|no matching c]"; then
+    echo "PASS [PoC]: Server rejected weak cipher 'arcfour' at connection time."
+elif echo "$SSH_WEAK_OUT" | grep -qi "Unknown cipher type\|Bad SSH2 cipher"; then
+    # Old SSH client may not support -c arcfour; fall back to verbose negotiation check
+    SSH_VERBOSE=$(ssh -v -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@127.0.0.1 true 2>&1 || true)
+    if echo "$SSH_VERBOSE" | grep -qi "arcfour"; then
+        echo "FAIL [PoC]: Weak cipher 'arcfour' appears in negotiated cipher list."
+        exit 1
+    else
+        echo "PASS [PoC]: Weak cipher 'arcfour' not observed in SSH handshake (client does not support -c flag; verbose check passed)."
+    fi
+else
+    # Check if it connected successfully (meaning the cipher was accepted)
+    if echo "$SSH_WEAK_OUT" | grep -qi "Permission denied\|password:"; then
+        # Got past cipher negotiation - cipher was accepted!
+        echo "FAIL [PoC]: Server accepted weak cipher 'arcfour' (got to authentication stage)."
+        exit 1
+    else
+        echo "PASS [PoC]: Server did not accept weak cipher 'arcfour'."
+    fi
+fi
 
 ###############################################################################
 # Regression Check: Ensure sshd is running and functional
