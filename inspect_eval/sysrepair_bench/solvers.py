@@ -383,7 +383,10 @@ def reflexion_solver(
                 on_continue="Continue, or call submit() if remediation is complete.",
             )
             inner_state = AgentState(
-                messages=[ChatMessageSystem(content=sys_prompt)]
+                messages=[
+                    ChatMessageSystem(content=sys_prompt),
+                    ChatMessageUser(content="Begin. Investigate and remediate the vulnerability."),
+                ]
             )
             inner_state = await inner(inner_state)
             state.messages.extend(inner_state.messages[1:])  # skip dup system
