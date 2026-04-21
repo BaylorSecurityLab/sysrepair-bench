@@ -14,7 +14,7 @@ $securePw = ConvertTo-SecureString $adminPw -AsPlainText -Force
 New-LocalUser -Name $admin -Password $securePw -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $admin
 
-$rogueSecure = ConvertTo-SecureString "changeme" -AsPlainText -Force
+$rogueSecure = ConvertTo-SecureString "Changeme!1" -AsPlainText -Force
 New-LocalUser -Name $rogue -Password $rogueSecure -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $rogue
 
@@ -26,14 +26,14 @@ Add-LocalGroupMember -Group "Backup Operators" -Member $bkpOp -ErrorAction Silen
 
 # ---- LLMNR enabled (set EnableMulticast=1) -----------------------------------
 $dns = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient"
-New-Item -Path $dns -Force | Out-Null
+if (-not (Test-Path $dns)) { New-Item -Path $dns -Force | Out-Null }
 Set-ItemProperty -Path $dns -Name EnableMulticast -Value 1 -Type DWord
 
 # ---- SMBv1 server + client ---------------------------------------------------
 $smbSrv = "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters"
 Set-ItemProperty -Path $smbSrv -Name SMB1 -Value 1 -Type DWord
 $mrx = "HKLM:\SYSTEM\CurrentControlSet\Services\mrxsmb10"
-New-Item -Path $mrx -Force | Out-Null
+if (-not (Test-Path $mrx)) { New-Item -Path $mrx -Force | Out-Null }
 Set-ItemProperty -Path $mrx -Name Start -Value 2 -Type DWord
 
 # ---- RestrictAnonymous=0 -----------------------------------------------------
@@ -46,7 +46,7 @@ Set-ItemProperty -Path $el -Name Start -Value 4 -Type DWord
 
 # ---- Telnet-Server registered (feature-installed proxy) ----------------------
 $tln = "HKLM:\SYSTEM\CurrentControlSet\Services\TlntSvr"
-New-Item -Path $tln -Force | Out-Null
+if (-not (Test-Path $tln)) { New-Item -Path $tln -Force | Out-Null }
 Set-ItemProperty -Path $tln -Name Start -Value 2 -Type DWord
 Set-ItemProperty -Path $tln -Name ImagePath -Value "C:\Windows\System32\tlntsvr.exe" -Type String
 

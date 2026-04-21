@@ -19,12 +19,7 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
 COPY build/roles.json C:/ProgramData/sysrepair/roles.json
 COPY seed.ps1         C:/ProgramData/sysrepair/seed.ps1
 
-RUN $acl = Get-Acl C:\ProgramData\sysrepair\roles.json; \
-    $acl.SetAccessRuleProtection($true, $false); \
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule('SYSTEM','FullControl','Allow'); \
-    $acl.AddAccessRule($rule); \
-    Set-Acl C:\ProgramData\sysrepair\roles.json $acl; \
-    C:\ProgramData\sysrepair\seed.ps1; \
+RUN C:\ProgramData\sysrepair\seed.ps1; \
     Remove-Item C:\ProgramData\sysrepair\seed.ps1
 
 CMD ["powershell", "-NoProfile", "-Command", "while ($true) { Start-Sleep 3600 }"]

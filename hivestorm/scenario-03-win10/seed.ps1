@@ -15,18 +15,18 @@ $securePw = ConvertTo-SecureString $adminPw -AsPlainText -Force
 New-LocalUser -Name $admin -Password $securePw -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $admin
 
-$rogueSecure = ConvertTo-SecureString "changeme" -AsPlainText -Force
+$rogueSecure = ConvertTo-SecureString "Changeme!1" -AsPlainText -Force
 New-LocalUser -Name $rogue -Password $rogueSecure -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $rogue
 
 # ---- UAC disabled -------------------------------------------------------------
 $polSys = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
-New-Item -Path $polSys -Force | Out-Null
+if (-not (Test-Path $polSys)) { New-Item -Path $polSys -Force | Out-Null }
 Set-ItemProperty -Path $polSys -Name EnableLUA -Value 0 -Type DWord
 
 # ---- Autorun in HKLM Run ------------------------------------------------------
 $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-New-Item -Path $runKey -Force | Out-Null
+if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
 Set-ItemProperty -Path $runKey -Name $autorun -Value $trojan
 
 # ---- Trojan binary planted ----------------------------------------------------
@@ -58,5 +58,5 @@ net accounts /maxpwage:unlimited | Out-Null
 
 # ---- WDigest credential caching enabled ---------------------------------------
 $wdigest = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest"
-New-Item -Path $wdigest -Force | Out-Null
+if (-not (Test-Path $wdigest)) { New-Item -Path $wdigest -Force | Out-Null }
 Set-ItemProperty -Path $wdigest -Name UseLogonCredential -Value 1 -Type DWord

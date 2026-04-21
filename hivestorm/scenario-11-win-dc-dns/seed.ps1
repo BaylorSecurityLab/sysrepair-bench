@@ -12,7 +12,7 @@ $securePw = ConvertTo-SecureString $adminPw -AsPlainText -Force
 New-LocalUser -Name $admin -Password $securePw -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $admin
 
-$rogueSecure = ConvertTo-SecureString "changeme" -AsPlainText -Force
+$rogueSecure = ConvertTo-SecureString "Changeme!1" -AsPlainText -Force
 New-LocalUser -Name $rogue -Password $rogueSecure -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $rogue
 

@@ -14,7 +14,7 @@ $securePw = ConvertTo-SecureString $adminPw -AsPlainText -Force
 New-LocalUser -Name $admin -Password $securePw -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $admin
 
-$rogueSecure = ConvertTo-SecureString "changeme" -AsPlainText -Force
+$rogueSecure = ConvertTo-SecureString "Changeme!1" -AsPlainText -Force
 New-LocalUser -Name $rogue -Password $rogueSecure -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $rogue
 
@@ -64,5 +64,5 @@ Set-Service -Name RemoteRegistry -StartupType Automatic -ErrorAction SilentlyCon
 
 # ---- AutoPlay enabled --------------------------------------------------------
 $auto = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
-New-Item -Path $auto -Force | Out-Null
+if (-not (Test-Path $auto)) { New-Item -Path $auto -Force | Out-Null }
 Set-ItemProperty -Path $auto -Name NoDriveTypeAutoRun -Value 0 -Type DWord

