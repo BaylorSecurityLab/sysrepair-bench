@@ -10,10 +10,14 @@ $domainPass   = ConvertTo-SecureString 'Password1!' -AsPlainText -Force
 $domainCred   = New-Object System.Management.Automation.PSCredential($domainUser, $domainPass)
 $caCommonName = 'corp-ca01-CA'
 
-# --- 0. DNS: point at DC ---
-$iface = Get-NetIPInterface -AddressFamily IPv4 | Where-Object InterfaceAlias -like '*Ethernet*' |
-  Sort-Object InterfaceMetric | Select-Object -First 1
-Set-DnsClientServerAddress -InterfaceIndex $iface.ifIndex -ServerAddresses ('10.20.30.5','1.1.1.1')
+# --- 0. DNS: point at DC on the private_network NIC (10.20.30.0/24) ---
+$privateAddr = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+  Where-Object IPAddress -like '10.20.30.*' |
+  Select-Object -First 1
+if (-not $privateAddr) {
+    throw '[ca-baseline] no NIC found on 10.20.30.0/24; cannot set domain DNS'
+}
+Set-DnsClientServerAddress -InterfaceIndex $privateAddr.InterfaceIndex -ServerAddresses ('10.20.30.5','1.1.1.1')
 
 # --- 1. domain join ---
 if (-not (Get-WmiObject Win32_ComputerSystem).PartOfDomain) {
