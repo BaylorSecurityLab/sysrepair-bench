@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 # Byte[11-12] : Flags2 0x0000
 # Byte[13-21] : Reserved (9 zero bytes): PID high(2), Reserved(2), PID low(4), CID(2), UserID(2)
 # Byte[22]    : Number of dialects = [dialect count], value 0x08 (8 dialects)
-# Byte[23]    : Dialect buffer offset (0x32 = 49 decimal, relative to SMB header start)
+# Byte[23]    : Dialect buffer offset (0x18 = 24 decimal, relative to SMB header start)
 # Dialects start at byte 24, null-terminated ASCII strings follow:
 $dialects = @(
     "PC NETWORK PROGRAM 1.0",
@@ -39,7 +39,7 @@ $buf[4] = 0x72                                            # SMB_COM_NEGOTIATE
 $buf[10] = 0x00                                           # Flags
 $buf[11] = 0x00; $buf[12] = 0x00                          # Flags2
 $buf[22] = [byte]$dialects.Count                          # Number of dialects
-$buf[23] = 0x32                                           # Dialect buffer offset = 50
+$buf[23] = 0x18                                           # Dialect buffer offset = 24
 [Array]::Copy([System.Text.Encoding]::ASCII.GetBytes($dialectData), 0, $buf, 24, $dialectData.Length)
 
 try {
