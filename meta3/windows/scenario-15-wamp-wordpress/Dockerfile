@@ -41,7 +41,8 @@ RUN Invoke-WebRequest -Uri 'https://archive.mariadb.org/mariadb-10.1.21/winx64-p
 RUN Import-Module WebAdministration ; \
     New-WebHandler -Name 'PHP-FastCGI' -Path '*.php' -Verb '*' -Modules 'FastCgiModule' -ScriptProcessor 'C:\php\php-cgi.exe' -ResourceType File ; \
     Add-WebConfiguration -Filter '/system.webServer/fastCgi' -PSPath 'IIS:\' -Value @{fullPath='C:\php\php-cgi.exe'} ; \
-    Set-ItemProperty 'IIS:\Sites\Default Web Site' -Name physicalPath -Value 'C:\wamp\www\wordpress'
+    Set-ItemProperty 'IIS:\Sites\Default Web Site' -Name physicalPath -Value 'C:\wamp\www\wordpress' ; \
+    Add-WebConfiguration -Filter '/system.webServer/defaultDocument/files' -PSPath 'IIS:\' -AtIndex 0 -Value @{value='index.php'}
 
 # WordPress 4.7.1 (matches upstream metasploitable3-windows)
 RUN New-Item -ItemType Directory -Path 'C:\wamp\www' -Force | Out-Null ; \
