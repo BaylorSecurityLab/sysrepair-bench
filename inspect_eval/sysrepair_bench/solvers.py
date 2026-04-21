@@ -384,8 +384,7 @@ def reflexion_solver(
             )
             inner_state = AgentState(
                 messages=[
-                    ChatMessageSystem(content=sys_prompt),
-                    ChatMessageUser(content="Begin. Investigate and remediate the vulnerability."),
+                    ChatMessageUser(content=sys_prompt + "\n\nBegin. Investigate and remediate the vulnerability."),
                 ]
             )
             inner_state = await inner(inner_state)
