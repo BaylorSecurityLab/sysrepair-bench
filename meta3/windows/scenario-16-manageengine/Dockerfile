@@ -35,8 +35,17 @@ RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tl
     Remove-Item 'C:\dc9.exe'
 
 # Stop the services so we can reconfigure them, grant LOCAL SERVICE full control
-# on C:\ManageEngine, rebind the services to LOCAL SERVICE, then leave them
-# stopped — the CMD below will start them at container start.
+# on C:\ManageEngine, rebind the Apache + Notification services to LOCAL SERVICE,
+# then leave them stopped — the CMD below will start them at container start.
+# The DesktopCentralServer service is left registered but we never start it at
+# runtime; instead the CMD launches the Tanuki wrapper in console mode via
+# dc-run.bat so the JVM's System.in is attached to a file of newlines. See the
+# CMD section below for the full rationale.
+#
+# StartMode=Manual across all three services is deliberate: Docker's
+# intermediate build containers run the Windows SCM, so Automatic services
+# would start (and the DC one would hang on EULA) before any subsequent RUN
+# step could react. Manual keeps them inert until runtime.
 #
 # NOTE: sc.exe via `cmd /c "sc config ... obj= \"NT Authority\\LOCAL SERVICE\" ..."`
 # loses its inner quotes through the docker-SHELL → powershell → cmd → sc hop,
@@ -50,12 +59,33 @@ RUN Stop-Service 'DesktopCentralServer' -ErrorAction SilentlyContinue ; \
     foreach ($svcName in @('DesktopCentralServer','MEDC Server Component - Notification Server','MEDCServerComponent-Apache')) { \
         $svc = $services | Where-Object { $_.Name -eq $svcName } ; \
         if (-not $svc) { throw 'service not found' } ; \
-        $r = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments @{ StartMode = 'Automatic'; ServiceType = [uint32]16; StartName = 'NT AUTHORITY\LocalService'; StartPassword = '' } ; \
+        $r = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments @{ StartMode = 'Manual'; ServiceType = [uint32]16; StartName = 'NT AUTHORITY\LocalService'; StartPassword = '' } ; \
         if ($r.ReturnValue -ne 0) { throw ('Win32_Service.Change failed rc=' + $r.ReturnValue) } \
     }
 # Firewall is disabled in the base image; no explicit allow rules required.
 
+# Runtime helpers for the foreground-DC launch pattern:
+#   dc-run.bat   — cd's to bin\ and runs `DCService.bat -c < C:\dc-stdin.txt`
+#   dc-stdin.txt — ~10k CRLFs; only the first is consumed by the EULA prompt,
+#                  the rest sit in the pipe until DC's JVM hits EOF (never).
+# Why: DC's Java entry point (com.adventnet.sym.start.DCStarter) prints its
+# Software License Agreement on every launch and calls System.in.read(). DC
+# 9.1.0_91097 does NOT persist EULA acceptance — so a Windows-service start
+# (null stdin) hangs forever on that read. The Tanuki wrapper bundled with
+# DC (Java Service Wrapper 3.5.15) predates Tanuki's wrapper.console_input
+# property (added in 3.5.52), and upgrading the wrapper in-place is not
+# supported by ManageEngine. The only path that reliably delivers bytes to
+# the JVM's System.in is running the wrapper in console mode with
+# shell-level `<` stdin redirection — hence the .bat + newlines file.
+COPY dc-run.bat C:/dc-run.bat
+COPY dc-stdin.txt C:/dc-stdin.txt
+
 COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 8020 8040 8383 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service 'MEDC Server Component - Apache'; Start-Service 'MEDC Server Component - Notification Server'; Start-Service DesktopCentralServer; while ($true) { Start-Sleep 60 }"]
+# Start sshd + WinRM + the two real DC services (Apache reverse-proxy and
+# Notification Server). Skip Start-Service on DesktopCentralServer; launch it
+# as a foreground child via dc-run.bat instead so the JVM's System.in is the
+# newlines file. PowerShell's supervisor loop keeps the container alive; the
+# foreground wrapper runs detached in its own child process.
+CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service 'MEDC Server Component - Apache'; Start-Service 'MEDC Server Component - Notification Server'; Start-Process -FilePath C:/dc-run.bat -NoNewWindow; while ($true) { Start-Sleep 60 }"]
