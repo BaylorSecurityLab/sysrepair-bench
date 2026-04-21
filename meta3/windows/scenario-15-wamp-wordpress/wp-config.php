@@ -4,7 +4,7 @@
 define('DB_NAME',     'wordpress');
 define('DB_USER',     'wpuser');
 define('DB_PASSWORD', 'wppass');
-define('DB_HOST',     'localhost');
+define('DB_HOST',     '127.0.0.1');
 define('DB_CHARSET',  'utf8');
 define('DB_COLLATE',  '');
 

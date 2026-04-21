@@ -35,7 +35,8 @@ RUN Invoke-WebRequest -Uri 'https://archive.mariadb.org/mariadb-10.1.21/winx64-p
     Expand-Archive 'C:\mariadb.zip' -DestinationPath 'C:\' -Force ; \
     Rename-Item 'C:\mariadb-10.1.21-winx64' 'C:\mariadb' ; \
     Remove-Item 'C:\mariadb.zip' ; \
-    & 'C:\mariadb\bin\mysql_install_db.exe' --datadir='C:\mariadb\data' --service='mariadb'
+    & 'C:\mariadb\bin\mysql_install_db.exe' --datadir='C:\mariadb\data' --service='mariadb' ; \
+    Set-Content 'C:\mariadb\data\my.ini' "[mysqld]`r`ndatadir=C:/mariadb/data`r`nbind-address=0.0.0.0`r`n`r`n[client]`r`nplugin-dir=C:/mariadb/lib/plugin`r`n"
 
 # Wire PHP into IIS via FastCGI and set document root
 RUN Import-Module WebAdministration ; \
@@ -52,12 +53,16 @@ RUN New-Item -ItemType Directory -Path 'C:\wamp\www' -Force | Out-Null ; \
 
 COPY wp-config.php C:/wamp/www/wordpress/wp-config.php
 COPY init-wordpress.sql C:/init-wordpress.sql
+COPY install-wordpress.php C:/install-wordpress.php
 COPY verify.ps1 C:/verify/verify.ps1
 
-# Bootstrap: start MariaDB, seed the WordPress DB + weak admin:admin login
+# Bootstrap: start MariaDB, seed the WordPress DB + grants, then run WordPress's
+# own installer to populate the full schema with admin:admin (weak creds are
+# intentional — this image is the vulnerable shape for the scenario).
 RUN Start-Service mariadb ; \
     Start-Sleep -Seconds 8 ; \
     cmd /c 'C:\mariadb\bin\mysql.exe -u root < C:\init-wordpress.sql' ; \
+    & 'C:\php\php.exe' 'C:\install-wordpress.php' ; \
     Stop-Service mariadb
 
 EXPOSE 80 3306 22 5985
