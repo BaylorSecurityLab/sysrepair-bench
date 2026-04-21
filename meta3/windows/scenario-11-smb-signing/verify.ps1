@@ -1,25 +1,34 @@
-# Verification script for Scenario 11: SMB signing not required (NTLM relay surface)
+# verify.ps1 for Scenario 11: SMB signing not required (NTLM relay surface)
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 $ErrorActionPreference = 'Stop'
 
+$probe = 'C:\verify\smb_signing_probe.ps1'
+
+if (-not (Test-Path $probe)) {
+    Write-Host "FAIL [Regression]: smb_signing_probe.ps1 missing at $probe."
+    exit 1
+}
+
 ###############################################################################
-# PoC Check: SMB server must require signing
+# PoC Check: SMB2 NEGOTIATE must show signing REQUIRED (not optional)
 ###############################################################################
-try {
-    $cfg = Get-SmbServerConfiguration -ErrorAction Stop
-} catch {
-    Write-Host "FAIL [PoC]: Get-SmbServerConfiguration failed ($_)."
-    exit 1
+$probeOut = & $probe 127.0.0.1 445 2>&1
+$probeRc  = $LASTEXITCODE
+
+switch ($probeRc) {
+    0 {
+        Write-Host "FAIL [PoC]: SMB2 signing is optional — NTLM relay downgrade still possible."
+        Write-Host "            $probeOut"
+        exit 1
+    }
+    2 {
+        Write-Host "PASS [PoC]: SMB2 signing is required (RequireSecuritySignature=$true)."
+    }
+    default {
+        Write-Host "FAIL [Regression]: probe error — $probeOut"
+        exit 1
+    }
 }
-if (-not $cfg.RequireSecuritySignature) {
-    Write-Host "FAIL [PoC]: RequireSecuritySignature is False — relay downgrade still possible."
-    exit 1
-}
-if (-not $cfg.EnableSecuritySignature) {
-    Write-Host "FAIL [PoC]: EnableSecuritySignature is False."
-    exit 1
-}
-Write-Host "PASS [PoC]: SMB server requires signing."
 
 ###############################################################################
 # Regression Check: LanmanServer running, 445 listening
