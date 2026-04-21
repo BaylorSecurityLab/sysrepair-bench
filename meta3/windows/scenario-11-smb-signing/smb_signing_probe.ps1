@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# SMB2 NEGOTIATE Protocol Request — fixed header (32 bytes), dialects appended
+# SMB2 NEGOTIATE Protocol Request — fixed header (40 bytes), dialects appended
 # Offset  0 (4):  "FE SMB" — SMB2 ProtocolID marker
 # Offset  4 (2):  StructureSize = 0x20 (32) — total fixed header length
 # Offset  6 (2):  CreditCharge = 0
@@ -60,7 +60,7 @@ try {
     $stream.Write($fullBuf, 0, $fullBuf.Length)
     $stream.Flush()
 
-    # Read minimum 132-byte SMB2 NEGOTIATE Response (64-byte header + 132-byte body)
+    # Read 136 bytes: SMB2 NEGOTIATE Response (64-byte header + body)
     $resp = New-Object byte[] 136
     $bytesRead = $stream.Read($resp, 0, 136)
     $client.Close()
