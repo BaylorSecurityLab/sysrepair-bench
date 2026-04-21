@@ -12,7 +12,7 @@ ROLES = JSON.parse(File.read(ROLES_PATH))
 
 Vagrant.configure("2") do |config|
   config.vm.box = "gusztavvargadr/windows-server-2019-standard"
-  config.vm.box_version = ">= 2102.0.0"
+  config.vm.box_version = ">= 1809.0.0"
   config.vm.hostname = "hs13-dc01"
   config.vm.communicator = "winrm"
   config.winrm.username = "vagrant"
