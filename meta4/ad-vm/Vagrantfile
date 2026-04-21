@@ -1,0 +1,70 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # ----- DC: corp.local forest root -----
+  config.vm.define "dc" do |dc|
+    dc.vm.box = "jborean93/WindowsServer2019"
+    dc.vm.hostname = "corp-dc01"
+    dc.vm.communicator = "winrm"
+    dc.winrm.username = "vagrant"
+    dc.winrm.password = "vagrant"
+    dc.winrm.transport = :plaintext
+    dc.winrm.basic_auth_only = true
+    dc.vm.network "private_network", ip: "10.20.30.5"
+
+    dc.vm.provider "virtualbox" do |vb|
+      vb.name = "meta4-ad-dc"
+      vb.memory = 3072
+      vb.cpus = 2
+      vb.linked_clone = true
+    end
+
+    dc.vm.provision "shell",
+      path: "provision/dc-baseline.ps1",
+      privileged: true
+  end
+
+  # ----- CA: Enterprise PKI on member server -----
+  config.vm.define "ca" do |ca|
+    ca.vm.box = "jborean93/WindowsServer2019"
+    ca.vm.hostname = "corp-ca01"
+    ca.vm.communicator = "winrm"
+    ca.winrm.username = "vagrant"
+    ca.winrm.password = "vagrant"
+    ca.winrm.transport = :plaintext
+    ca.winrm.basic_auth_only = true
+    ca.vm.network "private_network", ip: "10.20.30.6"
+
+    ca.vm.provider "virtualbox" do |vb|
+      vb.name = "meta4-ad-ca"
+      vb.memory = 2048
+      vb.cpus = 2
+      vb.linked_clone = true
+    end
+
+    ca.vm.provision "shell",
+      path: "provision/ca-baseline.ps1",
+      privileged: true
+  end
+
+  # ----- Attacker: Kali rolling -----
+  config.vm.define "attacker" do |atk|
+    atk.vm.box = "kalilinux/rolling"
+    atk.vm.hostname = "kali-attacker"
+    atk.vm.network "private_network", ip: "10.20.30.10"
+
+    atk.vm.provider "virtualbox" do |vb|
+      vb.name = "meta4-ad-attacker"
+      vb.memory = 3072
+      vb.cpus = 2
+      vb.linked_clone = true
+    end
+
+    atk.vm.provision "shell",
+      path: "provision/attacker-baseline.sh",
+      privileged: true
+  end
+end
