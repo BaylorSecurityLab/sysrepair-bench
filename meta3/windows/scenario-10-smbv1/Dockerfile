@@ -12,6 +12,7 @@ RUN dism /online /enable-feature /featurename:SMB1Protocol /all /NoRestart ; if 
 RUN reg add 'HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' /v SMB1 /t REG_DWORD /d 1 /f
 # Firewall is disabled in the base image; no explicit allow rule required.
 
+COPY smb1_probe.ps1 C:/verify/smb1_probe.ps1
 COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 445 22 5985
