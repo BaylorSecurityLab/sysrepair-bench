@@ -1,0 +1,26 @@
+{
+  "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cmd=$(jq -r \".tool_input.command\"); echo \"$cmd\" | grep -Eiq \"co-authored-by:[[:space:]]*claude\" && printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Blocked by repo hook: commit message contains a Co-Authored-By: Claude trailer. Remove the trailer and retry the commit.\"}}' || true"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git push*)",
+            "command": "bodies=$(git log @{u}..HEAD --format=%B 2>/dev/null || git log -n 20 --format=%B); echo \"$bodies\" | grep -Eiq \"co-authored-by:[[:space:]]*claude\" && printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Blocked by repo hook: one or more unpushed commits contain a Co-Authored-By: Claude trailer. Run noclaude in this repo to rewrite history, then retry the push.\"}}' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
