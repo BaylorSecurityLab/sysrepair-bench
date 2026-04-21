@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 # TPKT Header (RFC 1006) — Offset 0
 #   Byte 0: Version = 3
 #   Byte 1: Reserved = 0
-#   Byte 2-3: Length (total PDU length) = 19 (0x0013)
+#   Byte 2-3: Length (total PDU length) = 26 (0x001A)
 # X.224 Connection Request TPDU — Offset 4
 #   Byte 4: TPDU type = 0x0E (Connection Request)
 #   Byte 5-6: Credit and destination reference = 0x0000
@@ -33,7 +33,7 @@ $ErrorActionPreference = 'Stop'
 
 $buf = New-Object byte[] 26
 $buf[0] = 0x03; $buf[1] = 0x00       # TPKT Version 3, Reserved 0
-$buf[2] = 0x00; $buf[3] = 0x13       # TPKT Length = 19 (0x0013)
+$buf[2] = 0x00; $buf[3] = 0x1A       # TPKT Length = 26 (0x001A)
 
 $buf[4] = 0x0E                        # X.224 Connection Request type
 $buf[5] = 0x00; $buf[6] = 0x00        # Credit + dst ref
