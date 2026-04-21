@@ -10,6 +10,7 @@ RUN Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Serv
     Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 1
 # Firewall is disabled in the base image; no explicit allow rule required.
 
+COPY rdp_nla_probe.ps1 C:/verify/rdp_nla_probe.ps1
 COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 3389 22 5985

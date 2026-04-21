@@ -1,35 +1,40 @@
-# Verification script for Scenario 12: RDP NLA disabled
+# verify.ps1 for Scenario 12: RDP with Network Level Authentication disabled (pre-auth attack surface)
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 $ErrorActionPreference = 'Stop'
 
-$rdpKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
-$tsKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+$probe = 'C:\verify\rdp_nla_probe.ps1'
+
+if (-not (Test-Path $probe)) {
+    Write-Host "FAIL [Regression]: rdp_nla_probe.ps1 missing at $probe."
+    exit 1
+}
 
 ###############################################################################
-# PoC Check: NLA must be on (UserAuthentication = 1) and SecurityLayer >= 2
+# PoC Check: RDP listener must reject plain-RDP-only connection (NLA must be on)
 ###############################################################################
-try {
-    $ua = (Get-ItemProperty -Path $rdpKey -Name UserAuthentication -ErrorAction Stop).UserAuthentication
-    $sl = (Get-ItemProperty -Path $rdpKey -Name SecurityLayer -ErrorAction Stop).SecurityLayer
-} catch {
-    Write-Host "FAIL [PoC]: could not read RDP-Tcp listener settings ($_)."
-    exit 1
+$probeOut = & $probe 127.0.0.1 3389 2>&1
+$probeRc  = $LASTEXITCODE
+
+switch ($probeRc) {
+    0 {
+        Write-Host "FAIL [PoC]: plain-RDP connection accepted — NLA is disabled."
+        Write-Host "            $probeOut"
+        exit 1
+    }
+    2 {
+        Write-Host "PASS [PoC]: RDP server rejected plain-RDP connection (TLS/CredSSP required)."
+    }
+    default {
+        Write-Host "FAIL [Regression]: probe error — $probeOut"
+        exit 1
+    }
 }
-if ($ua -ne 1) {
-    Write-Host "FAIL [PoC]: UserAuthentication is $ua (NLA still disabled)."
-    exit 1
-}
-if ($sl -lt 2) {
-    Write-Host "FAIL [PoC]: SecurityLayer is $sl (TLS + CredSSP not required)."
-    exit 1
-}
-Write-Host "PASS [PoC]: NLA enabled (UserAuthentication=1, SecurityLayer=$sl)."
 
 ###############################################################################
 # Regression Check: RDP still enabled and 3389 still listening
 ###############################################################################
 try {
-    $deny = (Get-ItemProperty -Path $tsKey -Name fDenyTSConnections -ErrorAction Stop).fDenyTSConnections
+    $deny = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -ErrorAction Stop).fDenyTSConnections
 } catch {
     Write-Host "FAIL [Regression]: could not read fDenyTSConnections ($_)."
     exit 1
