@@ -5,10 +5,10 @@ $ErrorActionPreference = 'Stop'
 $svcName = 'MetaVulnSvc'
 $svcKey  = "HKLM:\SYSTEM\CurrentControlSet\Services\$svcName"
 $svcDir  = 'C:\Program Files\Meta Vuln'
+$binDir  = Join-Path $svcDir 'bin'
 
 ###############################################################################
-# PoC Check: either the ImagePath is properly quoted, OR BUILTIN\Users no longer
-# holds write/modify on the service directory tree.
+# Config Check 1: ImagePath must be properly quoted (no unquoted space)
 ###############################################################################
 try {
     $img = (Get-ItemProperty -Path $svcKey -Name ImagePath -ErrorAction Stop).ImagePath
@@ -17,21 +17,28 @@ try {
     exit 1
 }
 
-# Quoted-path check: the executable portion (before the first argument) must be
-# wrapped in double quotes whenever it contains a space.
 $quoted = $false
 $trim = $img.TrimStart()
 if ($trim.StartsWith('"')) {
     $endQuote = $trim.IndexOf('"', 1)
     if ($endQuote -gt 1) { $quoted = $true }
 } else {
-    # Unquoted is only safe if the exe path itself has no spaces
     $firstSpace = $trim.IndexOf(' ')
     $exePart = if ($firstSpace -gt 0) { $trim.Substring(0, $firstSpace) } else { $trim }
     if ($exePart -notmatch ' ') { $quoted = $true }
 }
 
-# ACL check: BUILTIN\Users must not hold Write/Modify/FullControl on the dir tree.
+if (-not $quoted) {
+    Write-Host "FAIL [Config]: ImagePath is unquoted — path traversal possible."
+    Write-Host "           ImagePath = $img"
+    exit 1
+}
+Write-Host "PASS [Config]: ImagePath is properly quoted."
+
+###############################################################################
+# Config Check 2: BUILTIN\Users must not hold Write/Modify/FullControl on the
+# service directory tree (even a quoted path is exploitable if parent is writable).
+###############################################################################
 $aclSafe = $true
 if (Test-Path $svcDir) {
     $acl = Get-Acl -Path $svcDir
@@ -42,24 +49,41 @@ if (Test-Path $svcDir) {
             break
         }
     }
-} else {
-    # Dir gone entirely is also acceptable — the primitive disappears with it.
-    $aclSafe = $true
 }
 
-if (-not $quoted -and -not $aclSafe) {
-    Write-Host "FAIL [PoC]: ImagePath is unquoted AND $svcDir is still user-writable."
-    Write-Host "           ImagePath = $img"
+if (-not $aclSafe) {
+    Write-Host "FAIL [Config]: $svcDir still grants write to BUILTIN\Users."
     exit 1
 }
-if ($quoted) {
-    Write-Host "PASS [PoC]: ImagePath is properly quoted."
-} else {
-    Write-Host "PASS [PoC]: $svcDir no longer grants write to BUILTIN\Users."
-}
+Write-Host "PASS [Config]: service directory not user-writable."
 
 ###############################################################################
-# Regression Check: service still registered (not deleted to dodge the finding)
+# Behavioral Check: attempt to write an executable to the candidate path.
+# This simulates the actual DLL/hijack attack — a patched/fixed system
+# either has no writable path in the chain or rejects the write.
+###############################################################################
+$writeTestPath = Join-Path $binDir 'write_probe.exe'
+$writeBlocked = $false
+try {
+    # Attempt to create a file in the service's bin directory.
+    # If the service runs as LocalSystem or a privileged account and the
+    # parent directory is writable, this succeeds — proof of exploitability.
+    [System.IO.File]::WriteAllText($writeTestPath, "probe")
+    # If WriteAllText succeeded, try to delete it (cleanup)
+    Remove-Item $writeTestPath -Force -ErrorAction SilentlyContinue
+    $writeBlocked = $false
+} catch {
+    $writeBlocked = $true
+}
+
+if (-not $writeBlocked) {
+    Write-Host "FAIL [PoC]: Successfully wrote to $binDir — path is writable, DLL hijack possible."
+    exit 1
+}
+Write-Host "PASS [PoC]: Cannot write to service binary path — DLL hijack blocked."
+
+###############################################################################
+# Regression Check: service still registered
 ###############################################################################
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if (-not $svc) {

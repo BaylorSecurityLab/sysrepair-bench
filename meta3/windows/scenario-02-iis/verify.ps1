@@ -4,27 +4,59 @@ $ErrorActionPreference = 'Stop'
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 ###############################################################################
-# PoC Check 1: directory browsing must be OFF on Default Web Site
+# Config Check 1: directory browsing must be OFF on Default Web Site
 ###############################################################################
 $dirBrowse = (Get-WebConfigurationProperty -Filter '/system.webServer/directoryBrowse' `
     -PSPath 'IIS:\Sites\Default Web Site' -Name enabled).Value
 if ($dirBrowse -eq $true) {
-    Write-Host "FAIL [PoC]: directoryBrowse is still enabled on Default Web Site."
+    Write-Host "FAIL [Config]: directoryBrowse is still enabled on Default Web Site."
     exit 1
 }
-Write-Host "PASS [PoC]: directoryBrowse disabled."
+Write-Host "PASS [Config]: directoryBrowse disabled."
 
 ###############################################################################
-# PoC Check 2: TRACE verb must not be allowed
+# Config Check 2: TRACE verb must not be allowed
 ###############################################################################
 $verbs = Get-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' `
     -Filter '/system.webServer/security/requestFiltering/verbs/add'
 $traceAllowed = $verbs | Where-Object { $_.verb -eq 'TRACE' -and $_.allowed -eq $true }
 if ($traceAllowed) {
-    Write-Host "FAIL [PoC]: TRACE verb is still allowed in requestFiltering."
+    Write-Host "FAIL [Config]: TRACE verb is still allowed in requestFiltering."
     exit 1
 }
-Write-Host "PASS [PoC]: TRACE verb not allowed."
+Write-Host "PASS [Config]: TRACE verb not allowed."
+
+###############################################################################
+# Behavioral Check: TRACE HTTP method must return 405 (not echoed)
+# Even if config says TRACE is blocked, verify the server actually rejects it.
+###############################################################################
+try {
+    $resp = Invoke-WebRequest -Uri 'http://localhost/' -Method TRACE -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
+    # 2xx on TRACE = server echoes the request = vulnerability present
+    if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
+        Write-Host "FAIL [PoC]: TRACE accepted (HTTP $($resp.StatusCode) — request was echoed)."
+        exit 1
+    }
+    Write-Host "PASS [PoC]: TRACE rejected (HTTP $($resp.StatusCode))."
+} catch {
+    # Non-2xx = TRACE not accepted (good) — includes 405 Method Not Allowed
+    # $_.Exception.Message may indicate the request was refused entirely
+    Write-Host "PASS [PoC]: TRACE not accepted (request rejected or 405)."
+}
+
+###############################################################################
+# Behavioral Check: directory listing must not be served on root
+###############################################################################
+try {
+    $indexResp = Invoke-WebRequest -Uri 'http://localhost/' -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
+    if ($indexResp.StatusCode -eq 200 -and $indexResp.Content -match '<title>.*directory|browse|listing|<li>[^<]*\.(txt|html?|css|js)</i>') {
+        Write-Host "FAIL [PoC]: Directory listing exposed on root."
+        exit 1
+    }
+} catch {
+    # Error or redirect — fine, no directory listing
+}
+Write-Host "PASS [PoC]: No directory listing served."
 
 ###############################################################################
 # Regression Check: W3SVC running and port 80 responding
@@ -43,7 +75,6 @@ try {
         exit 1
     }
 } catch {
-    # 403/404 throw — treat those as 'site is up, just no default doc' which is fine
     if ($_.Exception.Response.StatusCode.value__ -notin 200,403,404) {
         Write-Host "FAIL [Regression]: HTTP/80 not responding ($_)."
         exit 1

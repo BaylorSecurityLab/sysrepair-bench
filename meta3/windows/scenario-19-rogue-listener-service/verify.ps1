@@ -3,51 +3,80 @@
 $ErrorActionPreference = 'Stop'
 
 $svcName  = 'WinTelemetrySvc'
+$svcDisplayName = 'Windows Telemetry Service'
 $payload  = 'C:\ProgramData\WinTelemetry'
 $fwRule   = 'WinTelemetry-4444'
+$roguePort = 4444
 
 ###############################################################################
-# PoC Check 1: the service must be gone
+# Config Check 1: the service must be gone
 ###############################################################################
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if ($svc) {
-    Write-Host "FAIL [PoC]: service $svcName still registered (status=$($svc.Status))."
+    Write-Host "FAIL [Config]: service $svcName still registered (status=$($svc.Status))."
     exit 1
 }
-Write-Host "PASS [PoC]: service $svcName deleted."
+Write-Host "PASS [Config]: service $svcName deleted."
 
 ###############################################################################
-# PoC Check 2: the payload directory must be gone
+# Config Check 2: the payload directory must be gone
 ###############################################################################
 if (Test-Path $payload) {
-    Write-Host "FAIL [PoC]: payload directory $payload still present."
+    Write-Host "FAIL [Config]: payload directory $payload still present."
     exit 1
 }
-Write-Host "PASS [PoC]: payload directory removed."
+Write-Host "PASS [Config]: payload directory removed."
 
 ###############################################################################
-# PoC Check 3: the inbound firewall rule must be gone
+# Config Check 3: the inbound firewall rule must be gone
 ###############################################################################
 $rule = Get-NetFirewallRule -DisplayName $fwRule -ErrorAction SilentlyContinue
 if ($rule) {
-    Write-Host "FAIL [PoC]: firewall rule '$fwRule' still present."
+    Write-Host "FAIL [Config]: firewall rule '$fwRule' still present."
     exit 1
 }
-Write-Host "PASS [PoC]: firewall rule removed."
+Write-Host "PASS [Config]: firewall rule removed."
 
 ###############################################################################
-# PoC Check 4: nothing is listening on 4444/TCP
+# Behavioral Check: nothing is listening on 4444/TCP and accepting connections.
+# Even if the service is gone, a rogue listener may still bind the port.
+# We probe by opening a TCP connection and receiving any bytes — a bind shell
+# will either send a banner or hang waiting for input.
 ###############################################################################
-$listening = Get-NetTCPConnection -LocalPort 4444 -State Listen -ErrorAction SilentlyContinue
-if ($listening) {
-    $pids = ($listening.OwningProcess | Sort-Object -Unique) -join ','
-    Write-Host "FAIL [PoC]: something is still listening on 4444/TCP (pid=$pids)."
+$listener = $null
+try {
+    $tcpTest = Test-NetConnection -ComputerName localhost -Port $roguePort `
+        -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    if ($tcpTest.TcpTestSucceeded) { $listener = $tcpTest }
+} catch {}
+
+if ($listener) {
+    # Port is open — try to read any banner bytes to confirm it's the rogue shell
+    $bannerBytes = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $client.Connect('localhost', $roguePort)
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = 3000
+        $buf = New-Object byte[] 256
+        $bytesRead = $stream.Read($buf, 0, 256)
+        if ($bytesRead -gt 0) {
+            $bannerBytes = [System.Text.Encoding]::ASCII.GetString($buf, 0, $bytesRead)
+        }
+        $client.Close()
+    } catch {}
+
+    if ($bannerBytes) {
+        Write-Host "FAIL [PoC]: Port 4444 responds with banner: $bannerBytes"
+    } else {
+        Write-Host "FAIL [PoC]: Port 4444 accepts connections — no banner but listener present."
+    }
     exit 1
 }
-Write-Host "PASS [PoC]: nothing listening on 4444/TCP."
+Write-Host "PASS [PoC]: nothing listening on 4444/TCP (probe connection refused)."
 
 ###############################################################################
-# PoC Check 5: no other services hide a PowerShell -File/-enc payload under
+# Behavioral Check: no other services hide a PowerShell -File/-enc payload under
 # ProgramData or Users\Public (the common masquerade pattern).
 ###############################################################################
 $masq = Get-CimInstance Win32_Service | Where-Object {
