@@ -5,6 +5,102 @@ Ubuntu 22.04 kernel** and Docker pre-installed. The three kernel-level
 LPE scenarios run as containers inside this VM so they share its
 vulnerable kernel.
 
+## Host prerequisites
+
+You need a host machine with hardware virtualization available to
+VirtualBox. The VM itself is Ubuntu 22.04; the host can be Windows or
+Linux.
+
+### Windows 10 / 11
+
+**BIOS/UEFI (one-time, reboot required):**
+- Enable **Intel VT-x** / **AMD-V** (labelled "Virtualization Technology"
+  or "SVM Mode" in most firmwares)
+- Recommended: also enable **Intel VT-d** / **AMD-Vi** ("IOMMU")
+
+**Turn OFF the Hyper-V stack.** VirtualBox can't get full hardware
+virtualization while Hyper-V has claimed it. From an elevated
+PowerShell:
+
+```powershell
+# Disable every feature that pulls in the hypervisor (ignore errors
+# for features already off or unavailable on Home editions).
+dism.exe /Online /Disable-Feature:Microsoft-Hyper-V-All /NoRestart
+dism.exe /Online /Disable-Feature:VirtualMachinePlatform /NoRestart
+dism.exe /Online /Disable-Feature:HypervisorPlatform /NoRestart
+dism.exe /Online /Disable-Feature:Containers /NoRestart
+
+# Force the hypervisor off at boot even if a stray feature flips back on.
+bcdedit /set hypervisorlaunchtype off
+```
+
+Also open **Windows Security → Device security → Core isolation** and
+turn **Memory Integrity OFF** — it's Virtualization-Based Security and
+will block VT-x from reaching VirtualBox.
+
+**Reboot** after the changes above.
+
+> If you need WSL2 alongside VirtualBox, VirtualBox 7.1+ does work over
+> the Windows Hypervisor Platform backend, but VM performance is
+> noticeably slower. For kernel-level work we recommend disabling the
+> Hyper-V stack entirely as above.
+
+**Toolchain — Scoop-first.** Install [Scoop](https://scoop.sh) first:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+irm get.scoop.sh | iex
+```
+
+Then install everything Scoop can give you:
+
+```powershell
+# Main bucket: git + vagrant
+scoop install git vagrant
+
+# VirtualBox lives in the "extras" bucket
+scoop bucket add extras
+scoop install virtualbox
+```
+
+Log out and back in (or open a new shell) so `VBoxManage` lands on PATH.
+Verify:
+
+```powershell
+vagrant --version      # 2.4.x
+VBoxManage --version   # 7.x
+```
+
+**Cannot be installed via Scoop — handle manually:**
+
+| Item | How |
+|---|---|
+| BIOS virtualization (VT-x / AMD-V) | Firmware setup; see above |
+| Hyper-V / Memory Integrity off | `dism` + Windows Security UI; see above |
+| (Optional) VirtualBox Extension Pack | Only needed for USB 2/3 passthrough or PXE boot — not required for this VM. Download from [virtualbox.org](https://www.virtualbox.org/wiki/Downloads) and run `VBoxManage extpack install <file>.vbox-extpack` |
+
+### Ubuntu / Debian (22.04+) host
+
+```bash
+# Make sure BIOS virtualization is enabled (same firmware-level step
+# as the Windows guidance above).
+
+sudo apt update
+sudo apt install -y virtualbox vagrant
+
+# Let your user talk to VirtualBox without sudo.
+sudo usermod -aG vboxusers "$USER"
+# Log out and back in for the group to take effect, then:
+
+vagrant --version
+VBoxManage --version
+```
+
+If the host already runs KVM/libvirt, VirtualBox will fight it for
+`/dev/kvm`. Either stop the `libvirtd` service while you use this VM,
+or switch to the `libvirt` Vagrant provider (not wired up in this
+Vagrantfile — would require a `config.vm.provider :libvirt` block).
+
 ## Quick start
 
 ```bash
@@ -57,11 +153,13 @@ Kernel-LPE scenarios need elevated container privileges to interact with
 the host kernel:
 
 ```bash
-# GameOverlay requires user namespaces (default on Ubuntu)
+# Both probes try `unshare -U` as an unprivileged user inside the
+# container; Docker's default seccomp profile blocks that syscall, so
+# the behavioral check needs --privileged to reach the host kernel's
+# actual userns behavior. Without --privileged, the probe reports
+# "unshare blocked" due to container confinement, not a patched host.
 docker run --rm --privileged s21 bash /verify.sh
-
-# nf_tables requires CAP_NET_ADMIN (for nftables access)
-docker run --rm --cap-add=NET_ADMIN s22 bash /verify.sh
+docker run --rm --privileged s22 bash /verify.sh
 ```
 
 ## Tearing down
