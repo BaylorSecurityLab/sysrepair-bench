@@ -45,15 +45,34 @@ Emit audit_user_account_mgmt 2 ($auditUam -match "Success") "auditpol UAM output
 $auditSi = (auditpol.exe /get /subcategory:"System Integrity") -join "`n"
 Emit audit_system_integrity 2 ($auditSi -match "Success") "auditpol SI output"
 
-# 6. IIS Default Web Site requires SSL (sslFlags != None)
-$sslFlags = $null
+# 6. IIS Default Web Site requires SSL. sslFlags is a flag enum:
+#   0=None, 8=Ssl, 32=Ssl128, 64=SslNegotiateCert, 128=SslRequireCert, 256=SslMapCert.
+# Get-WebConfigurationProperty returns *different shapes* for this property:
+#   - when sslFlags=0 (None): a ConfigurationAttribute whose .Value is the int 0
+#   - when any flag is set:   a bare string like "Ssl,SslRequireCert"
+# The previous check read .Value unconditionally and then compared against the
+# literal "None" — which passed on the baseline (Value=0 ≠ "None") giving 3
+# unearned points. Use appcmd.exe as the canonical source instead: it always
+# returns the XML attribute text, so parsing is uniform across all states.
+$sslFlagsText = ""
 try {
-    $sslFlags = (Get-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" `
-        -Filter "system.webServer/security/access" -Name "sslFlags" `
-        -Location "Default Web Site" -ErrorAction SilentlyContinue).Value
+    $appcmd = "$env:WINDIR\System32\inetsrv\appcmd.exe"
+    if (Test-Path $appcmd) {
+        $cfg = & $appcmd list config "Default Web Site" -section:access 2>$null
+        foreach ($line in ($cfg -split "`n")) {
+            if ($line -match 'sslFlags\s*=\s*"([^"]*)"') {
+                $sslFlagsText = $Matches[1]
+                break
+            }
+        }
+    }
 } catch {}
-$sslOk = ($null -ne $sslFlags) -and ("$sslFlags" -ne "" ) -and ("$sslFlags" -ne "None")
-Emit iis_ssl_required 3 $sslOk "sslFlags=$sslFlags"
+# Parse: numeric → bitmask; string → Ssl flag name match.
+$flagsNumeric = 0
+if ($sslFlagsText -match '^\d+$')       { $flagsNumeric = [int]$sslFlagsText }
+elseif ($sslFlagsText -match '(?i)ssl') { $flagsNumeric = 8 }
+$sslOk = ($flagsNumeric -band 8) -ne 0
+Emit iis_ssl_required 3 $sslOk "sslFlags=$sslFlagsText"
 
 # 7. phpinfo.php dropped file removed
 Emit phpinfo_removed 3 (-not (Test-Path $phpinfoPath)) "$phpinfoPath"
