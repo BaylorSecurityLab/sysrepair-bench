@@ -18,14 +18,35 @@ Vagrant.configure("2") do |config|
   config.winrm.username = "vagrant"
   config.winrm.password = "vagrant"
 
-  config.vm.provider "virtualbox" do |vb|
+  config.vm.provider "virtualbox" do |vb, override|
     vb.gui = false
     vb.memory = 4096
     vb.cpus   = 2
     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+    override.vm.network "private_network", ip: "192.168.56.13"
   end
 
-  config.vm.network "private_network", ip: "192.168.56.13"
+  config.vm.provider "hyperv" do |hv, override|
+    hv.memory = 4096
+    hv.cpus   = 2
+    hv.enable_virtualization_extensions = false
+    hv.linked_clone = true
+    # Hyper-V would otherwise SMB-share ./ into /vagrant and prompt for the
+    # host user's password. Upload files via the `file` provisioner below
+    # instead so no SMB credentials are needed.
+    override.vm.synced_folder ".", "/vagrant", disabled: true
+  end
+
+  # Upload files over WinRM (provider-agnostic, replaces the C:\vagrant share).
+  config.vm.provision "file",
+    source: "build/roles.json",
+    destination: "C:/Users/vagrant/provisioning/roles.json"
+  config.vm.provision "file",
+    source: "seed.ps1",
+    destination: "C:/Users/vagrant/provisioning/seed.ps1"
+  config.vm.provision "file",
+    source: "verify.ps1",
+    destination: "C:/Users/vagrant/provisioning/verify.ps1"
 
   # Stage 1: promote to DC. Needs reboot.
   config.vm.provision "shell",
@@ -39,7 +60,7 @@ Vagrant.configure("2") do |config|
 
       # Roles.json landing spot.
       New-Item -ItemType Directory -Path 'C:\\ProgramData\\sysrepair' -Force | Out-Null
-      Copy-Item 'C:\\vagrant\\build\\roles.json' 'C:\\ProgramData\\sysrepair\\roles.json' -Force
+      Copy-Item 'C:\\Users\\vagrant\\provisioning\\roles.json' 'C:\\ProgramData\\sysrepair\\roles.json' -Force
       icacls 'C:\\ProgramData\\sysrepair\\roles.json' /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' | Out-Null
 
       if (-not (Get-WindowsFeature AD-Domain-Services).Installed) {
@@ -65,8 +86,8 @@ Vagrant.configure("2") do |config|
     name: "seed-misconfigs",
     inline: <<~PS1, privileged: true, powershell_elevated_interactive: true
       $ErrorActionPreference = "Continue"
-      Copy-Item 'C:\\vagrant\\seed.ps1'   'C:\\ProgramData\\sysrepair\\seed.ps1'   -Force
-      Copy-Item 'C:\\vagrant\\verify.ps1' 'C:\\ProgramData\\sysrepair\\verify.ps1' -Force
+      Copy-Item 'C:\\Users\\vagrant\\provisioning\\seed.ps1'   'C:\\ProgramData\\sysrepair\\seed.ps1'   -Force
+      Copy-Item 'C:\\Users\\vagrant\\provisioning\\verify.ps1' 'C:\\ProgramData\\sysrepair\\verify.ps1' -Force
       powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\ProgramData\\sysrepair\\seed.ps1'
       Remove-Item 'C:\\ProgramData\\sysrepair\\seed.ps1' -Force
     PS1

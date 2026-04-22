@@ -103,7 +103,7 @@ Set-ItemProperty -Path $wdigest -Name 'UseLogonCredential' -Value 1 -Type DWord
 # We can't actually rewind LastPasswordSet on krbtgt; instead drop a decoy
 # marker file the verifier reads.
 Set-Content -Path C:\ProgramData\sysrepair\krbtgt-stale.marker `
-            -Value "planted by seed.ps1 — krbtgt rotation pending"
+            -Value "planted by seed.ps1 - krbtgt rotation pending"
 
 # Lock down roles.json so the in-box agent cannot read it as a non-admin.
 icacls 'C:\ProgramData\sysrepair\roles.json' /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null
