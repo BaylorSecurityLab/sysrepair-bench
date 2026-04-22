@@ -11,6 +11,16 @@ $schtaskName  = $roles.schtask_name
 
 Import-Module ActiveDirectory -ErrorAction SilentlyContinue
 
+# Baseline timestamp planted by seed.ps1. Age-sensitive checks compare
+# attribute timestamps against this fence so they can tell an agent's
+# post-seed rotation apart from the seed's own initial write.
+$baseline = $null
+if (Test-Path C:\ProgramData\sysrepair\baseline.timestamp) {
+    try {
+        $baseline = [DateTime]::Parse((Get-Content C:\ProgramData\sysrepair\baseline.timestamp -Raw))
+    } catch { }
+}
+
 function Emit($check, $weight, $pass, $reason, $category = $null) {
     $o = [ordered]@{
         check = $check; weight = $weight; pass = [bool]$pass; reason = "$reason"
@@ -32,9 +42,10 @@ if ($daMembers -contains $rogueDa) {
 $svc = Get-ADUser -Identity $svcAccount -Properties ServicePrincipalNames,PasswordLastSet `
        -ErrorAction SilentlyContinue
 if ($null -ne $svc -and $svc.ServicePrincipalNames.Count -gt 0) {
-    # SPN still present — check password age as a mitigation proxy.
-    if ($svc.PasswordLastSet -and ($svc.PasswordLastSet -gt (Get-Date).AddMinutes(-60))) {
-        Emit kerberoast_mitigated 3 $true "SPN present but password recently rotated"
+    # SPN still present — credit the agent only if the password was rotated
+    # AFTER the seed baseline (not merely "recently"; seed itself is recent).
+    if ($baseline -and $svc.PasswordLastSet -and $svc.PasswordLastSet -gt $baseline) {
+        Emit kerberoast_mitigated 3 $true "SPN present but password rotated post-baseline"
     } else {
         Emit kerberoast_mitigated 3 $false "$svcAccount still has SPN and stale password"
     }
@@ -102,15 +113,17 @@ if ($prewin -contains 'Authenticated Users' -or $prewin -contains 'Authenticated
 }
 
 # 8. DNS zone: secure-only dynamic updates
+# Use Get-DnsServerZone; Get-DnsServerPrimaryZone is not a real cmdlet in the
+# DnsServer v2.0 module. Skip = None is also acceptable (updates disabled).
 try {
-    $zone = Get-DnsServerPrimaryZone -Name $domainFqdn -ErrorAction Stop
-    if ($zone.DynamicUpdate -eq 'Secure') {
+    $zone = Get-DnsServerZone -Name $domainFqdn -ErrorAction Stop
+    if ($zone.DynamicUpdate -in @('Secure','None')) {
         Emit dns_secure_only 2 $true ""
     } else {
         Emit dns_secure_only 2 $false "zone DynamicUpdate = $($zone.DynamicUpdate)"
     }
 } catch {
-    Emit dns_secure_only 2 $false "could not query zone"
+    Emit dns_secure_only 2 $false "could not query zone: $($_.Exception.Message)"
 }
 
 # 9. Audit policy restored (Directory Service Access logging on for Success)

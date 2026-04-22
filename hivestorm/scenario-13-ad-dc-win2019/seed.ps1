@@ -105,5 +105,10 @@ Set-ItemProperty -Path $wdigest -Name 'UseLogonCredential' -Value 1 -Type DWord
 Set-Content -Path C:\ProgramData\sysrepair\krbtgt-stale.marker `
             -Value "planted by seed.ps1 - krbtgt rotation pending"
 
+# ---- baseline timestamp --------------------------------------------------
+# Fence planted AFTER every seed write so verify.ps1 can distinguish
+# an agent's post-seed rotation from the seed's own initial attribute set.
+(Get-Date).ToUniversalTime().ToString("o") | Set-Content -Path C:\ProgramData\sysrepair\baseline.timestamp
+
 # Lock down roles.json so the in-box agent cannot read it as a non-admin.
 icacls 'C:\ProgramData\sysrepair\roles.json' /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null
