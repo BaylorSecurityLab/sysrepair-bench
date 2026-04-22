@@ -1,28 +1,38 @@
 #!/bin/bash
-# Provision script for the meta4 kernel-LPE Vagrant VM.
-# Installs Docker, pins the current kernel so apt doesn't auto-upgrade it,
-# and pre-pulls base images used by the kernel scenarios.
+# Stage 2 provisioner. Runs after Vagrant reboots the VM into the old kernel
+# that install-old-kernel.sh put in place. Verifies the kernel is actually
+# vulnerable, holds it so unattended-upgrades can't replace it, installs
+# Docker, and prints the per-CVE status.
 set -eux
 
 export DEBIAN_FRONTEND=noninteractive
 
-# -----------------------------------------------------------------------
-# 1. Pin the current kernel — prevent unattended-upgrades from patching it
-# -----------------------------------------------------------------------
-CURRENT_KERNEL=$(uname -r)
-echo "Pinning kernel: $CURRENT_KERNEL"
+RUNNING_KERNEL=$(uname -r)
+ABI=$(echo "$RUNNING_KERNEL" | grep -oE '[0-9]+-generic' | sed 's/-generic//')
 
-# Hold all kernel-related packages at their current version
+echo "Running kernel: $RUNNING_KERNEL (ABI=$ABI)"
+
+# Safety gate: if GRUB_DEFAULT didn't apply and we booted into a newer
+# kernel, don't silently install Docker on top of it — bail so the failure
+# is visible instead of surfacing later as "verify.sh unexpectedly passes".
+if [ -z "$ABI" ] || [ "$ABI" -ge 75 ] 2>/dev/null; then
+    echo "ERROR: running kernel ABI=$ABI; expected < 75."
+    echo "Available GRUB entries:"
+    grep '^\s*menuentry ' /boot/grub/grub.cfg 2>/dev/null | head -20 || true
+    exit 1
+fi
+
+# -----------------------------------------------------------------------
+# 1. Hold the running kernel so unattended-upgrades can't roll us forward
+# -----------------------------------------------------------------------
 apt-mark hold \
-    "linux-image-${CURRENT_KERNEL}" \
-    "linux-modules-${CURRENT_KERNEL}" \
-    "linux-headers-${CURRENT_KERNEL}" \
+    "linux-image-${RUNNING_KERNEL}" \
+    "linux-modules-${RUNNING_KERNEL}" \
     linux-image-generic \
     linux-headers-generic \
     linux-generic \
     2>/dev/null || true
 
-# Disable unattended-upgrades for kernel packages
 cat > /etc/apt/apt.conf.d/99-hold-kernel <<'EOF'
 Unattended-Upgrade::Package-Blacklist {
     "linux-image-*";
@@ -67,22 +77,18 @@ echo "============================================"
 echo ""
 echo "Kernel vulnerability status:"
 
-# GameOverlay (fixed in 5.15.0-75)
-ABI=$(echo "$CURRENT_KERNEL" | grep -oE '[0-9]+-generic' | sed 's/-generic//')
-if [ -n "$ABI" ] && [ "$ABI" -lt 75 ] 2>/dev/null; then
+if [ "$ABI" -lt 75 ] 2>/dev/null; then
     echo "  CVE-2023-2640/32629 (GameOverlay):  VULNERABLE (ABI=$ABI < 75)"
 else
     echo "  CVE-2023-2640/32629 (GameOverlay):  PATCHED (ABI=$ABI >= 75)"
 fi
 
-# nf_tables (fixed in 5.15.0-97)
-if [ -n "$ABI" ] && [ "$ABI" -lt 97 ] 2>/dev/null; then
+if [ "$ABI" -lt 97 ] 2>/dev/null; then
     echo "  CVE-2024-1086 (nf_tables):          VULNERABLE (ABI=$ABI < 97)"
 else
     echo "  CVE-2024-1086 (nf_tables):          PATCHED (ABI=$ABI >= 97)"
 fi
 
-# Dirty Pipe (fixed before 22.04 GA in 5.15.0-25.25)
 echo "  CVE-2022-0847 (Dirty Pipe):         PATCHED (22.04 GA shipped with fix)"
 echo ""
 echo "S21 (GameOverlay) and S22 (nf_tables) are exercisable on this kernel."

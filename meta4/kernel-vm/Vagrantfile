@@ -11,18 +11,21 @@
 # Usage:
 #   vagrant up
 #   vagrant ssh
-#   cd /vagrant && docker build -t s21 scenario-21 && docker run --rm s21 bash verify.sh
+#   cd /meta4 && sudo docker build -t s21 scenario-21 && sudo docker run --rm --privileged s21 bash /verify.sh
 #
-# Kernel matrix:
-#   5.15.0-52-generic covers S21 (GameOverlay) and S22 (nf_tables).
-#   S19 (Dirty Pipe) was fixed before Ubuntu 22.04 GA — see README for
-#   the separate 20.04 HWE kernel path.
+# Kernel landing: install-old-kernel.sh (stage 1) explicitly installs
+# 5.15.0-25-generic (22.04 GA kernel, pre-GameOverlay and pre-nf_tables
+# fixes) and points GRUB at it; Vagrant reboots; provision.sh (stage 2)
+# then holds that kernel and installs Docker on top. We do NOT rely on
+# the box image shipping a vulnerable kernel by itself — Canonical
+# refreshes the jammy64 box periodically and the shipped ABI has since
+# moved past the fix lines.
+#
+# S19 (Dirty Pipe) was fixed before Ubuntu 22.04 GA — see README for
+# the separate 20.04 HWE kernel path.
 
 Vagrant.configure("2") do |config|
   config.vm.box = "ubuntu/jammy64"
-  # Pin a pre-July-2023 box so the shipped kernel predates GameOverlay fix
-  # Pin a pre-July-2023 box so the shipped kernel predates GameOverlay fix (5.15.0-75)
-  config.vm.box_version = "20230602.0.0"
   config.vm.hostname = "meta4-kernel"
 
   config.vm.provider "virtualbox" do |vb|
@@ -31,6 +34,9 @@ Vagrant.configure("2") do |config|
     vb.cpus   = 2
   end
 
+  # Stage 1: install the old kernel, repoint GRUB, reboot into it.
+  config.vm.provision "shell", path: "install-old-kernel.sh", reboot: true
+  # Stage 2: runs on the old kernel — hold it, install Docker, report.
   config.vm.provision "shell", path: "provision.sh"
 
   # Mount the meta4 scenario directories into the VM
