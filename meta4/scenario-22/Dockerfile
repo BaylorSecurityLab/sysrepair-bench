@@ -10,4 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         iptables nftables ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+COPY verify.sh /verify.sh
+RUN sed -i 's/\r$//' /verify.sh && chmod +x /verify.sh
+
 CMD ["/bin/bash", "-c", "tail -f /dev/null"]
