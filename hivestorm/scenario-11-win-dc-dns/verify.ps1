@@ -63,9 +63,11 @@ Emit dns_event_log_level 2 (($null -ne $ev) -and ($ev -ge 2)) "EventLogLevel=$ev
 $enum = GetDword "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI" "EnumerateAdministrators"
 Emit credui_no_enumerate 2 ($enum -eq 0) "EnumerateAdministrators=$enum"
 
-# 10. Print Spooler disabled
+# 10. Print Spooler disabled — seed registers Spooler in SCM so the service
+# always exists at verify time. Absence therefore signals a seed failure, not
+# a pass: require presence + StartType=Disabled to earn the weight.
 $sp = Get-Service -Name Spooler -ErrorAction SilentlyContinue
-$spOk = ($null -eq $sp) -or ($sp.StartType -eq "Disabled")
+$spOk = ($null -ne $sp) -and ($sp.StartType -eq "Disabled")
 Emit spooler_disabled 2 $spOk "StartType=$($sp.StartType)"
 
 # 11. WinRM disabled

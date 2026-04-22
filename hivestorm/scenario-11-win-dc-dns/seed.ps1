@@ -51,6 +51,17 @@ PlantDword "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\CredUI" `
            "EnumerateAdministrators" 1
 
 # ---- Print Spooler running (Automatic) --------------------------------------
+# Server-Core containers ship with the Print-Server feature stripped and no
+# installation media bundled (Install-WindowsFeature fails with 0x800f081f).
+# Register a Spooler service entry directly via sc.exe — that writes the SCM
+# registry hive at HKLM:\SYSTEM\CurrentControlSet\Services\Spooler, which is
+# all Get-Service / Set-Service read. The defender's remediation (disable the
+# service = write Start=4) is purely a registry op, so the binary never has
+# to exist for the check to score faithfully.
+if (-not (Get-Service -Name Spooler -ErrorAction SilentlyContinue)) {
+    sc.exe create Spooler binPath= 'C:\Windows\System32\spoolsv.exe' `
+        start= auto DisplayName= 'Print Spooler' | Out-Null
+}
 Set-Service -Name Spooler -StartupType Automatic -ErrorAction SilentlyContinue
 
 # ---- WinRM Automatic --------------------------------------------------------
