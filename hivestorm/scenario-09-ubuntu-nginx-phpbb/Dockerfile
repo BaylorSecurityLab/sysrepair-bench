@@ -15,7 +15,8 @@ FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        nginx openssh-server sudo ufw jq libpam-pwquality \
+        nginx openssh-server openssh-client sshpass pamtester \
+        sudo ufw jq libpam-pwquality cron rsyslog curl \
         coreutils procps iproute2 ca-certificates \
         aircrack-ng nmap hydra \
     && rm -rf /var/lib/apt/lists/*
@@ -30,5 +31,6 @@ RUN chmod 0600 /etc/sysrepair/roles.json \
 
 EXPOSE 80 22
 
-# nginx in foreground so :80 probe works at submit time.
-CMD ["nginx", "-g", "daemon off;"]
+# Supervisor starts sshd/cron/nginx so behavioural probes (ssh login, cron
+# spawn, HTTP) all exercise live subsystems at submit time.
+CMD ["/usr/local/sbin/hs-start.sh"]

@@ -14,7 +14,8 @@ echo 'Acquire::Check-Valid-Until "false";' >/etc/apt/apt.conf.d/99no-check-valid
 apt-get update
 apt-get install -y --no-install-recommends \
     jq sudo cron rsyslog procps iproute2 curl perl \
-    openssh-server postgresql ufw \
+    openssh-server openssh-client sshpass pamtester \
+    postgresql postgresql-client ufw \
     apache2 bind9 \
     libpam-pwquality
 
@@ -54,6 +55,12 @@ echo "${HIDDEN}:changeme" | chpasswd
 sed -ri 's/\bsha512\b/md5/' /etc/pam.d/common-password || true
 # Strip pwquality/cracklib line entirely.
 sed -ri '/pam_pwquality|pam_cracklib/d' /etc/pam.d/common-password
+# After stripping pwquality, pam_unix's use_authtok/try_first_pass have no
+# upstream provider — strip them so chpasswd/passwd can actually set the pw
+# (otherwise the PAM stack is broken and NO password change succeeds, which
+# would be more brittle than the misconfig we want to seed).
+sed -ri 's/[[:space:]]+use_authtok//; s/[[:space:]]+try_first_pass//' \
+    /etc/pam.d/common-password
 # Allow null passwords via pam_unix in common-auth.
 sed -ri 's|(pam_unix\.so)(.*)|\1\2 nullok|' /etc/pam.d/common-auth
 

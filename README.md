@@ -2,7 +2,7 @@
 
 ## Overview
 
-SysRepair-Bench evaluates autonomous agents on their ability to **remediate** misconfigurations, vulnerable dependencies, unsafe permissions on real systems. Each scenario is a reproducible Docker container/ Virtual Machine seeded with a known-vulnerable state drawn from public red-team material (CCDC hardening checklists, the Metasploitable 2 OpenVAS report, VulnHub VM write-ups, the Metasploitable 3 OpenVAS report, Hivestorm, Newly Designed Metasploitable 4 VM).
+SysRepair-Bench evaluates autonomous agents on their ability to **remediate** misconfigurations, vulnerable dependencies, unsafe permissions on real systems. Each scenario is a reproducible Docker container/ Virtual Machine seeded with a known-vulnerable state drawn from public red-team material (CCDC hardening checklists, the Metasploitable 2 OpenVAS report, VulnHub VM write-ups, the Metasploitable 3 OpenVAS report, Hivestorm, Newly Designed Metasploitable 4).
 
 For each scenario, given only the running container and Optional(threat description), an agent must perform system-administration actions (edit configuration, install/remove packages, adjust permissions, manage services, etc.) until:
 

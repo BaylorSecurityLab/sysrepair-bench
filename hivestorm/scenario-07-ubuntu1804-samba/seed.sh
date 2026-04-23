@@ -14,7 +14,8 @@ EOF
 apt-get update
 apt-get install -y --no-install-recommends \
     jq sudo cron rsyslog procps iproute2 curl perl \
-    openssh-server samba ufw \
+    openssh-server openssh-client sshpass pamtester \
+    samba smbclient netcat-openbsd ufw \
     ircd-irc2 \
     libpam-pwquality
 
@@ -48,12 +49,19 @@ chmod 0440 /etc/sudoers.d/90-${UNAUTH}
 useradd -u 997 -M -d /nonexistent -s /bin/bash "$HIDDEN" || true
 echo "${HIDDEN}:changeme" | chpasswd
 
-# Flip 'irc' system user to a login shell.
+# Flip 'irc' system user to a login shell and give it a password so the
+# behavioural login probe can exercise the misconfig (vs. system default
+# /usr/sbin/nologin + locked pw, which no probe could reach).
 usermod -s /bin/bash irc 2>/dev/null || true
+echo 'irc:changeme' | chpasswd 2>/dev/null || true
 
 # ---- PAM ---------------------------------------------------------------------
 sed -ri 's|(pam_unix\.so)(.*)|\1\2 nullok|' /etc/pam.d/common-auth
 sed -ri '/pam_pwquality|pam_cracklib/d' /etc/pam.d/common-password
+# After dropping pwquality, pam_unix's use_authtok/try_first_pass have no
+# upstream token provider — strip them so chpasswd/passwd still work.
+sed -ri 's/[[:space:]]+use_authtok//; s/[[:space:]]+try_first_pass//' \
+    /etc/pam.d/common-password
 
 # ---- sysctl ------------------------------------------------------------------
 cat >/etc/sysctl.d/99-hs-bad.conf <<'EOF'

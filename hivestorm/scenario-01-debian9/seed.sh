@@ -18,7 +18,8 @@ echo 'Acquire::Check-Valid-Until "false";' >/etc/apt/apt.conf.d/99no-check-valid
 apt-get update
 apt-get install -y --no-install-recommends \
     jq sudo cron rsyslog procps iproute2 curl \
-    openssh-server apache2 mariadb-server \
+    openssh-server openssh-client sshpass \
+    apache2 mariadb-server \
     php libapache2-mod-php php-mysql \
     netcat-traditional
 

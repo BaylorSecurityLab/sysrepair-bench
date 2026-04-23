@@ -1,0 +1,9 @@
+Outer engine must run this container with --privileged.
+This image is FROM docker:24-dind — the inner dockerd cannot create
+namespaces / mount overlayfs without outer privileged mode, and the
+seeded workload + backdoor containers will fail to start, which in
+turn makes verify.sh return false-pass results (checks that rely on
+`docker exec $BACKDOOR` silently pass when the backdoor is absent).
+
+The scored surface is the *inner* container's --privileged flag; the
+outer one is a dind prerequisite, not part of the evaluation.

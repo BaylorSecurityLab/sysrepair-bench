@@ -1,0 +1,2 @@
+FROM docker:24-dind — needs outer --privileged so the inner
+dockerd can create namespaces / mount overlayfs.

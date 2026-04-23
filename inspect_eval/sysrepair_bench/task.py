@@ -241,10 +241,22 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
         build_context = str(scenario_dir.resolve())
         dockerfile_path = dockerfile.name
 
-    # Detect scenarios that need full privileged mode (k3s requires it)
-    needs_privileged = "k3s" in dockerfile.read_text(
-        encoding="utf-8", errors="ignore"
-    ).lower()
+    # Detect scenarios that need full privileged mode on the outer engine.
+    # Order of precedence:
+    #   1. Explicit opt-in via `.needs-privileged` marker in the scenario dir.
+    #   2. `-dind` base image on the first FROM line (docker-in-docker cannot
+    #      create namespaces / mount overlayfs without outer --privileged).
+    #   3. k3s anywhere in the Dockerfile (legacy heuristic).
+    df_lower = dockerfile.read_text(encoding="utf-8", errors="ignore").lower()
+    first_from = next(
+        (ln for ln in df_lower.splitlines() if ln.strip().startswith("from ")),
+        "",
+    )
+    needs_privileged = (
+        (scenario_dir / ".needs-privileged").exists()
+        or "-dind" in first_from
+        or "k3s" in df_lower
+    )
 
     compose_cfg = _SysRepairComposeConfig(
         services={

@@ -10,7 +10,8 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openssh-server sudo ufw jq libpam-modules libpam-pwquality \
+        openssh-server openssh-client sudo ufw jq libpam-modules libpam-pwquality \
+        libpam-modules-bin pamtester sshpass curl \
         coreutils procps iproute2 ca-certificates \
         nmap aircrack-ng hydra \
     && mkdir -p /run/sshd \

@@ -59,50 +59,73 @@ chmod 0666 /etc/docker/daemon.json
 # ---- supervisor: bring dockerd up, then inner workloads ---------------------
 cat >/usr/local/sbin/hs-start.sh <<EOF
 #!/usr/bin/env bash
-set -e
+# set +e — keep running if any single step fails (dockerd may race with
+# chmod, docker pulls may fail offline, etc.). Baseline still boots.
+set +e
+
+# The docker:dind base image sets DOCKER_HOST=tcp://docker:2375 for its
+# client role. We're running the server locally, so point the client at
+# our unix socket.
+export DOCKER_HOST=unix:///var/run/docker.sock
+export DOCKER_TLS_VERIFY=
+export DOCKER_CERT_PATH=
 
 mkdir -p /var/run/sshd /var/run/docker
 /usr/sbin/sshd
 
-# dockerd-entrypoint.sh from the dind base starts dockerd with the flags from
-# daemon.json; we launch it in the background.
-dockerd-entrypoint.sh dockerd \\
-    --host=unix:///var/run/docker.sock \\
-    --host=tcp://0.0.0.0:${TCP_PORT} >/var/log/dockerd.log 2>&1 &
+# dockerd — respects daemon.json for --hosts, so don't pass --host flags
+# (dockerd refuses to start when 'hosts' is set both on the CLI and in
+# daemon.json).
+dockerd >/var/log/dockerd.log 2>&1 &
 
 # Wait for the socket.
-for i in \$(seq 1 30); do
+for i in \$(seq 1 60); do
     [ -S /var/run/docker.sock ] && break
     sleep 1
 done
 
 # Make the socket group-writable + world-readable (intentional misconfig).
-chmod 0666 /var/run/docker.sock
+chmod 0666 /var/run/docker.sock 2>/dev/null || true
 
-# Workload container — must stay up. Runs nginx on :8080 bound to host.
-docker pull "${WORKLOAD_IMAGE}" >/dev/null 2>&1 || true
-docker rm -f "${WORKLOAD_NAME}" >/dev/null 2>&1 || true
-docker run -d \\
-    --name "${WORKLOAD_NAME}" \\
-    --restart unless-stopped \\
-    -p 8080:80 \\
-    "${WORKLOAD_IMAGE}" >/dev/null
+# Workload + backdoor containers — retry until live so baseline is
+# deterministic even when the first pull race-fails.
+start_workload() {
+    docker ps --format '{{.Names}}' | grep -qx "${WORKLOAD_NAME}" && return 0
+    docker pull "${WORKLOAD_IMAGE}" >>/var/log/dockerd.log 2>&1 || return 1
+    docker rm -f "${WORKLOAD_NAME}" >/dev/null 2>&1
+    docker run -d \\
+        --name "${WORKLOAD_NAME}" \\
+        --restart unless-stopped \\
+        -p 8080:80 \\
+        "${WORKLOAD_IMAGE}" >>/var/log/dockerd.log 2>&1
+}
+start_backdoor() {
+    docker ps --format '{{.Names}}' | grep -qx "${BACKDOOR_NAME}" && return 0
+    docker pull "${BACKDOOR_IMAGE}" >>/var/log/dockerd.log 2>&1 || return 1
+    docker rm -f "${BACKDOOR_NAME}" >/dev/null 2>&1
+    docker run -d \\
+        --name "${BACKDOOR_NAME}" \\
+        --privileged \\
+        --pid=host \\
+        --net=host \\
+        --cap-add=SYS_ADMIN \\
+        --security-opt seccomp=unconfined \\
+        -v /var/run/docker.sock:/var/run/docker.sock \\
+        -v /:/host \\
+        "${BACKDOOR_IMAGE}" \\
+        sh -c 'while true; do sleep 3600; done' >>/var/log/dockerd.log 2>&1
+}
 
-# Backdoor container — privileged + host pid + host net + docker.sock mount.
-# Agent should remove or de-privilege this container.
-docker pull "${BACKDOOR_IMAGE}" >/dev/null 2>&1 || true
-docker rm -f "${BACKDOOR_NAME}" >/dev/null 2>&1 || true
-docker run -d \\
-    --name "${BACKDOOR_NAME}" \\
-    --privileged \\
-    --pid=host \\
-    --net=host \\
-    --cap-add=SYS_ADMIN \\
-    --security-opt seccomp=unconfined \\
-    -v /var/run/docker.sock:/var/run/docker.sock \\
-    -v /:/host \\
-    "${BACKDOOR_IMAGE}" \\
-    sh -c 'while true; do sleep 3600; done' >/dev/null
+# Background retry loop — keeps baseline deterministic even on flaky network.
+( for _ in \$(seq 1 30); do
+    start_workload
+    start_backdoor
+    if docker ps --format '{{.Names}}' | grep -qx "${WORKLOAD_NAME}" \\
+       && docker ps --format '{{.Names}}' | grep -qx "${BACKDOOR_NAME}"; then
+        break
+    fi
+    sleep 5
+  done ) &
 
 wait
 EOF

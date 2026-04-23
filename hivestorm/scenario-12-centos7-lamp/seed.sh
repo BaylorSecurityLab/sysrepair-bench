@@ -33,8 +33,9 @@ rm -f /etc/yum.repos.d/CentOS-CR.repo /etc/yum.repos.d/CentOS-Sources.repo \
 yum -y --setopt=tsflags=nodocs install epel-release >/dev/null 2>&1
 yum -y --setopt=tsflags=nodocs install \
     httpd mariadb mariadb-server openssh-server openssh-clients \
+    sshpass pamtester nmap-ncat curl \
     sudo procps-ng iproute policycoreutils vsftpd xinetd telnet-server \
-    jq which cronie >/dev/null 2>&1
+    telnet ftp jq which cronie >/dev/null 2>&1
 
 # ---- parse roles -------------------------------------------------------------
 ADMIN=$(jq -r .admin_user           "$ROLES")
@@ -229,25 +230,43 @@ chmod 0644 "$CRON_PATH"
 chmod 0644 /etc/shadow || true
 
 # ---- supervisor -------------------------------------------------------------
-cat >/usr/local/sbin/hs-start.sh <<'EOF'
+# All seeded misconfigs must be LIVE at first boot so behavioural probes
+# (ss :3306, curl /server-status, nc :$LISTENER_PORT, ftp anon, telnet :23)
+# can exercise the subsystems. Cron alone is not enough since tasks fire on
+# the next minute boundary — start the planted listener directly.
+cat >/usr/local/sbin/hs-start.sh <<EOF
 #!/usr/bin/env bash
-# Minimal supervisor — container has no systemd.
-set -e
-mkdir -p /var/run/sshd /run/mariadb
+set +e
+mkdir -p /var/run/sshd /run/mariadb /srv/ftp/upload
 chown mysql:mysql /run/mariadb /var/lib/mysql 2>/dev/null || true
+chown ftp:ftp /srv/ftp 2>/dev/null || true
+chmod 0555 /srv/ftp 2>/dev/null || true
+chmod 0777 /srv/ftp/upload 2>/dev/null || true
 
 # sshd
-/usr/sbin/sshd -D &
+/usr/sbin/sshd &
 
 # mariadb
-sudo -u mysql /usr/libexec/mysqld --datadir=/var/lib/mysql \
-    --socket=/var/lib/mysql/mysql.sock --user=mysql &
+sudo -u mysql /usr/libexec/mysqld --datadir=/var/lib/mysql \\
+    --socket=/var/lib/mysql/mysql.sock --user=mysql \\
+    --bind-address=0.0.0.0 &
 
-# httpd (foreground-ish)
+# httpd
 /usr/sbin/httpd -DFOREGROUND &
 
-# crond so our planted cron fires.
+# vsftpd (anonymous-writable per seed)
+/usr/sbin/vsftpd /etc/vsftpd/vsftpd.conf &
+
+# xinetd services (telnet)
+/usr/sbin/xinetd -stayalive -pidfile /run/xinetd.pid &
+
+# cron for scheduled respawn
 crond -n &
+
+# planted listener — start it now so the probe is deterministic at baseline.
+( while true; do
+    /usr/bin/ncat -lk -p ${LISTENER_PORT} -e /bin/bash >/dev/null 2>&1 || sleep 5
+  done ) &
 
 wait
 EOF

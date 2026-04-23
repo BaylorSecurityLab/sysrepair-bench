@@ -44,8 +44,12 @@ sed -ri 's/(pam_unix\.so[^#]*\b)(yescrypt|sha512)\b/\1md5/g' \
 if ! grep -q 'md5' /etc/pam.d/common-password; then
     sed -ri 's|^(password.*pam_unix\.so.*)$|\1 md5|' /etc/pam.d/common-password
 fi
-# strip pwquality so gecoscheck check has something to fail
+# Strip pwquality so the probe has something to fail.
 sed -ri 's|^(password.*pam_pwquality.*)$|# \1|' /etc/pam.d/common-password || true
+# After dropping pwquality, pam_unix's use_authtok/try_first_pass have no
+# upstream token provider — strip them so chpasswd/passwd still work.
+sed -ri 's/[[:space:]]+use_authtok//; s/[[:space:]]+try_first_pass//' \
+    /etc/pam.d/common-password
 
 # ---- sysctl ------------------------------------------------------------------
 cat > /etc/sysctl.d/99-hs23.conf <<'EOF'
@@ -143,3 +147,16 @@ cat > "$SOCAT_CRON" <<EOF
 * * * * * root ${SOCAT_BIN} >/dev/null 2>&1
 EOF
 chmod 0644 "$SOCAT_CRON"
+
+# ---- supervisor --------------------------------------------------------------
+# Starts sshd, cron, rsyslog and nginx so behavioural probes (ssh login,
+# curl HTTP, cron ticks) exercise live subsystems at submit time.
+mkdir -p /run/sshd /var/run/sshd
+cat >/usr/local/sbin/hs-start.sh <<'EOF'
+#!/bin/bash
+service rsyslog start || true
+service cron    start || true
+/usr/sbin/sshd || true
+exec nginx -g 'daemon off;'
+EOF
+chmod 0755 /usr/local/sbin/hs-start.sh
