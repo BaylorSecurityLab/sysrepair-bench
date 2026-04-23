@@ -11,7 +11,7 @@ For each scenario, given only the running container and Optional(threat descript
 
 Remediation is scored as successful **only if both checks pass**.
 
-The benchmark comprises **292 scenarios across five VM classes** (six suites): `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (20), and `meta4/` (116) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
+The benchmark comprises **293 scenarios across five VM classes** (six suites): `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (20), and `meta4/` (117) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
 
 | VM Class / Suite | Era | Built | Source |
 |---|---|---|---|
@@ -20,7 +20,7 @@ The benchmark comprises **292 scenarios across five VM classes** (six suites): `
 | [`vulnhub/`](vulnhub/) | 2012–2022 | 30 | Per-VM vulnerability rebuilds (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) on Debian 11 |
 | [`meta3/ubuntu/`](meta3/ubuntu/) | 2014–2020 | 19 | Port of Rapid7 Metasploitable 3 (Ubuntu 14.04) — Drupalgeddon, ProFTPD mod_copy, payroll_app, Docker group escalation, WEBrick, UnrealIRCd, Samba, phpMyAdmin. Vendors the Rapid7 Chef cookbook under BSD-3. |
 | [`meta3/windows/`](meta3/windows/)| 2016–2020 | 20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). ⚠ **Windows host only** (see Host Requirements) |
-| **[`meta4/`](meta4/)** | 2022–2026 | 116 | Container suite covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs, ImageMagick, Memcached, curl SOCKS5, Redis Lua sandbox, Adminer, Apache Solr, Rsync, Cacti, and more) that fill the temporal gap left by aging Metasploitable and VulnHub images. Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)). |
+| **[`meta4/`](meta4/)** | 2022–2026 | 117 | Container suite covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs, ImageMagick, Memcached, curl SOCKS5, Redis Lua sandbox, Adminer, Apache Solr, Rsync, Cacti, and more) that fill the temporal gap left by aging Metasploitable and VulnHub images. Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)), plus a Vagrant AD lab ([`meta4/ad-vm/`](meta4/ad-vm/), S01–S20 in progress; S13 shipping in Phase 0). |
 | [`hivestorm/`](hivestorm/) | HS20–HS23 | 16 | **Free-roam** Hivestorm-style scenarios (Debian/Ubuntu/CentOS/Windows Server-Core/FreeBSD/AD-DC). Identities (backdoor account, trojan path, rogue cron, SUID plant) are randomized per build; the scorer emits weighted partial credit via JSONL checks rather than binary pass/fail. |
 
 ### Vulnerability categories
@@ -35,16 +35,16 @@ Every scenario's **(expect hivestorm)** `threat.md` is labeled with one of **fiv
 
 ### Severity distribution
 
-Distribution of base severity scores across all 292 scenarios. Scores follow CVSS v3.1; scenarios without a CVE (CCDC misconfigs, Hivestorm free-roam) are unscored.
+Distribution of base severity scores across all 293 scenarios. Scores follow CVSS v3.1; scenarios without a CVE (CCDC misconfigs, Hivestorm free-roam) are unscored.
 
 | Severity | CVSS v3.1 Range | # Scenarios |
 |---|---|---|
 | Critical | 9.0–10.0 | 90 |
-| High | 7.0–8.9 | 88 |
+| High | 7.0–8.9 | 89 |
 | Medium | 4.0–6.9 | 40 |
 | Low | 0.1–3.9 | 1 |
 | Unscored (misconfig / free-roam) | — | 73 |
-| **Total** | | **292** |
+| **Total** | | **293** |
 
 ### Remediation category distribution
 
@@ -53,10 +53,10 @@ Distribution of base severity scores across all 292 scenarios. Scores follow CVS
 | Configuration Hardening | 106 |
 | Dependency & Package Management | 52 |
 | Access Control | 53 |
-| Compensating Controls | 47 |
+| Compensating Controls | 48 |
 | Network Security | 18 |
 | Free-roam (multiple) | 16 |
-| **Total** | **292** |
+| **Total** | **293** |
 
 ### Service / application type distribution
 
@@ -74,13 +74,13 @@ Distribution of base severity scores across all 292 scenarios. Scores follow CVS
 | Kernel / OS Privilege | 12 |
 | Firewall / Network Policy | 11 |
 | Application Server / Java | 11 |
-| File Sharing | 10 |
+| File Sharing | 11 |
 | Library / Language Runtime | 10 |
 | Free-roam (Hivestorm) | 9 |
 | Mail / Messaging | 7 |
 | FTP | 6 |
 | CI/CD / DevOps | 3 |
-| **Total** | **292** |
+| **Total** | **293** |
 
 ## Repository Layout
 
@@ -91,8 +91,9 @@ sysrepair-bench/
 ├── vulnhub/                 # 30 VulnHub-derived scenarios (scenario-01..30)
 ├── meta3/ubuntu/            # 19 Metasploitable 3 (Ubuntu 14.04) scenarios + vendored Chef cookbook (shared/)
 ├── meta3/windows/           # 20 Metasploitable 3 (Windows Server) scenarios (harness validation)
-├── meta4/                   # 116 modern-CVE container scenarios
-│   └── kernel-vm/           #   Vagrant VM for kernel-coupled LPE scenarios (S21, S22)
+├── meta4/                   # 117 modern-CVE container scenarios
+│   ├── kernel-vm/           #   Vagrant VM for kernel-coupled LPE scenarios (S21, S22)
+│   └── ad-vm/               #   Vagrant AD lab (Win2019 DC+CA + Kali attacker, S01–S20)
 ├── hivestorm/               # 16 free-roam Hivestorm-style scenarios (weighted partial-credit)
 ├── openvas-scan-reports/    # OpenVAS scan PDFs scoping meta2 and meta3/windows
 ├── inspect_eval/            # Inspect AI harness: solvers, task wiring, run presets
