@@ -8,6 +8,7 @@ Vagrant.configure("2") do |config|
   config.vm.define "dc" do |dc|
     dc.vm.box = "jborean93/WindowsServer2019"
     dc.vm.hostname = "corp-dc01"
+    dc.vm.boot_timeout = 1200
     dc.vm.communicator = "winrm"
     dc.winrm.username = "vagrant"
     dc.winrm.password = "vagrant"
@@ -31,6 +32,7 @@ Vagrant.configure("2") do |config|
   config.vm.define "ca" do |ca|
     ca.vm.box = "jborean93/WindowsServer2019"
     ca.vm.hostname = "corp-ca01"
+    ca.vm.boot_timeout = 1200
     ca.vm.communicator = "winrm"
     ca.winrm.username = "vagrant"
     ca.winrm.password = "vagrant"
