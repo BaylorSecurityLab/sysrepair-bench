@@ -35,16 +35,17 @@ INJECT_TARGET=$(jq -r '.inject.target'         "$HARNESS")
 VERIFY_SVC_TGT=$(jq -r '.verify_service.target' "$HARNESS")
 
 run_verify() {
+    local poc_rc=0
+    local svc_rc=0
+
     echo "[run-scenario] verify-poc on attacker"
-    vagrant ssh attacker -c "bash /opt/meta4/$SCENARIO_DIR/verify-poc.sh"
-    local poc_rc=$?
+    vagrant ssh attacker -c "bash /opt/meta4/$SCENARIO_DIR/verify-poc.sh" || poc_rc=$?
 
     echo "[run-scenario] verify-service on $VERIFY_SVC_TGT"
     vagrant winrm "$VERIFY_SVC_TGT" -s powershell \
-        -c "C:\\meta4\\$SCENARIO_DIR\\verify-service.ps1"
-    local svc_rc=$?
+        -c "C:\\meta4\\$SCENARIO_DIR\\verify-service.ps1" || svc_rc=$?
 
-    if [ $poc_rc -eq 0 ] && [ $svc_rc -eq 0 ]; then
+    if [ "$poc_rc" -eq 0 ] && [ "$svc_rc" -eq 0 ]; then
         echo "[run-scenario] PASS (poc=$poc_rc, service=$svc_rc)"
         return 0
     else
