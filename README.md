@@ -406,18 +406,6 @@ Defaults in `runs.yaml`: `time_limit=1800s`, `token_limit=500k`, `bash_timeout=1
 
 See [`inspect_eval/README.md`](inspect_eval/README.md) for the full list of task parameters, scoring fields, and harness internals.
 
-## Suites
-
-| | [ccdc/](ccdc/README.md) | [meta2/](meta2/README.md) | [vulnhub/](vulnhub/README.md) | [meta3/](meta3/README.md) | [meta4/](meta4/README.md) |
-|---|---|---|---|---|---|
-| Base image | `ubuntu:25.10` | `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04 — **Linux host only; requires `vsyscall=emulate` kernel**) | `debian:11` (+ 2 pinned pulled images) | `ubuntu:14.04` ([`meta3/ubuntu/`](meta3/ubuntu/README.md)) + `mcr.microsoft.com/windows/servercore` ([`meta3/windows/`](meta3/windows/README.md), Windows host required) | Mixed: vendor-pinned vulnerable images (`tomcat:9.0.60-jdk11`, `httpd:2.4.49/50`, `atlassian/confluence-server:7.18.0`, `gitlab/gitlab-ce:16.7.0`), `ubuntu:22.04` / `debian:testing-20240301` for userspace LPE & XZ, `docker:24-dind` for runtime escapes, plus a kernel-pinned Vagrant VM for S21/S22 |
-| Scenarios | 50 | 40 | 30 | 19 Ubuntu / 20 Windows | 116 |
-| Categories | Config (1–25), Dependencies (26–38), Permissions (39–50) | Config (1–15), Patch-mgmt (16–24), Access-control (25–29), Network-exposure (30–33), **Compensating Controls (34–40)** | Per-VM vulnerabilities across 14 VulnHub VMs | Ubuntu: Config (S01–S05, S18, S19), Patch (S06–S09), Access (S10, S11), Network (S12), **Compensating** (S13–S17). Windows sub-suite same shape, scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). | All five remediation categories across 116 scenarios: Access Control, Config Hardening, Dependency/Patch, Network Security, plus kernel LPE (S19/S21/S22), container/runtime escape (Leaky Vessels, docker.sock, `--privileged`), and miscellaneous CVEs (ImageMagick, Memcached, curl, Redis, Solr, Rsync, Cacti) |
-
-Alongside these five binary-pass/fail suites, [`hivestorm/`](hivestorm/README.md) ships 16 **free-roam** scenarios (Debian/Ubuntu/CentOS/Windows Server-Core/FreeBSD/AD-DC) with per-build identity randomization and a weighted partial-credit scorer. It uses the same Inspect AI harness; selection is via `benchmark: hivestorm` in `runs.yaml`.
-
-See each suite's README for the full scenario index.
-
 ## Citation
 
 If you use SysRepair-Bench in your work, please cite:
