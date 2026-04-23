@@ -12,8 +12,7 @@ Vagrant.configure("2") do |config|
     dc.vm.communicator = "winrm"
     dc.winrm.username = "vagrant"
     dc.winrm.password = "vagrant"
-    dc.winrm.transport = :plaintext
-    dc.winrm.basic_auth_only = true
+    dc.winrm.transport = :negotiate
     dc.vm.network "private_network", ip: "10.20.30.5"
 
     dc.vm.provider "virtualbox" do |vb|
@@ -36,8 +35,7 @@ Vagrant.configure("2") do |config|
     ca.vm.communicator = "winrm"
     ca.winrm.username = "vagrant"
     ca.winrm.password = "vagrant"
-    ca.winrm.transport = :plaintext
-    ca.winrm.basic_auth_only = true
+    ca.winrm.transport = :negotiate
     ca.vm.network "private_network", ip: "10.20.30.6"
 
     ca.vm.provider "virtualbox" do |vb|
