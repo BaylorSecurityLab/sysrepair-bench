@@ -1,46 +1,93 @@
 # meta4/ad-vm/provision/dc-baseline.ps1
-# Promotes to corp.local forest root, seeds directory with 25 users, 3 OUs, and groups.
+# Promotes to corp.local forest root, seeds directory with 8 users, 3 OUs.
 # Idempotent: safe to re-run; exits 0 if already provisioned.
+#
+# Architecture note:
+#   Install-ADDSForest destroys the local SAM the moment it completes
+#   (regardless of -NoRebootOnCompletion). If called inside this WinRM-driven
+#   provisioner, the local 'vagrant' account disappears and vagrant-reload's
+#   subsequent graceful-shutdown handshake 401s. To avoid that, pass 1 here
+#   only installs the AD DS role + stages a one-shot startup task chain
+#   (bootstrap.ps1) that performs the actual promotion AFTER vagrant-reload
+#   has already rebooted. WinRM is set to Manual so no listener comes up
+#   until bootstrap.ps1 has created CORP\vagrant and restarted the service.
 
 $ErrorActionPreference = 'Stop'
 
 $domainName      = 'corp.local'
 $netbiosName     = 'CORP'
-$dsrmPassword    = ConvertTo-SecureString 'Vagrant1DSRM!' -AsPlainText -Force
 $adminPassword   = 'Password1!'
 
 # --- 0. idempotency guard ---
-if ((Get-WmiObject Win32_ComputerSystem).PartOfDomain -and
-    (Get-ADDomain -ErrorAction SilentlyContinue) -and
-    ((Get-ADDomain).DNSRoot -eq $domainName)) {
-    Write-Host "[dc-baseline] already joined to $domainName, skipping promotion"
+$alreadyPromoted = $false
+try {
+    if ((Get-ADDomain -ErrorAction Stop).DNSRoot -eq $domainName) {
+        $alreadyPromoted = $true
+    }
+} catch { }
+
+if ($alreadyPromoted) {
+    Write-Host "[dc-baseline] already forest root of $domainName, proceeding to seed pass"
 } else {
     Write-Host "[dc-baseline] installing AD DS role"
     Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
 
-    # Stage a one-shot startup task to recreate the 'vagrant' principal as a
-    # Domain User post-DCPROMO. The local 'vagrant' account is lost when the
-    # machine becomes a DC; without a matching CORP\vagrant domain user,
-    # vagrant-reload cannot reconnect and the second provisioning pass stalls.
     $setupDir = 'C:\meta4-setup'
     New-Item -ItemType Directory -Path $setupDir -Force | Out-Null
-    $postScript = Join-Path $setupDir 'create-vagrant-da.ps1'
+    $bootstrapScript = Join-Path $setupDir 'bootstrap.ps1'
 
-    $postBody = @'
+    # Self-driving, reboot-safe bootstrap: runs on every startup via
+    # Meta4-Bootstrap startup task until it unregisters itself in the final
+    # phase. Handles both the pre-DCPROMO boot (phase A: promote + reboot)
+    # and the post-DCPROMO boot (phase B: create CORP\vagrant + start WinRM).
+    $bootstrapBody = @'
 $ErrorActionPreference = "Stop"
-$log = "C:\meta4-setup\create-vagrant-da.log"
-"[$(Get-Date -Format s)] starting post-DCPROMO user creation" | Add-Content $log
+$log = "C:\meta4-setup\bootstrap.log"
+function Log($m) { "[$(Get-Date -Format s)] $m" | Add-Content $log }
+Log "Meta4-Bootstrap fired"
 
-for ($i = 0; $i -lt 60; $i++) {
+$promoted = $false
+try {
+    Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+    if ((Get-ADDomain -ErrorAction Stop).DNSRoot -eq "corp.local") {
+        $promoted = $true
+    }
+} catch { }
+
+if (-not $promoted) {
+    Log "not yet promoted; running Install-ADDSForest"
+    try {
+        Install-ADDSForest `
+          -DomainName corp.local `
+          -DomainNetbiosName CORP `
+          -SafeModeAdministratorPassword (ConvertTo-SecureString "Vagrant1DSRM!" -AsPlainText -Force) `
+          -ForestMode WinThreshold `
+          -DomainMode WinThreshold `
+          -InstallDns:$true `
+          -NoRebootOnCompletion:$true `
+          -Force:$true | Out-Null
+        Log "Install-ADDSForest returned; rebooting in 5s"
+    } catch {
+        Log "Install-ADDSForest ERROR: $_"
+        throw
+    }
+    shutdown.exe /r /t 5 /f /c "Meta4-Bootstrap: completing DCPROMO"
+    exit 0
+}
+
+Log "already promoted; waiting for AD Web Services"
+$tries = 0
+while ($tries -lt 60) {
     try {
         Import-Module ActiveDirectory -ErrorAction Stop
         Get-ADDomain -ErrorAction Stop | Out-Null
-        "[$(Get-Date -Format s)] AD ready after $($i*10)s" | Add-Content $log
         break
     } catch {
         Start-Sleep -Seconds 10
+        $tries++
     }
 }
+Log "AD ready after $($tries * 10)s"
 
 try {
     if (-not (Get-ADUser -Filter { SamAccountName -eq "vagrant" } -ErrorAction SilentlyContinue)) {
@@ -50,39 +97,37 @@ try {
           -Enabled $true `
           -PasswordNeverExpires $true
         Add-ADGroupMember -Identity "Domain Admins" -Members vagrant
-        "[$(Get-Date -Format s)] created CORP\vagrant in Domain Admins" | Add-Content $log
+        Log "created CORP\vagrant in Domain Admins"
     } else {
-        "[$(Get-Date -Format s)] CORP\vagrant already exists" | Add-Content $log
+        Log "CORP\vagrant already exists"
     }
     Set-Service WinRM -StartupType Automatic
     Start-Service WinRM
-    "[$(Get-Date -Format s)] WinRM re-enabled + started" | Add-Content $log
-    schtasks /Delete /TN "Meta4-PostDcPromo" /F | Out-Null
-    schtasks /Delete /TN "Meta4-PostDcPromo-Rescue" /F 2>$null | Out-Null
-    "[$(Get-Date -Format s)] tasks unregistered, done" | Add-Content $log
+    Log "WinRM re-enabled and started"
+    schtasks /Delete /TN "Meta4-Bootstrap" /F | Out-Null
+    schtasks /Delete /TN "Meta4-Bootstrap-Rescue" /F 2>$null | Out-Null
+    Log "Meta4-Bootstrap unregistered, done"
 } catch {
-    "[$(Get-Date -Format s)] ERROR: $_" | Add-Content $log
-    # Safety: unconditionally re-enable WinRM so the VM stays reachable for diag.
+    Log "ERROR in seed phase: $_"
     try { Set-Service WinRM -StartupType Automatic; Start-Service WinRM } catch {}
     throw
 }
 '@
-    Set-Content -Path $postScript -Value $postBody -Encoding UTF8
+    Set-Content -Path $bootstrapScript -Value $bootstrapBody -Encoding UTF8
 
     $action    = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$postScript`""
+                   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$bootstrapScript`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
                    -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                    -StartWhenAvailable -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName 'Meta4-PostDcPromo' `
+    Register-ScheduledTask -TaskName 'Meta4-Bootstrap' `
       -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Write-Host "[dc-baseline] registered Meta4-PostDcPromo startup task"
+    Write-Host "[dc-baseline] registered Meta4-Bootstrap startup task"
 
-    # Safety net: force WinRM back on after 15 min regardless of primary task
-    # outcome, so a failed post-DCPROMO user-creation doesn't strand the VM.
-    # Use a wrapper .cmd on disk to dodge schtasks /TR quoting issues.
+    # Safety net: force WinRM back on after 25 min regardless of primary task
+    # outcome, so a failed bootstrap doesn't strand the VM.
     $rescueCmd = Join-Path $setupDir 'winrm-rescue.cmd'
     Set-Content -Path $rescueCmd -Encoding ASCII -Value @'
 @echo off
@@ -90,28 +135,16 @@ powershell.exe -NoProfile -Command "Set-Service WinRM -StartupType Automatic; St
 '@
     $rescueAction    = New-ScheduledTaskAction -Execute $rescueCmd
     $rescueTrigger   = New-ScheduledTaskTrigger -AtStartup
-    $rescueTrigger.Delay = 'PT15M'
-    $rescuePrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
-                         -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName 'Meta4-PostDcPromo-Rescue' `
-      -Action $rescueAction -Trigger $rescueTrigger -Principal $rescuePrincipal `
+    $rescueTrigger.Delay = 'PT25M'
+    Register-ScheduledTask -TaskName 'Meta4-Bootstrap-Rescue' `
+      -Action $rescueAction -Trigger $rescueTrigger -Principal $principal `
       -Settings $settings -Force | Out-Null
-    Write-Host "[dc-baseline] registered Meta4-PostDcPromo-Rescue safety task"
+    Write-Host "[dc-baseline] registered Meta4-Bootstrap-Rescue safety task"
 
-    Write-Host "[dc-baseline] promoting to forest root of $domainName (no auto-reboot)"
-    Install-ADDSForest `
-      -DomainName $domainName `
-      -DomainNetbiosName $netbiosName `
-      -SafeModeAdministratorPassword $dsrmPassword `
-      -ForestMode WinThreshold `
-      -DomainMode WinThreshold `
-      -InstallDns:$true `
-      -NoRebootOnCompletion:$true `
-      -Force:$true
-
-    # Disable WinRM auto-start so the post-reboot startup task controls when
-    # the listener comes up — only after CORP\vagrant exists, to prevent
-    # vagrant-reload from racing in and getting a 401 as a now-gone local user.
+    # Disable WinRM auto-start so the listener stays down across the next
+    # two reboots (pre-DCPROMO -> DCPROMO-reboot -> post-DCPROMO). It only
+    # comes back up when bootstrap.ps1 has created CORP\vagrant so the
+    # vagrant/CORP\vagrant principal matches for vagrant-reload reconnect.
     Set-Service WinRM -StartupType Manual
     Write-Host "[dc-baseline] WinRM set to Manual start; pass 1 complete, awaiting reload"
     exit 0
