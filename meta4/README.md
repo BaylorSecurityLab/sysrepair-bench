@@ -58,3 +58,16 @@ Three scenarios target kernel vulnerabilities and therefore need a host whose ke
 | [scenario-22](scenario-22/) — `nf_tables` UAF | CVE-2024-1086 | Ubuntu 5.15.0 ABI < 97 | Yes |
 
 All other scenarios run on any modern Linux Docker host — the vulnerable component lives in userspace (libc, polkit, sudo, runc, application jars, plugin code). Notably [scenario-11](scenario-11/) (regreSSHion) and [scenario-20](scenario-20/) (Looney Tunables) are glibc/sshd userspace issues despite sometimes being described as "system-level".
+
+## Active Directory coupling — `ad-vm/`
+
+AD attacks (Zerologon, PrintNightmare, NoPac, ADCS ESCs, Kerberoasting, LDAP/SMB signing, etc.) require real Windows domain services and cannot run in Linux containers. A second VM harness lives at [`ad-vm/`](ad-vm/): three linked-clone VMs (Win2019 DC + Win2019 Enterprise CA + Kali attacker) on a host-only `10.20.30.0/24` network, hosting 20 scenarios (S01–S20 in that subtree, separate numbering from `meta4/scenario-NNN/`).
+
+```bash
+cd meta4/ad-vm
+vagrant up                 # first run pulls community box (~20 min)
+./capture-baselines.sh     # one-time snapshot
+./run-scenario.sh 13       # smoke-test S13 (SMB signing disabled)
+```
+
+See [`ad-vm/README.md`](ad-vm/README.md) for the full scenario matrix.
