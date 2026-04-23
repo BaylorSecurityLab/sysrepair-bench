@@ -9,8 +9,11 @@
 #   subsequent graceful-shutdown handshake 401s. To avoid that, pass 1 here
 #   only installs the AD DS role + stages a one-shot startup task chain
 #   (bootstrap.ps1) that performs the actual promotion AFTER vagrant-reload
-#   has already rebooted. WinRM is set to Manual so no listener comes up
-#   until bootstrap.ps1 has created CORP\vagrant and restarted the service.
+#   has already rebooted. WinRM stays auto-start; the Vagrantfile configures
+#   winrm.transport=:plaintext + basic_auth_only, which re-runs full user
+#   lookup every call so reconnect succeeds once bootstrap.ps1 has created
+#   CORP\vagrant. NTLM/negotiate would fail here because it caches session
+#   tickets keyed to the local SAM that DCPROMO strips.
 
 $ErrorActionPreference = 'Stop'
 
@@ -141,12 +144,7 @@ powershell.exe -NoProfile -Command "Set-Service WinRM -StartupType Automatic; St
       -Settings $settings -Force | Out-Null
     Write-Host "[dc-baseline] registered Meta4-Bootstrap-Rescue safety task"
 
-    # Disable WinRM auto-start so the listener stays down across the next
-    # two reboots (pre-DCPROMO -> DCPROMO-reboot -> post-DCPROMO). It only
-    # comes back up when bootstrap.ps1 has created CORP\vagrant so the
-    # vagrant/CORP\vagrant principal matches for vagrant-reload reconnect.
-    Set-Service WinRM -StartupType Manual
-    Write-Host "[dc-baseline] WinRM set to Manual start; pass 1 complete, awaiting reload"
+    Write-Host "[dc-baseline] pass 1 complete; awaiting reload + bootstrap.ps1 chain"
     exit 0
 }
 
