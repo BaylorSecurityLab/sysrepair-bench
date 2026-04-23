@@ -18,6 +18,62 @@ if ((Get-WmiObject Win32_ComputerSystem).PartOfDomain -and
     Write-Host "[dc-baseline] installing AD DS role"
     Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
 
+    # Stage a one-shot startup task to recreate the 'vagrant' principal as a
+    # Domain User post-DCPROMO. The local 'vagrant' account is lost when the
+    # machine becomes a DC; without a matching CORP\vagrant domain user,
+    # vagrant-reload cannot reconnect and the second provisioning pass stalls.
+    $setupDir = 'C:\meta4-setup'
+    New-Item -ItemType Directory -Path $setupDir -Force | Out-Null
+    $postScript = Join-Path $setupDir 'create-vagrant-da.ps1'
+
+    $postBody = @'
+$ErrorActionPreference = "Stop"
+$log = "C:\meta4-setup\create-vagrant-da.log"
+"[$(Get-Date -Format s)] starting post-DCPROMO user creation" | Add-Content $log
+
+for ($i = 0; $i -lt 60; $i++) {
+    try {
+        Import-Module ActiveDirectory -ErrorAction Stop
+        Get-ADDomain -ErrorAction Stop | Out-Null
+        "[$(Get-Date -Format s)] AD ready after $($i*10)s" | Add-Content $log
+        break
+    } catch {
+        Start-Sleep -Seconds 10
+    }
+}
+
+try {
+    if (-not (Get-ADUser -Filter { SamAccountName -eq "vagrant" } -ErrorAction SilentlyContinue)) {
+        New-ADUser -Name vagrant `
+          -SamAccountName vagrant `
+          -AccountPassword (ConvertTo-SecureString "vagrant" -AsPlainText -Force) `
+          -Enabled $true `
+          -PasswordNeverExpires $true
+        Add-ADGroupMember -Identity "Domain Admins" -Members vagrant
+        "[$(Get-Date -Format s)] created CORP\vagrant in Domain Admins" | Add-Content $log
+    } else {
+        "[$(Get-Date -Format s)] CORP\vagrant already exists" | Add-Content $log
+    }
+    schtasks /Delete /TN "Meta4-PostDcPromo" /F | Out-Null
+    "[$(Get-Date -Format s)] task unregistered, done" | Add-Content $log
+} catch {
+    "[$(Get-Date -Format s)] ERROR: $_" | Add-Content $log
+    throw
+}
+'@
+    Set-Content -Path $postScript -Value $postBody -Encoding UTF8
+
+    $action    = New-ScheduledTaskAction -Execute 'powershell.exe' `
+                   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$postScript`""
+    $trigger   = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
+                   -LogonType ServiceAccount -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                   -StartWhenAvailable -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName 'Meta4-PostDcPromo' `
+      -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Write-Host "[dc-baseline] registered Meta4-PostDcPromo startup task"
+
     Write-Host "[dc-baseline] promoting to forest root of $domainName"
     Install-ADDSForest `
       -DomainName $domainName `
