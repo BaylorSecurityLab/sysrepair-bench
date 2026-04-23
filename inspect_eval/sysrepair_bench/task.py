@@ -152,8 +152,14 @@ def _detect_os(scenario_dir: Path) -> str:
 def _discover_scenarios(
     benchmarks: tuple[str, ...] | list[str] | None,
     scenarios: list[str] | None,
+    exclude: list[str] | None = None,
 ) -> list[Path]:
-    """Return absolute paths to scenario directories matching the filters."""
+    """Return absolute paths to scenario directories matching the filters.
+
+    ``exclude`` removes scenarios whose repo-relative path matches an entry
+    (e.g. ``"meta4/scenario-19"``). Applied to both ``scenarios:`` and
+    ``benchmarks:`` resolution.
+    """
     selected: list[Path] = []
 
     if scenarios:
@@ -172,18 +178,24 @@ def _discover_scenarios(
                     f"'{s}' is missing verify.sh / verify.ps1 at {p}."
                 )
             selected.append(p)
-        return selected
+    else:
+        bms = list(benchmarks) if benchmarks else list(DEFAULT_BENCHMARKS)
+        for bm in bms:
+            bm_dir = REPO_ROOT / bm
+            if not bm_dir.is_dir():
+                continue
+            for entry in sorted(bm_dir.iterdir()):
+                if entry.is_dir() and entry.name.startswith("scenario-"):
+                    has_verify = (entry / "verify.sh").exists() or (entry / "verify.ps1").exists()
+                    if (entry / "Dockerfile").exists() and has_verify:
+                        selected.append(entry)
 
-    bms = list(benchmarks) if benchmarks else list(DEFAULT_BENCHMARKS)
-    for bm in bms:
-        bm_dir = REPO_ROOT / bm
-        if not bm_dir.is_dir():
-            continue
-        for entry in sorted(bm_dir.iterdir()):
-            if entry.is_dir() and entry.name.startswith("scenario-"):
-                has_verify = (entry / "verify.sh").exists() or (entry / "verify.ps1").exists()
-                if (entry / "Dockerfile").exists() and has_verify:
-                    selected.append(entry)
+    if exclude:
+        excluded = {Path(e).as_posix().strip("/") for e in exclude}
+        selected = [
+            p for p in selected
+            if p.resolve().relative_to(REPO_ROOT).as_posix() not in excluded
+        ]
     return selected
 
 
@@ -308,6 +320,7 @@ def sysrepair_bench(
     solver: str = "react",
     benchmarks: list[str] | None = None,
     scenarios: list[str] | None = None,
+    exclude: list[str] | None = None,
     mode: str = "day1",
     message_limit: int = 40,
     max_attempts: int = 1,
@@ -365,22 +378,23 @@ def sysrepair_bench(
 
     init_rate_limiter(request_limit=request_limit, window_seconds=request_window)
 
-    scenario_dirs = _discover_scenarios(benchmarks, scenarios)
+    scenario_dirs = _discover_scenarios(benchmarks, scenarios, exclude)
     if not scenario_dirs:
         raise ValueError("No scenarios matched the given filters.")
     samples = [_build_sample(d, mode=mode) for d in scenario_dirs]
 
+    solver_msg_limit = message_limit if message_limit > 0 else 1_000_000
     return Task(
         dataset=MemoryDataset(samples=samples, name="sysrepair-bench"),
         solver=get_solver(
             solver,
-            message_limit=message_limit,
+            message_limit=solver_msg_limit,
             max_attempts=max_attempts,
             bash_timeout=bash_timeout,
             verify_timeout=verify_timeout,
         ),
         scorer=dispatch_scorer(),
-        message_limit=message_limit,
-        time_limit=time_limit or None,    # 0 = unlimited
-        token_limit=token_limit or None,  # 0 = unlimited
+        message_limit=message_limit or None,  # 0 = unlimited
+        time_limit=time_limit or None,        # 0 = unlimited
+        token_limit=token_limit or None,      # 0 = unlimited
     )

@@ -89,6 +89,7 @@ def main(argv: list[str] | None = None) -> None:
         for k in (
             "benchmarks",
             "scenarios",
+            "exclude",
             "message_limit",
             "max_attempts",
             "time_limit",

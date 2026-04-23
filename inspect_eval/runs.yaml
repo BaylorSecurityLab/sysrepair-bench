@@ -1,120 +1,73 @@
-# Named run presets. Invoke with:  uv run python -m sysrepair_bench.run <preset>
-# Each preset is a flat dict of: model, solver, benchmarks, scenarios,
-# message_limit, max_attempts, max_connections, log_dir.
+# Named run presets. Invoke with: uv run python -m sysrepair_bench.run <preset>
+#
+# Swap models by editing the `model:` line in the target preset before running.
+# 0 = unlimited for: message_limit, time_limit, token_limit, request_limit.
 
 defaults:
-  message_limit: 40
   max_attempts: 1
   max_connections: 2
   log_dir: ./logs
-  # --- Timeouts (applied globally; override per-preset if a run needs more) ---
-  # time_limit: per-sample wall-clock ceiling (s). Prevents a hung docker exec
-  time_limit: 1800 # 30 min per scenario
-  token_limit: 500000 # defense against tool-output loops
-  bash_timeout: 180
-  verify_timeout: 300 # verify.sh may need to wait for services
-  fail_on_error: 0.2 # abort run if >20% of samples error out
-  retry_on_error: 2 # transient provider/sandbox errors get 2 retries
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.25
+  retry_on_error: 2
 
 presets:
+
   smoke:
-    model: openai/devstral-2:123b
+    model: openai/MODEL_NAME
     solver: react
     scenarios: ["meta2/scenario-01"]
-    message_limit: 20
-
-  # One-scenario smoke against Gemma 4 31B via vLLM (OpenAI-compatible).
-  # Set in .env:  OPENAI_BASE_URL=http://<vllm-host>:8001/v1  OPENAI_API_KEY=vllm
-  smoke_gemma4:
-    model: openai/gemma-4-31b
-    solver: react
-    scenarios: ["ccdc/scenario-01"]
     message_limit: 20
     time_limit: 1800
-    bash_timeout: 240
-    verify_timeout: 360
 
-  meta2_react_local:
-    model: openai/devstral-2:123b
-    solver: react
-    benchmarks: ["meta2"]
-
-  meta2_lats_local:
-    model: openai/devstral-2:123b
-    solver: lats
-    benchmarks: ["meta2"]
-    message_limit: 60
-
-  full_reflexion_qwen:
-    model: ollama/qwen3.5:35b
-    solver: reflexion
-    benchmarks: ["meta2", "vulnhub", "ccdc"]
-    message_limit: 50
-
-  pas_gpt:
-    model: openai/gpt-oss:120b
-    solver: plan_and_solve
-    benchmarks: ["meta2"]
-
-  # ── Both modes: day-1 + zero-day in a single run ──
-  # 255 scenarios × 5 solvers × 2 modes = 2,550 runs.
-  all_solvers_gemma4_31b:
-    model: openai/gemma-4-31b
+  # Linux containers across all benches except hivestorm.
+  # Excludes meta4 scenarios that require a kernel-vm host (run via `kernel_vm`).
+  linux_all:
+    model: openai/MODEL_NAME
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     modes: ["day1", "zero_day"]
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 100
-    max_connections: 2
-    time_limit: 2400
-    token_limit: 800000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
+    exclude:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
 
-  # ── Day-1 mode: agent receives full threat.md briefing (CVE + remediation) ──
-  # Tests execution capability: can the agent apply a known fix correctly?
-  # 255 scenarios × 5 solvers = 1,275 runs.
-  all_solvers_gemma4_31b_day1:
-    model: openai/gemma-4-31b
+  # Windows containers across all benches except hivestorm.
+  windows_all:
+    model: openai/MODEL_NAME
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    mode: day1
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 50
-    max_connections: 2
-    time_limit: 2400 # 40 min — agent knows what to fix
-    token_limit: 800000 # ~800k tokens suffices with briefing
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
+    modes: ["day1", "zero_day"]
+    benchmarks: ["meta3/windows"]
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
 
-  # ── Zero-day mode: no briefing — agent must discover + remediate blind ──
-  # Tests discovery + execution: enumerate → identify → remediate.
-  # Following CVE-Bench / ZeroDayBench convention: same parameters as day-1
-  # except token_limit and time_limit are uncapped so the accuracy gap purely
-  # measures information disclosure, not resource starvation.
-  # 255 scenarios × 5 solvers = 1,275 runs.
-  all_solvers_gemma4_31b_zero_day:
-    model: openai/gemma-4-31b
+  # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host
+  # (see meta4/kernel-vm/Vagrantfile). Compensating-control fixes also accepted.
+  kernel_vm:
+    model: openai/MODEL_NAME
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    modes: ["day1", "zero_day"]
+    scenarios:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  # Hivestorm Linux + FreeBSD — zero-day only (free-roam hardening).
+  hivestorm_linux:
+    model: openai/MODEL_NAME
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     mode: zero_day
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 100 # matches ZeroDayBench (100 turns)
-    max_connections: 2
-    time_limit: 0 # unlimited — avoid confounding the ablation
-    token_limit: 0 # unlimited — avoid confounding the ablation
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  # Hivestorm Linux — free-roam hardening (weighted partial credit).
-  # Requires: SEED=42 bash hivestorm/prepare.sh  (generates roles.json + task.md)
-  # Agent is NOT told what's wrong — must enumerate and remediate blind.
-  hivestorm_linux_gemma4_31b:
-    model: openai/gemma-4-31b
-    solver: react
     scenarios:
       - "hivestorm/scenario-01-debian9"
       - "hivestorm/scenario-02-ubuntu1604"
@@ -123,161 +76,27 @@ presets:
       - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
       - "hivestorm/scenario-10-ubuntu-faillock"
       - "hivestorm/scenario-12-centos7-lamp"
+      - "hivestorm/scenario-14-freebsd13"
       - "hivestorm/scenario-15-docker-host"
       - "hivestorm/scenario-16-nginx-phpfpm"
-    message_limit: 500
-    max_connections: 2
+    message_limit: 0
+    token_limit: 0
     time_limit: 3600
-    token_limit: 5000000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
+    request_limit: 0
 
-  # Meta4 smoke — 5 representative scenarios for quick iteration.
-  meta4_smoke:
-    model: openai/gemma-4-31b
-    solver: react
-    scenarios:
-      - "meta4/scenario-01" # Log4Shell (Java RCE)
-      - "meta4/scenario-11" # regreSSHion (OpenSSH)
-      - "meta4/scenario-41" # CouchDB Admin Party
-      - "meta4/scenario-75" # K8s RBAC cluster-admin
-      - "meta4/scenario-91" # Grafana path traversal
-    message_limit: 50
-    max_connections: 2
-    time_limit: 2400
-    token_limit: 800000
-    bash_timeout: 240
-    verify_timeout: 360
-
-  # ---------------------------------------------------------------------------
-  # Full sweep: every benchmark x every solver x top open-weight models
-  # (best-of-each-company snapshot, 2026-04-14).
-  # Adjust model tags to whatever your Ollama instance has pulled.
-  # Run with:  uv run python -m sysrepair_bench.run full_matrix
-  # ---------------------------------------------------------------------------
-  full_matrix:
-    models:
-      - ollama/glm-5.1:latest # Zhipu AI — GLM-5.1
-      - ollama/qwen3.5:397b-a17b # Alibaba — Qwen3.5 397B A17B (MoE)
-      - ollama/deepseek-v3.2:latest # DeepSeek — V3.2
-      - ollama/kimi-k2.5:latest # Moonshot — Kimi K2.5
-      - ollama/minimax-2.7:latest # MiniMax — 2.7
-      - ollama/mimo-v2-flash:latest # Xiaomi — MiMo-V2-Flash
-      - ollama/gemma-4:31b # Google — Gemma 4 31B
-      - ollama/llama-4:405b # Meta — Llama 4 405B
-      - ollama/mistral-large-3:123b # Mistral — Large 3
-      - ollama/yi-2:34b # 01.AI — Yi-2 34B
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    benchmarks: ["meta2", "vulnhub", "ccdc"]
-    message_limit: 50
-    max_connections: 2
-    log_dir: ./logs/full_matrix
-    # --- HPC timeouts override defaults: ---
-    time_limit: 2400 # 40 min per scenario (LATS tree search is slower)
-    token_limit: 800000 # LATS fans out; keep generous but bounded
-    bash_timeout: 240 # Samba/VNC on Hardy sometimes needs >2 min
-    verify_timeout: 360
-    fail_on_error: 0.25 # allow a few flaky samples before aborting
-    retry_on_error: 2
-
-  # ── MiniMax M2.7 via Token Plan (Max: 15k req / 5hr, ~50 TPS) ────────────
-  # Set in .env:
-  #   OPENAI_BASE_URL=https://api.minimax.io/v1
-  #   OPENAI_API_KEY=<your-minimax-token-plan-key>
-  minimax_smoke:
-    model: openai/MiniMax-M2.7
-    solver: react
-    scenarios: ["meta2/scenario-01"]
-    message_limit: 30
-    request_limit: 15000      # Max tier: 15k requests per 5hr
-    request_window: 18000     # 5 hours in seconds
-
-  minimax_day1:
-    model: openai/MiniMax-M2.7
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    mode: day1
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 50
-    max_connections: 2
-    request_limit: 15000
-    request_window: 18000
-    time_limit: 2400
-    token_limit: 800000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  minimax_zero_day:
-    model: openai/MiniMax-M2.7
+  # Hivestorm Windows — zero-day only (free-roam hardening).
+  hivestorm_windows:
+    model: openai/MODEL_NAME
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     mode: zero_day
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 100
-    max_connections: 2
-    request_limit: 15000
-    request_window: 18000
-    time_limit: 0             # unlimited
-    token_limit: 0            # unlimited
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  minimax_both_modes:
-    model: openai/MiniMax-M2.7
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    modes: ["day1", "zero_day"]
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 100
-    max_connections: 2
-    request_limit: 15000
-    request_window: 18000
-    time_limit: 2400
-    token_limit: 800000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  minimax_hivestorm:
-    model: openai/MiniMax-M2.7
-    solver: react
     scenarios:
-      - "hivestorm/scenario-01-debian9"
-      - "hivestorm/scenario-02-ubuntu1604"
-      - "hivestorm/scenario-06-debian9-postgres"
-      - "hivestorm/scenario-07-ubuntu1804-samba"
-      - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
-      - "hivestorm/scenario-10-ubuntu-faillock"
-      - "hivestorm/scenario-12-centos7-lamp"
-      - "hivestorm/scenario-15-docker-host"
-      - "hivestorm/scenario-16-nginx-phpfpm"
-    message_limit: 500
-    max_connections: 2
-    request_limit: 15000
-    request_window: 18000
+      - "hivestorm/scenario-03-win10"
+      - "hivestorm/scenario-04-win2019"
+      - "hivestorm/scenario-05-win2016"
+      - "hivestorm/scenario-08-win-iis"
+      - "hivestorm/scenario-11-win-dc-dns"
+      - "hivestorm/scenario-13-ad-dc-win2019"
+    message_limit: 0
+    token_limit: 0
     time_limit: 3600
-    token_limit: 5000000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
-
-  # Use this preset when you have an unlimited / pay-per-token key:
-  minimax_unlimited:
-    model: openai/MiniMax-M2.7
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    modes: ["day1", "zero_day"]
-    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
-    message_limit: 100
-    max_connections: 4
-    request_limit: 0          # 0 = no rate limiting
-    time_limit: 2400
-    token_limit: 800000
-    bash_timeout: 240
-    verify_timeout: 360
-    fail_on_error: 0.25
-    retry_on_error: 2
+    request_limit: 0
