@@ -413,7 +413,7 @@ If you use SysRepair-Bench in your work, please cite:
 ```
 @misc{sysrepairbench,
   title  = {SysRepair-Bench: A Benchmark for Autonomous Remediation of Real-World System Vulnerabilities},
-  author = {Orojo, Abanisenioluwa Kolawole and Elumelu, Webster and El-Mahmoud, Emmanuelli and Leal, Erika and Rivas, Pablo},
+  author = {Orojo, Abanisenioluwa Kolawole and El-Mahmoud, Emmanuelli and Leal, Erika and Rivas, Pablo},
   year   = {2026},
 }
 ```
