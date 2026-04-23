@@ -54,10 +54,16 @@ try {
     } else {
         "[$(Get-Date -Format s)] CORP\vagrant already exists" | Add-Content $log
     }
+    Set-Service WinRM -StartupType Automatic
+    Start-Service WinRM
+    "[$(Get-Date -Format s)] WinRM re-enabled + started" | Add-Content $log
     schtasks /Delete /TN "Meta4-PostDcPromo" /F | Out-Null
-    "[$(Get-Date -Format s)] task unregistered, done" | Add-Content $log
+    schtasks /Delete /TN "Meta4-PostDcPromo-Rescue" /F 2>$null | Out-Null
+    "[$(Get-Date -Format s)] tasks unregistered, done" | Add-Content $log
 } catch {
     "[$(Get-Date -Format s)] ERROR: $_" | Add-Content $log
+    # Safety: unconditionally re-enable WinRM so the VM stays reachable for diag.
+    try { Set-Service WinRM -StartupType Automatic; Start-Service WinRM } catch {}
     throw
 }
 '@
@@ -74,7 +80,14 @@ try {
       -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     Write-Host "[dc-baseline] registered Meta4-PostDcPromo startup task"
 
-    Write-Host "[dc-baseline] promoting to forest root of $domainName"
+    # Safety net: force WinRM back on after 15 min regardless of task outcome,
+    # so a failed post-DCPROMO user-creation doesn't strand the VM.
+    schtasks /Create /TN 'Meta4-PostDcPromo-Rescue' /SC ONSTART /DELAY 0015:00 `
+             /TR "powershell.exe -NoProfile -Command `"Set-Service WinRM -StartupType Automatic; Start-Service WinRM`"" `
+             /RU SYSTEM /RL HIGHEST /F | Out-Null
+    Write-Host "[dc-baseline] registered Meta4-PostDcPromo-Rescue safety task"
+
+    Write-Host "[dc-baseline] promoting to forest root of $domainName (no auto-reboot)"
     Install-ADDSForest `
       -DomainName $domainName `
       -DomainNetbiosName $netbiosName `
@@ -82,10 +95,14 @@ try {
       -ForestMode WinThreshold `
       -DomainMode WinThreshold `
       -InstallDns:$true `
-      -NoRebootOnCompletion:$false `
+      -NoRebootOnCompletion:$true `
       -Force:$true
 
-    # Install-ADDSForest triggers its own reboot; provisioner resumes via vagrant-reload on next pass.
+    # Disable WinRM auto-start so the post-reboot startup task controls when
+    # the listener comes up — only after CORP\vagrant exists, to prevent
+    # vagrant-reload from racing in and getting a 401 as a now-gone local user.
+    Set-Service WinRM -StartupType Manual
+    Write-Host "[dc-baseline] WinRM set to Manual start; pass 1 complete, awaiting reload"
     exit 0
 }
 
