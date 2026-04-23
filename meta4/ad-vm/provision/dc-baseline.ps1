@@ -80,11 +80,22 @@ try {
       -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     Write-Host "[dc-baseline] registered Meta4-PostDcPromo startup task"
 
-    # Safety net: force WinRM back on after 15 min regardless of task outcome,
-    # so a failed post-DCPROMO user-creation doesn't strand the VM.
-    schtasks /Create /TN 'Meta4-PostDcPromo-Rescue' /SC ONSTART /DELAY 0015:00 `
-             /TR "powershell.exe -NoProfile -Command `"Set-Service WinRM -StartupType Automatic; Start-Service WinRM`"" `
-             /RU SYSTEM /RL HIGHEST /F | Out-Null
+    # Safety net: force WinRM back on after 15 min regardless of primary task
+    # outcome, so a failed post-DCPROMO user-creation doesn't strand the VM.
+    # Use a wrapper .cmd on disk to dodge schtasks /TR quoting issues.
+    $rescueCmd = Join-Path $setupDir 'winrm-rescue.cmd'
+    Set-Content -Path $rescueCmd -Encoding ASCII -Value @'
+@echo off
+powershell.exe -NoProfile -Command "Set-Service WinRM -StartupType Automatic; Start-Service WinRM"
+'@
+    $rescueAction    = New-ScheduledTaskAction -Execute $rescueCmd
+    $rescueTrigger   = New-ScheduledTaskTrigger -AtStartup
+    $rescueTrigger.Delay = 'PT15M'
+    $rescuePrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
+                         -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName 'Meta4-PostDcPromo-Rescue' `
+      -Action $rescueAction -Trigger $rescueTrigger -Principal $rescuePrincipal `
+      -Settings $settings -Force | Out-Null
     Write-Host "[dc-baseline] registered Meta4-PostDcPromo-Rescue safety task"
 
     Write-Host "[dc-baseline] promoting to forest root of $domainName (no auto-reboot)"
