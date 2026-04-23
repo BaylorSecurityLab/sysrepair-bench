@@ -2,9 +2,7 @@
 
 ## Overview
 
-Container scenarios covering **modern (2021–2026) vulnerabilities** that neither Metasploitable 2 nor Metasploitable 3 exercise. Meta4 is the "next-generation" track: Log4Shell-era Java RCE, cloud-native supply-chain flaws, container-runtime escapes, modern Linux LPE chains, and vulnerable API/GraphQL stacks.
-
-Full design rationale and scope lives in [`../docs/META4_PLAN.md`](../docs/META4_PLAN.md).
+Container scenarios covering **modern (2021–2026) vulnerabilities** that neither Metasploitable 2 nor Metasploitable 3 exercise. Meta4 is the "next-generation" track: Log4Shell-era Java RCE, cloud-native supply-chain flaws, container-runtime escapes, modern Linux LPE chains, and vulnerable API/GraphQL stacks. See the [root README](../README.md) for benchmark-wide overview, scenario format, and host setup.
 
 ## No-overlap policy
 
@@ -49,47 +47,14 @@ Each scenario targets a CVE or misconfiguration **not already covered** by `meta
 | API targets | upstream crAPI / DVGA / VAmPI compose stacks | vendored |
 | Cloud sim | `localstack/localstack:3`, `minio/minio`, `argoproj/argocd`, `rancher/k3s` | |
 
-See [`../docs/META4_PLAN.md`](../docs/META4_PLAN.md) for the full scenario index, CVE mapping, remediation bands, and the AD-VM addendum.
+## Host-kernel coupling
 
-## Host-kernel coupling (important)
+Three scenarios target kernel vulnerabilities and therefore need a host whose kernel matches the vulnerable ABI — see [`kernel-vm/`](kernel-vm/) for the Vagrant VM. All three also accept a **compensating control** (`chattr +i` for S19, `kernel.unprivileged_userns_clone=0` for S21/S22) which is host-kernel-agnostic.
 
-Containers **share the host kernel**, so scenarios that target a kernel
-vulnerability cannot be fully virtualized — their `verify.sh` inspects
-`uname -r` of the harness host (or accepts a compensating control such
-as `kernel.unprivileged_userns_clone=0`). If the harness host is already
-on a patched kernel, the PoC check passes trivially and the scenario
-degenerates to a "no-op remediation" case. To actually exercise the
-remediation workflow, these scenarios must be run inside a VM whose
-kernel matches the documented vulnerable range. A ready-made Vagrant VM
-is provided in [`kernel-vm/`](kernel-vm/):
-
-```bash
-cd meta4/kernel-vm
-vagrant up        # Ubuntu 22.04, kernel pinned pre-fix, Docker installed
-vagrant ssh
-cd /meta4
-docker build -t s21 scenario-21
-docker run --rm --privileged s21 bash /verify.sh   # should FAIL
-```
-
-| ID | CVE | Requires host kernel | Covered by kernel-vm? |
+| ID | CVE | Vulnerable kernel | Covered by kernel-vm? |
 |---|---|---|---|
-| [scenario-19](scenario-19/) — Dirty Pipe | CVE-2022-0847 | 5.8 – 5.16.10 / 5.15.25 / 5.10.102 | **No** — 22.04 GA shipped with fix. Requires separate Ubuntu 20.04 HWE host (see [kernel-vm/README](kernel-vm/README.md)) or compensating-control mode (`chattr +i`) |
-| [scenario-21](scenario-21/) — GameOver(lay) | CVE-2023-2640 / CVE-2023-32629 | Ubuntu 5.15.0 ABI < 75 | **Yes** |
-| [scenario-22](scenario-22/) — `nf_tables` UAF | CVE-2024-1086 | Ubuntu 5.15.0 ABI < 97 | **Yes** |
+| [scenario-19](scenario-19/) — Dirty Pipe | CVE-2022-0847 | 5.8 – 5.16.10 | No — needs Ubuntu 20.04 HWE 5.13.0-27 or earlier |
+| [scenario-21](scenario-21/) — GameOver(lay) | CVE-2023-2640 / 32629 | Ubuntu 5.15.0 ABI < 75 | Yes |
+| [scenario-22](scenario-22/) — `nf_tables` UAF | CVE-2024-1086 | Ubuntu 5.15.0 ABI < 97 | Yes |
 
-All three scenarios also accept **compensating controls** as a valid
-remediation path (`chattr +i` for S19, `kernel.unprivileged_userns_clone=0`
-for S21/S22), which can be tested on any host regardless of kernel
-version.
-
-Scenarios that are **not** host-kernel coupled (all other IDs) run
-correctly on any modern Linux Docker host, because the vulnerable
-component lives entirely in userspace (libc, polkit, sudo, runc,
-application jars, plugin code, etc.).
-
-Related but worth calling out: [scenario-11](scenario-11/) (OpenSSH
-regreSSHion) and [scenario-20](scenario-20/) (Looney Tunables) are
-**glibc / sshd userspace** issues despite sometimes being described as
-"system-level" — they ship inside the container and do not depend on
-the host kernel.
+All other scenarios run on any modern Linux Docker host — the vulnerable component lives in userspace (libc, polkit, sudo, runc, application jars, plugin code). Notably [scenario-11](scenario-11/) (regreSSHion) and [scenario-20](scenario-20/) (Looney Tunables) are glibc/sshd userspace issues despite sometimes being described as "system-level".

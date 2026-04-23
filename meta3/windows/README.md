@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 1 + 2 scaffolding has landed** — see [docs/PLAN.md](../../docs/PLAN.md) for the full container build plan and [run-sequential.ps1](run-sequential.ps1) for the harness. The authoring pipeline is proven end-to-end on four low-friction scenarios:
+**21/21 scenarios authored** — each `scenario-NN-*/` folder carries a Dockerfile (or Packer/Hyper-V provider where process-isolation is insufficient), threat.md, a behavioral verify probe, and a harness-compatible manifest. The sequential harness lives in [run-sequential.ps1](run-sequential.ps1). Scan source: [`../../openvas-scan-reports/metasploitable-3.0-win-openvas.pdf`](../../openvas-scan-reports/metasploitable-3.0-win-openvas.pdf).
 
 | # | Folder | Vuln | Upstream source |
 |---|---|---|---|
@@ -29,47 +29,17 @@
 | 21 | [scenario-21-ssh-defaults/](scenario-21-ssh-defaults/) | OpenSSH-Win32 7.1.0.0-beta + `vagrant:vagrant` admin (CVE-2016-1908/6210/6515, CVE-2017-15906, CVE-2018-15473) | Rapid7 Vagrant provisioning channel |
 
 
-This README documents:
-1. The **proposed scope** sourced from the Rapid7 [metasploitable3 Packer/Vagrant build scripts](https://github.com/rapid7/metasploitable3) — this is the ground truth for what vulnerabilities Meta3-Windows ships with, and scan findings will largely overlap it.
-2. The **container strategy** for each candidate scenario (Server Core base, silent installers, port mappings, isolation mode).
-3. The **host prerequisites** the benchmark runner needs.
+## Suite-specific notes
 
-## Container strategy
+**Base image:** `mcr.microsoft.com/windows/servercore:ltsc2019` (or `ltsc2022`) — not Nano Server. The legacy Meta3-Windows installers (ManageEngine Desktop Central 9, GlassFish 4, ColdFusion, older JDK/JRE, 32-bit WoW64 binaries) depend on the Server Core API surface; Nano Server strips 32-bit support and several COM/WMI components they rely on. Rapid7's upstream build targets Server 2008 R2 (no container base exists below Server 2016), so Server Core LTSC is used and the specific vulnerable app versions are pinned at install time.
 
-### Base image
+**Isolation:** the harness auto-injects `--isolation=hyperv` for every Windows-container scenario (see root README §3c). Scenarios that rely on specific kernel behavior (EternalBlue-era SMB surface, NTLM relay) require Hyper-V isolation; a few scenarios ship a Hyper-V Packer provider where container process/kernel coupling is insufficient (e.g. S13 LLMNR/NBT-NS).
 
-**`mcr.microsoft.com/windows/servercore:ltsc2019`** (or `ltsc2022`) — not Nano Server. The legacy installers used by Meta3-Windows (ManageEngine Desktop Central 9, GlassFish 4, ColdFusion, older JDK/JRE, 32-bit WoW64 binaries) depend on the Server Core API surface. Nano Server strips 32-bit support and several COM/WMI components that these installers rely on.
+**Silent installers:** every installer must run silently (`/S`, `/quiet`, `/qn`, or MSI `/passive /norestart`) — Windows containers have no desktop, so any GUI prompt hangs the build.
 
-Rapid7's build targets Windows Server 2008 R2, which is not available as a container base (Microsoft only supports Server 2016+ container images). Server Core LTSC gives us the full legacy API surface; the specific vulnerable app versions are preserved by pinning the installers rather than the kernel.
+### Per-service host-port mapping
 
-### Isolation mode
-
-- **Process isolation** works when the container's Windows build matches the host's build (e.g. Windows 11 22H2 host ↔ Server Core ltsc2022 container is usually fine with `--isolation=process`).
-- **Hyper-V isolation** (`--isolation=hyperv`) is the safe default — it pins the kernel per container and keeps a mismatched host kernel from breaking older installers. Slower startup, heavier memory.
-- Scenarios that rely on specific kernel behavior (EternalBlue-era SMB surface, NTLM relay) will document which isolation mode they require.
-
-### Dockerfile pattern
-
-```dockerfile
-FROM mcr.microsoft.com/windows/servercore:ltsc2019
-SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop';"]
-
-# Example: install a pinned vulnerable version silently
-RUN Invoke-WebRequest -Uri '<pinned-installer-url>' -OutFile 'C:\\install.exe'; \
-    Start-Process -FilePath 'C:\\install.exe' -ArgumentList '/S','/quiet' -Wait; \
-    Remove-Item 'C:\\install.exe'
-
-EXPOSE <vuln-service-port>
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service <svc>; while ($true) { Start-Sleep 60 }"]
-```
-
-Every installer must run silently (`/S`, `/quiet`, `/qn`, or MSI `/passive /norestart`) — Windows containers have no desktop, so any GUI prompt hangs the build.
-
-### Agent connectivity
-
-Same sequential-port-mapping pattern as the Ubuntu sub-suite. The agent runs on the host and reaches each container via `localhost:<mapped-port>`:
-
-| Target service | Typical host port |
+| Target service | Host port |
 |---|---|
 | WinRM (5985/HTTP, 5986/HTTPS) | 5985 / 5986 |
 | SSH (if OpenSSH installed) | 2222 |
@@ -81,11 +51,9 @@ Same sequential-port-mapping pattern as the Ubuntu sub-suite. The agent runs on 
 | ManageEngine Desktop Central (8040) | 8040 |
 | ElasticSearch (9200) | 9200 |
 
-Port-forward (`-p localhost:<host>:<container>`) keeps the benchmark portable; transparent-network setups are avoided because they require Hyper-V external switches and DHCP reservations that aren't reproducible across laptops, cloud VMs, and CI runners.
+## Candidate vulnerability surface (reference)
 
-## Proposed scenario index (subject to scan)
-
-Sourced from the Rapid7 `metasploitable3-windows` Vagrant/Packer tree. Final numbering and compensating-control split will be set once the OpenVAS scan is ingested and overlaps are pruned.
+The tables below enumerate the Rapid7 `metasploitable3-windows` Vagrant/Packer vulnerability surface. They are kept here as a **scope reference** — the authoritative list of what is actually built is the `scenario-NN-*/` folder table at the top of this file.
 
 ### Configuration hardening
 
@@ -145,16 +113,8 @@ Sourced from the Rapid7 `metasploitable3-windows` Vagrant/Packer tree. Final num
 | ElasticSearch 1.1.1 pinned for legacy analytics | Windows Firewall rule scoping 9200 to trusted subnet |
 | ManageEngine 9 can't be replaced | Reverse-proxy auth in front of `/fileupload` endpoint |
 
-## Host prerequisites
-
-- Windows 10/11 Pro/Enterprise or Windows Server 2019+ (Home editions don't support Hyper-V isolation or the Windows Containers feature set)
-- Docker Desktop in **Windows Containers** mode, or a native Windows `dockerd` install
-- Hyper-V and Containers Windows features enabled (`Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All`; `Enable-WindowsOptionalFeature -Online -FeatureName Containers -All`)
-- ~40 GB free disk for the Server Core base image plus per-scenario layers
-- Internet access for pinned installer downloads at build time (or an offline mirror if building air-gapped)
-
 ## Next steps
 
-1. Upload the Windows OpenVAS scan PDF to `../../openvas-scan-reports/metasploitable-3.0-win-openvas.pdf`.
-2. Diff the scan's NVT list against the candidate scenarios above; prune anything that isn't scan-observable and promote any scan findings that aren't on the candidate list.
-3. Author `scenario-NN/` folders (`Dockerfile` + `threat.md` + `verify.sh`) one section at a time — config-hardening first (fastest feedback on the Server Core base), then patch-management, then compensating-controls last.
+1. Run the sequential harness end-to-end on a Windows host and record per-scenario timing / isolation-mode notes.
+2. Promote any Windows scan findings not yet represented in S01–S21 into a new scenario.
+3. Add compensating-control variants for the scenarios where the vulnerable version is legacy-pinned (Struts 2.3.x WAF rule, ManageEngine 9 reverse-proxy, ElasticSearch 1.1.1 firewall scope) once the core S01–S21 harness run is green.

@@ -13,11 +13,6 @@ Source material:
 
 Forensics tasks are intentionally excluded; this suite is sysrepair-focused.
 
-Design docs:
-- [../docs/HIVESTORM_PLAN.md](../docs/HIVESTORM_PLAN.md) — HS20 (01-05)
-- [../docs/HIVESTORM_HS21_PLAN.md](../docs/HIVESTORM_HS21_PLAN.md) — HS21 (06-08)
-- [../docs/HIVESTORM_HS23_PLAN.md](../docs/HIVESTORM_HS23_PLAN.md) — HS23 (09-11)
-
 ## Anti-memorization
 
 Every identity the agent could otherwise memorize across runs (backdoor
@@ -32,34 +27,7 @@ sandbox to know what to check for.
 
 ## Build flow
 
-Before running the eval, regenerate roles + prompts:
-
-```bash
-# one scenario, random seed
-hivestorm/prepare.sh 01
-
-# reproducible
-SEED=42 hivestorm/prepare.sh 01
-
-# all implemented scenarios
-hivestorm/prepare.sh
-```
-
-`prepare.sh` writes:
-
-- `<scenario>/build/roles.json` — consumed by Dockerfile COPY + seed.sh
-- `<scenario>/task.md` — rendered from `task.md.tmpl`, read by the harness
-
-Both are `.gitignore`d; only the templates are committed.
-
-Then run the eval as normal, restricting to hivestorm scenarios:
-
-```bash
-cd inspect_eval
-uv run python -m sysrepair_bench.run <preset> \
-    # with the preset's `benchmarks: [hivestorm]` or
-    # `scenarios: [hivestorm/scenario-01-debian9]`
-```
+Before running the eval, regenerate roles + prompts: see [root README §3e](../README.md). `prepare.sh` writes per-scenario `build/roles.json` and `task.md` (both `.gitignore`d; only the templates are committed).
 
 ## Scoring
 
@@ -95,7 +63,7 @@ scorer unchanged.
 | scenario-16-nginx-phpfpm        | `debian:12` + nginx + php8.2-fpm        | implemented |
 
 Win10 has no public Docker client image; scenario-03 degrades to Server-Core
-2019 as a stand-in (documented in the HS20 plan).
+2019 as a stand-in.
 
 Windows containers cannot run the full service surface area of a real host
 (Server-Core can't host Print Spooler, Telnet-Server, SMB server). Windows

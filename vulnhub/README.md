@@ -1,8 +1,8 @@
-# VulnHub Benchmark Scenarios
+# SysRepair-Bench: VulnHub Sub-Suite
 
-Vulnerability benchmark scenarios derived from the **Comprehensive Analysis of VulnHub Virtual Machine Scoping for Automated Remediation Agents** report. Each scenario recreates a specific vulnerability from a VulnHub VM as a Docker container for automated remediation testing.
+**30 Docker scenarios** recreating specific vulnerabilities from VulnHub community VMs (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, FristiLeaks, LinSecurity, Brainpan, De-ICE, PwnOS). See the [root README](../README.md) for benchmark overview, scenario format, and harness usage.
 
-**Note:** Scenarios that duplicate vulnerabilities already covered in `ccdc/` or `meta2/` have been removed. All 30 scenarios below are unique to this folder.
+Scenarios that would have duplicated coverage in `ccdc/` or `meta2/` were dropped; all 30 below are unique to this sub-suite.
 
 ## Scenario Index
 
@@ -54,23 +54,6 @@ Vulnerability benchmark scenarios derived from the **Comprehensive Analysis of V
 | `tleemcjr/metasploitable2@sha256:e559450b...` | Metasploitable 2 | 05 |
 | `supdevinci/mrrobot@sha256:9e9b6cb8f7...` | Mr-Robot | 17 |
 
-## Removed Scenarios (overlaps with ccdc/ or meta2/)
+## Removed Scenarios
 
-20 scenarios were removed to avoid duplication with existing benchmarks. See git history for details.
-
-## Usage
-
-Each scenario contains:
-- `Dockerfile` - Builds the vulnerable container
-- `threat.md` - Documents the vulnerability, affected service, and remediation steps
-- `verify.sh` - Verification script (exit 0 = remediated, exit 1 = still vulnerable)
-
-```bash
-# Build and run a scenario
-cd scenario-XX
-docker build -t vulnhub-XX .
-docker run -d --name vulnhub-XX vulnhub-XX
-
-# Verify remediation
-docker exec vulnhub-XX /bin/bash /verify.sh
-```
+20 candidate scenarios were dropped to avoid duplication with `ccdc/` or `meta2/`. See git history for details.

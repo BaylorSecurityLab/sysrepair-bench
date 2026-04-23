@@ -30,7 +30,9 @@ See [Excluded to avoid overlap](#excluded-to-avoid-overlap) at the bottom for th
 
 All Ubuntu scenarios use `ubuntu:14.04` as the base, with repo URLs pinned to `old-releases.ubuntu.com` (14.04 is EOL). No special kernel flags are required — `ubuntu:14.04` boots cleanly on modern Docker hosts (unlike the `meta2/` Hardy base, which needs `vsyscall=emulate`).
 
-## Proposed scenario index (pending Dockerfile/threat/verify authoring)
+## Scenario index
+
+All 19 scenarios below are live: each `scenario-NN/` folder carries a `Dockerfile`, `threat.md`, `verify.sh`, and Chef run-list. See [Status](#status) at the bottom for the current build state.
 
 ### Configuration hardening — S01–S05
 
@@ -100,45 +102,11 @@ The Drupal, `payroll_app`, Samba, and phpMyAdmin recipes require neither patch.
 
 Upstream BSD-3-Clause attribution lives in [`shared/UPSTREAM_LICENSE`](shared/UPSTREAM_LICENSE). Only the recipes and resource files we actually build against are vendored; the Vagrantfile, packer templates, Windows `.bat` scripts, and unrelated cookbooks are not copied.
 
-### Per-scenario Dockerfile skeleton
+### Per-scenario layout
 
-```dockerfile
-FROM ubuntu:14.04
+Each `scenario-NN/` ships a `Dockerfile` that pins `ubuntu:14.04`, rewrites apt sources to `old-releases.ubuntu.com`, installs Chef 13.8.5 via Omnibus, copies `shared/cookbooks`, and runs `chef-solo -j scenario.json`. `scenario.json` carries a minimal run-list (e.g. `{"run_list": ["recipe[metasploitable::drupal]"]}`) plus per-scenario attribute overrides. `entrypoint.sh` starts the daemons the stripped-out `service` blocks would have started (e.g. `apache2ctl -D FOREGROUND`, `proftpd --nodaemon`).
 
-# repo pins for EOL 14.04
-RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y curl ca-certificates
-
-# Chef 13.8.5 via Omnibus (not in apt for 14.04)
-RUN curl -L https://omnitruck.chef.io/install.sh | bash -s -- -v 13.8.5
-
-COPY shared/cookbooks /cookbooks
-COPY solo.rb scenario.json /
-RUN chef-solo -c /solo.rb -j /scenario.json
-
-COPY verify.sh /verify.sh
-EXPOSE <scenario-port>
-CMD ["/entrypoint.sh"]
-```
-
-`scenario.json` carries a minimal run-list (e.g. `{"run_list": ["recipe[metasploitable::drupal]"]}`) plus any per-scenario attribute overrides. `entrypoint.sh` starts the daemons the stripped-out `service` blocks would have started (e.g. `apache2ctl -D FOREGROUND`, `proftpd --nodaemon`).
-
-### Run loop
-
-```bash
-cd scenario-01
-docker build -t meta3u-s01 .
-docker run -d --name meta3u-s01 -p 2222:22 meta3u-s01
-
-# agent connects via localhost:2222 and performs remediation
-
-docker exec meta3u-s01 /bin/bash /verify.sh
-# exit 0 = remediated + service still operational; exit 1 = still vulnerable or regressed
-
-docker stop meta3u-s01 && docker rm meta3u-s01
-```
-
-Host port assignments (tentative — finalized per scenario Dockerfile):
+Host port assignments:
 
 | Scenario port | Host port |
 |---|---|
@@ -173,3 +141,9 @@ The following OpenVAS findings / known Meta3-Ubuntu vulns were **dropped** becau
 | Generic outdated OpenSSL / Python / glibc USNs | `ccdc/` S33 (outdated OpenSSL CVE); generic patch-mgmt is not re-implemented per-suite |
 
 The compensating-control variants in S13–S17 are kept because they target the Meta3-specific software stack (Drupal 7.31, ProFTPD 1.3.5, Meta3's UnrealIRCd build, MySQL 5.5, payroll_app.php) which no sibling suite covers.
+
+## Status
+
+- 19/19 scenarios authored (S01–S19), each with Dockerfile, threat.md, verify.sh, and scenario.json / entrypoint where required.
+- Vendored Rapid7 cookbook lives under [`shared/`](shared/README.md) with the two build patches (`files_path` rewrite, Upstart `service` block stripping) applied.
+- Scan source: [`../../openvas-scan-reports/metasploitable-3.0-ubu-openvas.pdf`](../../openvas-scan-reports/metasploitable-3.0-ubu-openvas.pdf) (Apr 2026).

@@ -1,47 +1,12 @@
-# SysRepair-Bench
+# SysRepair-Bench: CCDC Sub-Suite
 
-A benchmark of **50 reproducible scenarios** for evaluating autonomous system remediation agents.
-Each scenario is a Docker container based on **Ubuntu 25.10 (Quantal)** with:
+**50 Docker scenarios** (Ubuntu 25.10 base) derived from CCDC (Collegiate Cyber Defense Competition) blue-team hardening toolkits — TAMU linuxmonkeys (2021), LATech 2023 SWCCDC Regionals, UTSA 2023 SWCCDC, and internal team checklists (2018–2024). See the [root README](../README.md) for benchmark overview, scenario format, and harness usage.
 
-1. **Vulnerable State** - A `Dockerfile` that sets up the misconfigured/vulnerable environment
-2. **Threat Context** - A `threat.md` describing the vulnerability and associated CWE
-3. **Success Oracle** - A `verify.sh` that tests exploitation (PoC) and system functionality (regression)
-
-Remediation is successful **only if** the PoC fails AND the functionality test passes.
-
-## Categories
-
-| Category | Scenarios | Description |
-|----------|-----------|-------------|
-| **Configuration Vulnerabilities** | 01-25 | Fixable by editing config files (sshd_config, nginx.conf, my.cnf, etc.) |
-| **Dependency Management** | 26-38 | Fixable by installing, upgrading, or removing packages |
-| **Permissions/Access** | 39-50 | Fixable by chmod, chown, usermod, or ACL changes |
-
-## Source Material
-
-Scenarios derived from CCDC (Collegiate Cyber Defense Competition) team hardening scripts:
-- TAMU linuxmonkeys toolkit (2021)
-- LATech 2023 SWCCDC Regionals scripts
-- UTSA 2023 SWCCDC scripts
-- Team internal checklists (2018-2024)
-
-## Usage
-
-```bash
-# Build a single scenario
-cd scenario-01
-docker build -t sysrepair-01 .
-
-# Run the container
-docker run -d --name test-01 sysrepair-01
-
-# Agent performs remediation inside the container...
-
-# Verify remediation
-docker exec test-01 /opt/verify.sh
-# Exit code 0 = remediation successful
-# Exit code 1 = remediation failed
-```
+| Category | Scenarios | Focus |
+|----------|-----------|-------|
+| **Configuration Hardening** | 01–25 | Config-file edits (sshd_config, nginx.conf, my.cnf, etc.) |
+| **Dependency Management** | 26–38 | Install / upgrade / remove packages |
+| **Permissions & Access** | 39–50 | `chmod`, `chown`, `usermod`, ACL changes |
 
 ## Scenario Index
 
