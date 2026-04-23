@@ -4,7 +4,7 @@ VirtualBox VM with a **pinned vulnerable Ubuntu 22.04 kernel** and Docker pre-in
 
 Host prerequisites: see the [root README §3d](../../README.md). On Linux hosts running KVM/libvirt, VirtualBox fights for `/dev/kvm` — stop `libvirtd` or wire up a `:libvirt` provider.
 
-## Quick start
+## Quick start (manual)
 
 ```bash
 cd meta4/kernel-vm
@@ -15,6 +15,76 @@ docker build -t s21 scenario-21
 docker run --rm --privileged s21 bash /verify.sh    # FAIL before remediation
 # ...remediate, re-run verify, then: vagrant destroy -f
 ```
+
+## Running via Inspect AI (`kernel_vm` preset)
+
+The `kernel_vm` preset in [`inspect_eval/runs.yaml`](../../inspect_eval/runs.yaml) selects scenarios 19/21/22. To make Inspect's docker sandbox build them on the **VM's vulnerable kernel** instead of your laptop's patched one, route docker calls into the VM over SSH:
+
+```bash
+# 1. Bring the VM up (one-time per session).
+cd meta4/kernel-vm && vagrant up
+
+# 2. Capture the Vagrant-generated SSH config so docker can reach the VM.
+vagrant ssh-config > kernel-vm.ssh
+
+# 3. Register a docker context that tunnels into the VM. SSH host alias
+#    `default` matches what `vagrant ssh-config` emits.
+docker context create kernel-vm \
+  --docker "host=ssh://default" \
+  --description "meta4 kernel-LPE Vagrant VM"
+
+# 4. Run the preset. SSH config flag points docker at the captured config;
+#    DOCKER_CONTEXT pins this shell to the VM's daemon for the run only.
+cd ../..
+DOCKER_CONTEXT=kernel-vm \
+SSH_OPTIONS="-F meta4/kernel-vm/kernel-vm.ssh" \
+  uv run python -m sysrepair_bench.run kernel_vm
+
+# 5. When done, drop back to local docker:
+docker context use default
+```
+
+Notes:
+- Container builds happen inside the VM; the agent loop, model API calls, and logs stay on your laptop.
+- The first build is slow (SSH-tunneled `docker cp` of build context). Subsequent runs reuse the VM's image cache.
+- If you only want to test compensating-control fixes (`chattr +i`, `kernel.unprivileged_userns_clone=0`), skip the VM entirely — the preset works against your laptop's docker and `verify.sh` accepts those fixes regardless of host kernel.
+
+### Windows host (Docker Desktop)
+
+Docker Desktop on Windows shells out to OpenSSH directly and ignores `SSH_OPTIONS` / `-F`. Wire the VM into `~/.ssh/config` instead so docker can resolve the hostname:
+
+```powershell
+# 1. Bring the VM up.
+cd meta4\kernel-vm
+vagrant up
+
+# 2. Append Vagrant's SSH config to your user SSH config, renaming the host.
+vagrant ssh-config |
+  ForEach-Object { $_ -replace '^Host default', 'Host kernel-vm' } |
+  Add-Content -Path $env:USERPROFILE\.ssh\config
+
+# 3. Verify the alias works (should drop you into the VM).
+ssh kernel-vm exit
+
+# 4. Register the docker context using the alias.
+docker context create kernel-vm `
+  --docker "host=ssh://kernel-vm" `
+  --description "meta4 kernel-LPE Vagrant VM"
+
+# 5. Run the preset.
+cd ..\..
+$env:DOCKER_CONTEXT = "kernel-vm"
+uv run python -m sysrepair_bench.run kernel_vm
+Remove-Item Env:DOCKER_CONTEXT
+
+# 6. (Optional) Tear down later.
+cd meta4\kernel-vm; vagrant destroy -f
+docker context rm kernel-vm
+```
+
+The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vagrant's insecure key and the right `Port`, so no other env vars are needed. If `~/.ssh/config` doesn't exist yet, create the parent dir first: `New-Item -ItemType Directory -Force $env:USERPROFILE\.ssh`.
+
+
 
 ## Kernel coverage
 
