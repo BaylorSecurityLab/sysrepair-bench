@@ -106,6 +106,46 @@ else
     echo "[PoC] INFO: chage or testuser not available, skipping applied-aging behavioral test."
 fi
 
+# --- PoC Behavioral Test: live useradd applies the new login.defs aging ---
+# Create a throwaway user and inspect what the shadow subsystem actually
+# wrote. This exercises useradd(8)'s live read of /etc/login.defs rather
+# than just trusting the file. Baseline seeds max=99999/min=0/warn=0 so a
+# freshly-created user inherits those values => [PoC] FAILS.
+echo ""
+echo "[PoC] Probing live useradd inheritance of password aging..."
+PROBE_USER="pwage_probe_$$"
+if command -v useradd >/dev/null 2>&1 && command -v userdel >/dev/null 2>&1; then
+    if useradd -M -s /usr/sbin/nologin "$PROBE_USER" 2>/dev/null; then
+        PROBE_CHAGE=$(chage -l "$PROBE_USER" 2>/dev/null || true)
+        PROBE_MAX=$(echo "$PROBE_CHAGE" | awk -F: '/Maximum number of days/ {gsub(/ /,"",$2); print $2}')
+        PROBE_MIN=$(echo "$PROBE_CHAGE" | awk -F: '/Minimum number of days/ {gsub(/ /,"",$2); print $2}')
+        PROBE_WARN=$(echo "$PROBE_CHAGE" | awk -F: '/Number of days of warning/ {gsub(/ /,"",$2); print $2}')
+        PROBE_FAIL=0
+        if [ -n "$PROBE_MAX" ] && [ "$PROBE_MAX" -gt 90 ] 2>/dev/null; then
+            echo "[PoC] FAIL: newly-created user inherited PASS_MAX_DAYS=$PROBE_MAX (>90)."
+            PROBE_FAIL=1
+        fi
+        if [ -n "$PROBE_MIN" ] && [ "$PROBE_MIN" -lt 7 ] 2>/dev/null; then
+            echo "[PoC] FAIL: newly-created user inherited PASS_MIN_DAYS=$PROBE_MIN (<7)."
+            PROBE_FAIL=1
+        fi
+        if [ -n "$PROBE_WARN" ] && [ "$PROBE_WARN" -lt 7 ] 2>/dev/null; then
+            echo "[PoC] FAIL: newly-created user inherited PASS_WARN_AGE=$PROBE_WARN (<7)."
+            PROBE_FAIL=1
+        fi
+        userdel "$PROBE_USER" 2>/dev/null || true
+        if [ "$PROBE_FAIL" -eq 1 ]; then
+            echo "[PoC] RESULT: Live useradd inheritance still uses insecure aging defaults."
+            exit 1
+        fi
+        echo "[PoC] PASS: newly-created user inherited compliant aging (max=$PROBE_MAX min=$PROBE_MIN warn=$PROBE_WARN)."
+    else
+        echo "[PoC] INFO: could not create probe user (useradd refused), skipping live inheritance probe."
+    fi
+else
+    echo "[PoC] INFO: useradd/userdel unavailable, skipping live inheritance probe."
+fi
+
 # --- Regression Test: Ensure users can still change passwords ---
 echo ""
 echo "[Regression] Checking that password management still works..."

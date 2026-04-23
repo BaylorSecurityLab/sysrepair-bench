@@ -36,6 +36,29 @@ if [ "$PASS" -eq 0 ]; then
 fi
 
 ###############################################################################
+# Check 3 (behavioural): actually attempt the unshare + cgroup-mount primitive
+# that CVE-2022-0492 exploitation relies on. With seccomp FILTER or AppArmor
+# in place, either unshare(CLONE_NEWUSER|CLONE_NEWNS) or the subsequent
+# mount() of an RDMA-style cgroup v1 controller must fail at runtime.
+###############################################################################
+
+MNTDIR=$(mktemp -d 2>/dev/null || echo /tmp/s70cg)
+mkdir -p "$MNTDIR" 2>/dev/null || true
+UNSHARE_OUT=$(unshare -UrmC --propagation=private \
+    sh -c "mount -t cgroup -o rdma cgroup '$MNTDIR' 2>&1" 2>&1 || true)
+UNSHARE_RC=$?
+umount "$MNTDIR" 2>/dev/null || true
+rmdir "$MNTDIR" 2>/dev/null || true
+
+if [ "$UNSHARE_RC" = "0" ] && ! echo "$UNSHARE_OUT" | grep -qiE 'denied|not permitted|operation not|error'; then
+    echo "FAIL [PoC-live]: unshare+cgroup-mount primitive succeeded — CVE-2022-0492 path is open." >&2
+    echo "--- unshare output ---" >&2
+    echo "$UNSHARE_OUT" >&2
+    exit 1
+fi
+echo "PASS [PoC-live]: unshare+cgroup-mount primitive was blocked at runtime."
+
+###############################################################################
 # Regression: basic commands still work
 ###############################################################################
 

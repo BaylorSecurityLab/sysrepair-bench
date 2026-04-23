@@ -32,5 +32,20 @@ if [ -f "$SUDO" ]; then
     echo "PASS [PoC]: sudoedit -s did not segfault."
 fi
 
+# PoC (behavioral live): run the Baron-Samedit canary as the victim user.
+# The classic reproducer `sudoedit -s '\' $(perl -e 'print "A" x 65536')`
+# is simulated with a shell-only payload; a vulnerable sudo crashes with
+# "malloc(): invalid size" / "double free". A patched sudo prints the
+# canonical "usage" message and exits 1.
+if id victim >/dev/null 2>&1 && [ -f "$SUDO" ]; then
+    PAYLOAD=$(printf 'A%.0s' $(seq 1 4096))
+    LIVE_OUT=$(su - victim -c "sudoedit -s '\\' $PAYLOAD" 2>&1 || true)
+    if echo "$LIVE_OUT" | grep -qiE 'malloc|double free|stack smashing|segmentation'; then
+        echo "FAIL [PoC]: sudoedit live payload from victim triggered heap corruption." >&2
+        exit 1
+    fi
+    echo "PASS [PoC]: sudoedit live invocation by victim rejected cleanly."
+fi
+
 [ -f "$SUDO" ] && { echo "PASS [Regression]: sudo binary present."; exit 0; }
 echo "FAIL [Regression]: sudo binary missing." >&2; exit 1

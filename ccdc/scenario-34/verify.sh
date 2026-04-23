@@ -52,6 +52,43 @@ else
     echo "[PoC] WARNING: /etc/apt/apt.conf.d/50unattended-upgrades not found (default may suffice)."
 fi
 
+
+# --- PoC Behavioral Test: unattended-upgrades applies runtime config ---
+# Hybrid probe: config grep is already above; here we exercise the actual
+# apt periodic evaluation and the dry-run unattended-upgrade entrypoint.
+# Baseline has neither the binary nor the config, so both sub-checks fail.
+echo ""
+echo "[PoC] Probing live unattended-upgrades behaviour..."
+LIVE_OK=false
+
+# Sub-probe A: the unattended-upgrade binary actually runs in dry-run mode
+# (this parses the merged /etc/apt/apt.conf.d/* tree at runtime).
+if command -v unattended-upgrade &>/dev/null; then
+    if unattended-upgrade --dry-run --debug >/tmp/uu_dry.$$.log 2>&1; then
+        if grep -qiE '(Allowed origins are|Initial blacklist|pkgs that look like)' /tmp/uu_dry.$$.log; then
+            LIVE_OK=true
+            echo "[PoC] PASS: unattended-upgrade --dry-run parsed runtime config."
+        fi
+    fi
+    rm -f /tmp/uu_dry.$$.log
+fi
+
+# Sub-probe B: apt-config dump reflects the merged runtime periodic values
+if command -v apt-config &>/dev/null; then
+    PERIODIC_DUMP=$(apt-config dump 2>/dev/null | grep -E '^APT::Periodic::(Update-Package-Lists|Unattended-Upgrade)' || true)
+    if echo "$PERIODIC_DUMP" | grep -qE 'Update-Package-Lists "1"' && \
+       echo "$PERIODIC_DUMP" | grep -qE 'Unattended-Upgrade "1"'; then
+        LIVE_OK=true
+        echo "[PoC] PASS: apt-config dump shows Periodic knobs enabled at runtime."
+    fi
+fi
+
+if ! $LIVE_OK; then
+    echo "[PoC] FAIL: live unattended-upgrades behaviour not verified (binary missing or apt runtime values not set)."
+    echo "RESULT: Vulnerability still present (no live unattended-upgrades state)."
+    exit 1
+fi
+
 echo "[PoC] All checks passed - vulnerability is remediated."
 
 # ──────────────────────────────────────────────

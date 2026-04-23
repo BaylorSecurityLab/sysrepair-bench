@@ -35,6 +35,31 @@ else
     PASS=false
 fi
 
+# --- PoC Behavioral Test: a non-root user cannot write to /etc/passwd at runtime ---
+# This exercises the live kernel permission check, not just the stat bits.
+# Baseline: /etc/passwd is 0666 -> sysadmin can write -> probe PASSES at kernel level -> [PoC] FAILS.
+# Remediated: /etc/passwd is 0644 -> sysadmin cannot write -> [PoC] PASSES.
+if id sysadmin >/dev/null 2>&1; then
+    if su -s /bin/sh -c 'test -w /etc/passwd' sysadmin 2>/dev/null; then
+        echo "FAIL [PoC]: live write-probe shows sysadmin CAN write /etc/passwd"
+        PASS=false
+    else
+        echo "PASS [PoC]: live write-probe shows sysadmin cannot write /etc/passwd"
+    fi
+
+    # Belt-and-braces: actually attempt an append as sysadmin. Should fail with EACCES.
+    if su -s /bin/sh -c 'echo "# probe" >> /etc/passwd' sysadmin 2>/dev/null; then
+        echo "FAIL [PoC]: sysadmin successfully appended to /etc/passwd at runtime"
+        # Try to undo the append so we don't corrupt state mid-verify
+        sed -i '/^# probe$/d' /etc/passwd 2>/dev/null || true
+        PASS=false
+    else
+        echo "PASS [PoC]: sysadmin append to /etc/passwd was rejected by kernel"
+    fi
+else
+    echo "WARN [PoC]: sysadmin user missing, skipping live write-probe"
+fi
+
 # --- Regression Test: Users should still exist and auth should work ---
 if id sysadmin > /dev/null 2>&1; then
     echo "PASS [Regression]: sysadmin user still exists"

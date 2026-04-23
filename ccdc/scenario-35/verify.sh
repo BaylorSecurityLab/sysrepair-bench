@@ -94,6 +94,40 @@ else
     fi
 fi
 
+# --- PoC Behavioral Test: NFS ports must not be live-listening on all interfaces ---
+# Even if exports look clean on disk, a running rpc.mountd/nfsd listening on
+# 0.0.0.0 is a live exposure. Hybrid: combines ss socket probe + /proc/net
+# fallback. Baseline has NFS installed and (on systems where it starts)
+# listens on 2049/0.0.0.0 — remediated state either removed nfs-kernel-server
+# or disabled it, so no listener.
+echo "[PoC] Probing live NFS listener state..."
+NFS_LIVE_EXPOSED=false
+if command -v ss &>/dev/null; then
+    # port 2049 (nfsd) or 111 (rpcbind) bound to wildcard/all interfaces
+    if ss -H -lnt '( sport = :2049 or sport = :111 )' 2>/dev/null | \
+       grep -qE '(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]):(2049|111)\b'; then
+        NFS_LIVE_EXPOSED=true
+    fi
+elif [ -r /proc/net/tcp ]; then
+    # hex 0801 = 2049, 006F = 111; local addr all-zero => wildcard bind
+    if awk '{print $2}' /proc/net/tcp 2>/dev/null | \
+       grep -qE '^00000000:(0801|006F)$'; then
+        NFS_LIVE_EXPOSED=true
+    fi
+fi
+
+# Also confirm no nfsd kernel threads / rpc.mountd userland proc
+if pgrep -x rpc.mountd >/dev/null 2>&1 || pgrep -x rpc.nfsd >/dev/null 2>&1; then
+    NFS_LIVE_EXPOSED=true
+fi
+
+if $NFS_LIVE_EXPOSED; then
+    echo "[PoC] FAIL: NFS/rpcbind is live-listening on wildcard address or daemons running."
+    echo "RESULT: Vulnerability still present (live NFS exposure)."
+    exit 1
+fi
+echo "[PoC] PASS: No live NFS/rpcbind listeners or daemons detected."
+
 # ──────────────────────────────────────────────
 # Regression Test: Ensure system still works
 # ──────────────────────────────────────────────

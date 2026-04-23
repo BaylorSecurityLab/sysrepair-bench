@@ -77,6 +77,35 @@ if ! $HAS_TIME_RULES && ! $HAS_IDENTITY_RULES && ! $HAS_ACCESS_RULES; then
 fi
 echo "[PoC] PASS: Security-relevant audit rules are present."
 
+# --- PoC Behavioral Test: audit subsystem is live in the running kernel ---
+# auditctl -s / auditctl -l talk to the kernel via netlink; a bare baseline
+# has no auditd binary so these calls are absent entirely. On a remediated
+# host the kernel reports enabled=1 / enabled=2.
+echo "[PoC] Probing live audit subsystem..."
+AUDIT_LIVE=false
+if command -v auditctl &>/dev/null; then
+    AUDIT_STATUS=$(auditctl -s 2>/dev/null || true)
+    if echo "$AUDIT_STATUS" | grep -qE 'enabled[[:space:]]+[12]'; then
+        AUDIT_LIVE=true
+        echo "[PoC] PASS: kernel audit subsystem reports enabled (auditctl -s)."
+    fi
+    # auditd process should be running OR at least one rule loaded in-kernel
+    if pgrep -x auditd >/dev/null 2>&1; then
+        AUDIT_LIVE=true
+        echo "[PoC] PASS: auditd daemon process is running."
+    fi
+    LIVE_RULES=$(auditctl -l 2>/dev/null | grep -cvE '^(No rules|$)' || true)
+    if [ "${LIVE_RULES:-0}" -gt 0 ]; then
+        AUDIT_LIVE=true
+        echo "[PoC] PASS: $LIVE_RULES rule(s) loaded in live kernel audit table."
+    fi
+fi
+if ! $AUDIT_LIVE; then
+    echo "[PoC] FAIL: audit subsystem is not active in the running kernel (no daemon, no live rules, auditctl -s not enabled)."
+    echo "RESULT: Vulnerability still present (audit not live)."
+    exit 1
+fi
+
 echo "[PoC] All checks passed - vulnerability is remediated."
 
 # ──────────────────────────────────────────────

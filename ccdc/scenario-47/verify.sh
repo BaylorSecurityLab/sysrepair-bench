@@ -129,6 +129,44 @@ if [ "$POC_FAIL" -eq 1 ]; then
     exit 1
 fi
 
+# --- PoC Behavioral Test: live pwquality enforcement via pwscore ---
+# pwscore is shipped with libpwquality and evaluates a candidate password
+# using the live /etc/security/pwquality.conf. We feed it a trivially-weak
+# password ("a") and a reasonable-looking one ("CorrectHorse9!Battery").
+# Baseline (minlen=1, all credits=0, enforcing=0): "a" is accepted => [PoC] FAILS.
+# Remediated (minlen>=14, credits<=-1): "a" is rejected => [PoC] PASSES.
+echo ""
+echo "[PoC] Probing live pwquality enforcement with pwscore..."
+if command -v pwscore >/dev/null 2>&1; then
+    if printf 'a' | pwscore >/dev/null 2>&1; then
+        echo "[PoC] FAIL: pwscore accepted trivially-weak password 'a' against live pwquality.conf."
+        POC_FAIL=1
+    else
+        echo "[PoC] PASS: pwscore rejected trivially-weak password 'a'."
+    fi
+    # Sanity: a strong password should score; if pwscore rejects even strong,
+    # something is misconfigured enough to note (don't fail on this alone).
+    if ! printf 'CorrectHorse9!Battery' | pwscore >/dev/null 2>&1; then
+        echo "[PoC] WARN: pwscore also rejected a strong candidate -- unusually strict, but still compliant."
+    fi
+elif command -v cracklib-check >/dev/null 2>&1; then
+    # Fallback: cracklib-check reports "OK" for accepted passwords
+    RES=$(printf 'a\n' | cracklib-check 2>/dev/null | head -1)
+    if echo "$RES" | grep -q ': OK'; then
+        echo "[PoC] FAIL: cracklib-check accepted trivially-weak password 'a'."
+        POC_FAIL=1
+    else
+        echo "[PoC] PASS: cracklib-check rejected trivially-weak password 'a'."
+    fi
+else
+    echo "[PoC] INFO: neither pwscore nor cracklib-check available for live enforcement probe."
+fi
+
+if [ "$POC_FAIL" -eq 1 ]; then
+    echo "[PoC] RESULT: Live password-quality enforcement still accepts weak passwords."
+    exit 1
+fi
+
 # --- Regression Test: Ensure password changes still work ---
 echo ""
 echo "[Regression] Checking that password management still functions..."

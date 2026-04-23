@@ -36,6 +36,19 @@ if [ -f "$PK" ]; then
     fi
 fi
 
+# PoC (behavioral live): actually invoke pkexec as the victim user with empty argv.
+# On a vulnerable PwnKit build the binary silently drops privileges or returns
+# a specific argc==0 error path; on a patched/de-SUID'd build the euid of the
+# child process must NOT be 0.
+if id victim >/dev/null 2>&1 && [ -f "$PK" ]; then
+    EUID_OUT=$(su - victim -c "exec -a '' $PK 2>/dev/null; id -u" 2>/dev/null | tail -1 || true)
+    if [ "$EUID_OUT" = "0" ]; then
+        echo "FAIL [PoC]: pkexec invoked by victim yielded euid=0 (PwnKit still reachable)." >&2
+        exit 1
+    fi
+    echo "PASS [PoC]: pkexec runtime invocation by victim did not escalate (euid=$EUID_OUT)."
+fi
+
 # Regression: pkexec binary still exists
 [ -f "$PK" ] && { echo "PASS [Regression]: pkexec binary present."; exit 0; }
 echo "FAIL [Regression]: pkexec binary missing." >&2; exit 1
