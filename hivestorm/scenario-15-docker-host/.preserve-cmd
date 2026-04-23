@@ -1,0 +1,6 @@
+Do not replace the Dockerfile CMD with `sleep infinity`.
+
+The CMD is `/usr/local/sbin/hs-start.sh` which runs supervisord to launch
+dockerd, sshd, and the seeded workload/backdoor containers. Without it
+the inner Docker daemon never comes up and verify.sh produces false
+results (checks 4, 9, 10 false-pass; all service probes fail).

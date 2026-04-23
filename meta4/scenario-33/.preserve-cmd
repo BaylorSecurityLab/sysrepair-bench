@@ -1,0 +1,2 @@
+dind scenario — ENTRYPOINT dockerd-entrypoint.sh must run to boot the
+inner daemon. sleep-infinity override breaks every probe.

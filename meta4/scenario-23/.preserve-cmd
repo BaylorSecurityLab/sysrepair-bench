@@ -1,0 +1,2 @@
+dind scenario — the base image's ENTRYPOINT starts dockerd. Replacing it
+with `sleep infinity` leaves the inner daemon dead.

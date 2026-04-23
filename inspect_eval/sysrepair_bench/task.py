@@ -20,11 +20,14 @@ from .solvers import get_solver
 
 
 class _SysRepairService(ComposeService):
-    """ComposeService extended with cap_add and privileged so scenarios that
-    need firewall state (iptables/nftables) or full kernel access (k3s) work."""
+    """ComposeService extended with cap_add, privileged, and isolation so
+    scenarios that need firewall state (iptables/nftables), full kernel access
+    (k3s), or Hyper-V isolation (Windows ltsc2016 on modern Windows hosts)
+    work."""
 
     cap_add: list[str] | None = None
     privileged: bool | None = None
+    isolation: str | None = None
 
 
 class _SysRepairComposeConfig(ComposeConfig):
@@ -258,23 +261,30 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
         or "k3s" in df_lower
     )
 
+    # Scenarios that boot their own services via a supervisor / entrypoint
+    # script (typical for dind hosts, LAMP stacks, Samba etc.) opt in with a
+    # `.preserve-cmd` marker — the harness then lets the Dockerfile's
+    # ENTRYPOINT/CMD run instead of `sleep infinity`. Default stays
+    # `sleep infinity` for single-service scenarios where a foreground CMD
+    # would race with agent commands.
+    preserve_cmd = (scenario_dir / ".preserve-cmd").exists()
+
+    service_kwargs = dict(
+        build=ComposeBuild(context=build_context, dockerfile=dockerfile_path),
+        init=True,
+        network_mode="bridge",
+        cap_add=["NET_ADMIN"],
+        privileged=True if needs_privileged else None,
+        isolation="hyperv" if os_name == "windows" else None,
+    )
+    if not preserve_cmd:
+        # Clear any base-image ENTRYPOINT so the keepalive command runs
+        # directly (otherwise ENTRYPOINT + command = crash).
+        service_kwargs["entrypoint"] = [""]
+        service_kwargs["command"] = "sleep infinity"
+
     compose_cfg = _SysRepairComposeConfig(
-        services={
-            "default": _SysRepairService(
-                build=ComposeBuild(
-                    context=build_context,
-                    dockerfile=dockerfile_path,
-                ),
-                # Clear any base-image ENTRYPOINT so the keepalive command
-                # runs directly (otherwise ENTRYPOINT + command = crash).
-                entrypoint=[""],
-                command="sleep infinity",
-                init=True,
-                network_mode="bridge",
-                cap_add=["NET_ADMIN"],
-                privileged=True if needs_privileged else None,
-            )
-        }
+        services={"default": _SysRepairService(**service_kwargs)}
     )
 
     return Sample(

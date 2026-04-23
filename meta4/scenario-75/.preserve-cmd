@@ -1,0 +1,2 @@
+k3s scenario — CMD /opt/start.sh boots k3s and applies the vulnerable
+manifest. sleep-infinity override means the cluster never starts.

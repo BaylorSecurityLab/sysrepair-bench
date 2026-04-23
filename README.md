@@ -145,57 +145,188 @@ SysRepair-Bench does **not** cover:
 
 ## Set-up
 
-SysRepair-Bench uses Docker, Packer and Vargrant for reproducibility and isolation. Install Docker, Packer, Vargrant and uv
+SysRepair-Bench builds every scenario from source. Depending on which suites you intend to run, you will need some or all of Docker, Vagrant + VirtualBox, Python (via `uv`), and a small set of platform-specific toggles. This section lists **everything** the repo needs to work correctly.
+
+### 1. Clone the repo
 
 ```bash
 git clone https://github.com/BaylorSecurityLab/sysrepair-bench.git
 cd sysrepair-bench
 ```
 
-No additional Python dependencies are required to build and verify a scenario — everything runs inside the container.
+### 2. Core dependencies (all suites)
 
-### Host requirements for the `meta2/` suite
+| Tool | Minimum | Purpose |
+|---|---|---|
+| `git` | 2.30+ | clone + submodule handling |
+| Docker Engine / Docker Desktop | 24.x+ | builds and runs every container scenario |
+| [`uv`](https://docs.astral.sh/uv/) | 0.4+ | Python env + lockfile for the Inspect AI harness |
+| Python | 3.11+ (installed automatically by `uv sync`) | harness runtime |
+| `bash` | 4+ | `prepare.sh`, `verify.sh`, seed scripts (Git Bash / WSL / macOS / Linux) |
 
-> ⚠ **The `meta2/` suite runs on a native Linux host only.** It cannot be executed
-> under Docker Desktop on Windows or macOS, and will not work under the default
-> WSL2 kernel. The `ccdc/` and `vulnhub/` suites use modern base images and run
-> on any Docker host.
-
-The Metasploitable 2 suite uses the `lpenz/ubuntu-hardy-amd64` base image (Ubuntu 8.04).
-Ubuntu 8.04's glibc relies on the legacy `vsyscall` page, which was removed from the
-upstream Linux kernel in 5.18 and is **disabled by default in the Docker Desktop /
-WSL2 kernel on Windows and macOS**. On such hosts every process in a Hardy container
-exits with SIGSEGV (exit 139) before `apt-get` even starts.
-
-Run the `meta2/` scenarios on a native Linux host with one of:
-
-- A kernel booted with the `vsyscall=emulate` boot parameter (the default on most
-  distro kernels <6.0; explicit on 6.x).
-- A WSL2 custom kernel rebuilt with `CONFIG_LEGACY_VSYSCALL_EMULATE=y` (advanced;
-  not a supported Docker Desktop configuration).
-
-Scenarios `meta2/scenario-37` and `meta2/scenario-39` manipulate `iptables` and must
-be run with `--cap-add=NET_ADMIN`:
+Install the Inspect AI harness:
 
 ```bash
-docker run -d --cap-add=NET_ADMIN --name meta2-s39 meta2-s39
+cd inspect_eval
+uv sync              # creates .venv, installs Inspect AI + providers
+cd ..
 ```
 
-### Host requirements for the `meta3/windows/` sub-suite
+No other system-level Python packages are needed — everything the scenarios do runs inside containers or VMs.
 
-> ⚠ **The `meta3/windows/` sub-suite runs on a Windows host only.** It cannot be
-> executed on Linux or macOS — Windows containers (`mcr.microsoft.com/windows/servercore`)
-> share the Windows NT kernel with the host and have no Linux equivalent. The
-> `meta3/ubuntu/` sub-suite, `ccdc/`, and `vulnhub/` all run on any Docker host.
+### 3. Suite-specific host requirements
 
-The Windows sub-suite requires:
+#### 3a. `ccdc/`, `vulnhub/`, `meta3/ubuntu/`, `meta4/` (container suites — any Docker host)
 
-- Windows 10/11 **Pro or Enterprise**, or Windows Server 2019+ (Home editions do not support Windows Containers or Hyper-V isolation)
-- Docker Desktop switched to **Windows Containers** mode (right-click the tray icon → "Switch to Windows containers"), **or** a native Windows `dockerd` install
-- Hyper-V and Containers features enabled: `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All` and `Enable-WindowsOptionalFeature -Online -FeatureName Containers -All`
-- ~40 GB free disk for the Server Core base image plus per-scenario layers
+No extras beyond Docker. These use modern base images (Ubuntu 14.04 / 22.04, Debian 11 / 12, Alpine, vendor images). On first run, the harness will `docker build` each scenario on demand. Runtime-escape scenarios (Leaky Vessels, docker.sock, `--privileged` abuse) are auto-elevated by the harness when a `.needs-privileged` marker is present in the scenario dir — no manual `docker run --privileged` needed.
 
-Process isolation works when the container's Windows build matches the host; Hyper-V isolation (`--isolation=hyperv`) is the safe default for mixed builds. See [`meta3/windows/README.md`](meta3/windows/README.md) for per-scenario isolation requirements.
+#### 3b. `meta2/` — Linux host only
+
+> The Metasploitable 2 suite uses `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04). Hardy's glibc requires the legacy `vsyscall` page, which is disabled in the Docker Desktop / WSL2 kernels shipped on Windows and macOS. Every process SIGSEGVs (exit 139) before `apt-get` runs.
+
+Requirements:
+- A **native Linux host** (or a VM) with one of:
+  - kernel booted with `vsyscall=emulate` (default on most distro kernels < 6.x; explicit on 6.x)
+  - a WSL2 custom kernel rebuilt with `CONFIG_LEGACY_VSYSCALL_EMULATE=y` (advanced, not supported by Docker Desktop)
+
+Pre-build the shared Hardy base (auto-built on first run, or manually):
+
+```bash
+docker build -t sysrepair/meta2-hardy:latest meta2/_base
+```
+
+The harness injects `cap_add=["NET_ADMIN"]` for every scenario and `privileged=True` where a `.needs-privileged` marker is present ([inspect_eval/sysrepair_bench/task.py:274-275](inspect_eval/sysrepair_bench/task.py#L274-L275)), so iptables-manipulating scenarios (`meta2/scenario-37`, `scenario-39`) and runtime-escape scenarios need no manual runtime flags when launched via `uv run python -m sysrepair_bench.run`.
+
+#### 3c. Windows-container scenarios — Windows host only
+
+> Windows containers (`mcr.microsoft.com/windows/servercore`) share the Windows NT kernel with the host; they cannot run on Linux or macOS. Meta4 has **no** Windows-container scenarios — only Linux images; its Windows host requirement is limited to `meta4/kernel-vm/` (see 3d).
+
+Applies to:
+- **All 20 `meta3/windows/` scenarios** (Server Core ltsc2019/ltsc2022)
+- **Hivestorm Windows-container scenarios**: [`scenario-03-win10`](hivestorm/scenario-03-win10/), [`scenario-04-win2019`](hivestorm/scenario-04-win2019/), [`scenario-05-win2016`](hivestorm/scenario-05-win2016/) (ltsc2016 — note below), [`scenario-08-win-iis`](hivestorm/scenario-08-win-iis/), [`scenario-11-win-dc-dns`](hivestorm/scenario-11-win-dc-dns/)
+- (Hivestorm `scenario-13-ad-dc-win2019` is VM-based, not container-based — see 3e)
+
+Requirements:
+- Windows 10/11 **Pro/Enterprise** or Windows Server 2019+ (Home editions lack Containers + Hyper-V isolation)
+- Docker Desktop switched to **Windows Containers** mode (tray-icon → "Switch to Windows containers"), **or** a native Windows `dockerd`
+- Hyper-V + Containers features (elevated PowerShell):
+
+  ```powershell
+  Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
+  Enable-WindowsOptionalFeature -Online -FeatureName Containers -All
+  ```
+
+- Internet access for `docker build` to pull `mcr.microsoft.com/windows/servercore:ltsc201{6,9}` and the pinned legacy installers on first build (or an offline mirror for air-gapped builds)
+
+**Isolation mode.** The harness auto-injects `isolation: hyperv` for every Windows-container scenario ([task.py:22-30](inspect_eval/sysrepair_bench/task.py#L22-L30), [task.py:275](inspect_eval/sysrepair_bench/task.py#L275)), so mismatched builds like `ltsc2016` (hivestorm `scenario-05-win2016`) run correctly on any supported Windows host. For manual `docker run` outside the harness, enable Hyper-V isolation one of two ways:
+
+- **Docker Desktop (GUI):** Settings → General → enable "Use the WSL 2 based engine" is **not** what you want for Windows containers — instead right-click the tray icon → *Switch to Windows containers*, then in Settings → General toggle *Use Hyper-V isolation by default* (wording varies by version), Apply & Restart.
+- **Native `dockerd` / daemon config:** add `"exec-opts": ["isolation=hyperv"]` to `%ProgramData%\docker\config\daemon.json` and restart the Docker service.
+
+Per-scenario isolation recommendations for manual runs are in [`meta3/windows/README.md`](meta3/windows/README.md).
+
+#### 3d. `meta4/kernel-vm/` — VirtualBox VM for kernel-coupled LPE scenarios (S21, S22; optionally S19)
+
+> These scenarios target kernel vulnerabilities. Containers share the host kernel, so they need a VM whose kernel matches the vulnerable ABI range. S19 (Dirty Pipe) additionally requires a separate Ubuntu 20.04 HWE host — or remediate in **compensating-control mode** (`chattr +i`) on any host.
+
+Requirements:
+- **BIOS/UEFI**: Intel VT-x / AMD-V enabled (optionally VT-d / AMD-Vi)
+- **Windows hosts**: Hyper-V stack disabled so VirtualBox can claim VT-x:
+
+  ```powershell
+  dism.exe /Online /Disable-Feature:Microsoft-Hyper-V-All /NoRestart
+  dism.exe /Online /Disable-Feature:VirtualMachinePlatform /NoRestart
+  dism.exe /Online /Disable-Feature:HypervisorPlatform /NoRestart
+  dism.exe /Online /Disable-Feature:Containers /NoRestart
+  bcdedit /set hypervisorlaunchtype off
+  ```
+
+  Also: **Windows Security → Device security → Core isolation → Memory Integrity OFF**, then reboot.
+
+- **VirtualBox 7.x** and **Vagrant 2.4.x**:
+
+  Windows (via [Scoop](https://scoop.sh)):
+  ```powershell
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+  irm get.scoop.sh | iex
+  scoop install git vagrant
+  scoop bucket add extras
+  scoop install virtualbox
+  ```
+
+  Ubuntu / Debian:
+  ```bash
+  sudo apt install -y virtualbox vagrant
+  sudo usermod -aG vboxusers "$USER"   # log out / back in afterwards
+  ```
+
+- Bring up the VM:
+
+  ```bash
+  cd meta4/kernel-vm
+  vagrant up        # Ubuntu 22.04, kernel pinned pre-fix, Docker installed
+  vagrant ssh
+  ```
+
+Note: kernel-scenarios inside the VM require `docker run --privileged` to exercise the host kernel's userns behavior.
+
+#### 3e. `hivestorm/` — free-roam scenarios
+
+Container scenarios (01, 02, 06, 07, 09, 10, 12, 15, 16) run on any Docker host. Windows scenarios (03, 04, 05, 08, 11) require the same host as [`meta3/windows/`](#3c-meta3windows--windows-host-only).
+
+Before every run, regenerate randomized identities (backdoor account, trojan path, SUID plant, rogue cron, legit admin name):
+
+```bash
+bash hivestorm/prepare.sh            # all scenarios, random seed
+SEED=42 bash hivestorm/prepare.sh    # reproducible
+bash hivestorm/prepare.sh 01         # single scenario
+```
+
+`scenario-15-docker-host` (dockerd-in-container) is auto-elevated by the harness via its `.needs-privileged` marker.
+
+##### VM-backed hivestorm scenarios (13, 14)
+
+These use Vagrant; AD-DC and FreeBSD cannot run inside containers.
+
+| Scenario | Box | Provider | Extras |
+|---|---|---|---|
+| `scenario-13-ad-dc-win2019` | `gusztavvargadr/windows-server-2019-standard` | VirtualBox (default) or Hyper-V | Vagrant ≥ 2.3, VirtualBox ≥ 6.1; first boot ~15 min (ADDS promote + reboot + seed) |
+| `scenario-14-freebsd13` | `freebsd/FreeBSD-13.2-RELEASE` | VirtualBox (default) or libvirt | Vagrant ≥ 2.3, VirtualBox ≥ 6.1; first boot ~5–8 min |
+
+```bash
+bash hivestorm/prepare.sh 13
+cd hivestorm/scenario-13-ad-dc-win2019
+vagrant up
+```
+
+### 4. Model provider credentials (for running agents)
+
+The Inspect AI harness needs at least one provider. Set the env vars for whichever you use:
+
+| Provider | Env var |
+|---|---|
+| OpenAI / OpenAI-compatible (vLLM, Ollama via `OPENAI_BASE_URL`) | `OPENAI_API_KEY`, optionally `OPENAI_BASE_URL` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Google (Gemini) | `GOOGLE_API_KEY` |
+| Hugging Face Inference | `HF_TOKEN` |
+
+For local inference, point `OPENAI_BASE_URL` at a vLLM / Ollama / LM Studio endpoint and set `OPENAI_API_KEY` to any non-empty string.
+
+### 5. Quick verification
+
+```bash
+# Sanity: build + verify a single container scenario
+cd vulnhub/scenario-01
+docker build -t sysrepair-vulnhub-01 .
+docker run -d --name test-01 sysrepair-vulnhub-01
+docker exec test-01 /bin/bash /verify.sh
+echo $?          # 1 = baseline still vulnerable (expected before remediation)
+docker rm -f test-01
+
+# Sanity: harness smoke test (one scenario, ReAct solver)
+cd ../../inspect_eval
+uv run python -m sysrepair_bench.run smoke
+```
 
 ## Using SysRepair-Bench
 
