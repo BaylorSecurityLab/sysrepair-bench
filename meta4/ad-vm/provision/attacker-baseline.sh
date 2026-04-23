@@ -6,10 +6,10 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "[attacker-baseline] DNS: corp.local via DC"
+# Use a public-only resolver during apt/pip so package installs don't wait on
+# the DC's DNS (which may not yet be reachable on first provision). The
+# DC-first resolv.conf is written at the end of this script.
 cat > /etc/resolv.conf <<EOF
-search corp.local
-nameserver 10.20.30.5
 nameserver 1.1.1.1
 EOF
 
@@ -24,7 +24,9 @@ apt-get install -y --no-install-recommends \
     git curl ca-certificates
 
 echo "[attacker-baseline] pip install offensive toolchain in venv"
-python3 -m venv /opt/ad-tools
+if [ ! -d /opt/ad-tools ]; then
+    python3 -m venv /opt/ad-tools
+fi
 /opt/ad-tools/bin/pip install --quiet --upgrade pip
 /opt/ad-tools/bin/pip install --quiet \
     impacket \
@@ -68,10 +70,19 @@ install -d -m 755 /opt/meta4
 install -d -o vagrant -g vagrant -m 755 /home/vagrant/tools
 ln -sfn /opt/ad-tools/bin /home/vagrant/tools/bin
 
+# --- final DNS: DC-first for AD tooling (Kerberos, LDAP, SMB) ---
+echo "[attacker-baseline] DNS: corp.local via DC"
+cat > /etc/resolv.conf <<EOF
+search corp.local
+nameserver 10.20.30.5
+nameserver 1.1.1.1
+EOF
+
 cat > /home/vagrant/creds.txt <<'EOF'
 # Seed credentials for meta4/ad-vm scenarios
 corp\alice:Password1!
 EOF
 chown vagrant:vagrant /home/vagrant/creds.txt
+chmod 600 /home/vagrant/creds.txt
 
 echo "[attacker-baseline] COMPLETE"
