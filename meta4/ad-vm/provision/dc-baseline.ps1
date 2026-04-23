@@ -9,11 +9,9 @@
 #   subsequent graceful-shutdown handshake 401s. To avoid that, pass 1 here
 #   only installs the AD DS role + stages a one-shot startup task chain
 #   (bootstrap.ps1) that performs the actual promotion AFTER vagrant-reload
-#   has already rebooted. WinRM stays auto-start; the Vagrantfile configures
-#   winrm.transport=:plaintext + basic_auth_only, which re-runs full user
-#   lookup every call so reconnect succeeds once bootstrap.ps1 has created
-#   CORP\vagrant. NTLM/negotiate would fail here because it caches session
-#   tickets keyed to the local SAM that DCPROMO strips.
+#   has already rebooted. Phase B of bootstrap.ps1 creates CORP\vagrant
+#   and ensures WinRM is running; Vagrantfile uses retry_limit=40 so the
+#   negotiate reconnect succeeds once that completes.
 
 $ErrorActionPreference = 'Stop'
 

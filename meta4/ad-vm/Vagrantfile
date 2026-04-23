@@ -4,16 +4,15 @@
 Vagrant.configure("2") do |config|
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
-  # WinRM: plaintext + basic-auth-only survives DCPROMO SAM migration.
-  # NTLM/negotiate caches session tickets against the local SAM, which
-  # Install-ADDSForest strips; basic auth re-runs the full lookup each
-  # call so once bootstrap.ps1 creates CORP\vagrant, reconnect succeeds.
-  # (Pattern from rgl/windows-domain-controller-vagrant + DetectionLab.)
+  # jborean93 box's WinRM listener is negotiate-only (basic auth is not
+  # enabled; AllowUnencrypted defaults false), so plaintext+basic fails
+  # auth at the initial boot. Stick with :negotiate and rely on retry_limit
+  # to ride out the DCPROMO window until bootstrap.ps1 re-creates
+  # CORP\vagrant on the DC side.
   config.winrm.username = "vagrant"
   config.winrm.password = "vagrant"
-  config.winrm.transport = :plaintext
-  config.winrm.basic_auth_only = true
-  config.winrm.retry_limit = 20
+  config.winrm.transport = :negotiate
+  config.winrm.retry_limit = 40
   config.winrm.timeout = 300
 
   # ----- DC: corp.local forest root -----
