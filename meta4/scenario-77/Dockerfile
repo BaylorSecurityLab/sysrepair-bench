@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 rancher/k3s:latest
+FROM --platform=linux/amd64 rancher/k3s:v1.27.1-k3s1
 
 # K8s Config Hardening misconfiguration: pods deployed without CPU/memory
 # resource limits allow unbounded resource consumption, enabling noisy-neighbour
@@ -11,4 +11,5 @@ RUN chmod +x /opt/start.sh /opt/verify.sh
 
 EXPOSE 6443
 
+ENTRYPOINT []
 CMD ["/opt/start.sh"]

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -u
 
 # --- PoC: kubelet read-only port and anonymous auth must be disabled ---

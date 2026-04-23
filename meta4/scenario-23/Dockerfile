@@ -12,7 +12,7 @@ FROM --platform=linux/amd64 docker:24.0.7-dind
 # compensating control documented in the threat file.
 
 RUN set -eux; \
-    apk add --no-cache curl; \
+    apk add --no-cache curl bash; \
     curl -fsSL -o /usr/local/bin/runc.vulnerable https://github.com/opencontainers/runc/releases/download/v1.1.11/runc.amd64; \
     chmod +x /usr/local/bin/runc.vulnerable; \
     cp /usr/local/bin/runc.vulnerable /usr/local/bin/runc

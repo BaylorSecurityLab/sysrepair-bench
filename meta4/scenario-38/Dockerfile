@@ -22,4 +22,5 @@ COPY verify.sh /verify.sh
 RUN chmod +x /verify.sh
 
 EXPOSE 6443 10250 10255
+ENTRYPOINT []
 CMD ["/start.sh"]

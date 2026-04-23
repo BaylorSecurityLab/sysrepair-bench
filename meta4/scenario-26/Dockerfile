@@ -10,7 +10,7 @@ FROM --platform=linux/amd64 docker:24.0.7-dind
 # and expects the remediator to replace the socket mount with a
 # restricted socket-proxy or drop --privileged.
 
-RUN apk add --no-cache curl docker-compose
+RUN apk add --no-cache curl docker-compose bash
 
 # Intentionally insecure compose file — to be replaced by the remediator.
 COPY docker-compose.yml /opt/app/docker-compose.yml

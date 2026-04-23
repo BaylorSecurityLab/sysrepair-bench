@@ -4,10 +4,18 @@ FROM --platform=linux/amd64 docker:24-dind
 # Anyone who can reach port 2375 has full unauthenticated control
 # over all containers and the host Docker daemon.
 
-# Create a custom daemon.json that binds to TCP 2375 without TLS
+# Create a custom daemon.json that disables TLS. The `hosts` list is
+# omitted here because dockerd-entrypoint.sh injects -H flags itself;
+# declaring hosts in both the config file and via flag makes dockerd
+# refuse to start. Instead, DOCKER_TLS_CERTDIR="" switches the
+# entrypoint into the insecure `tcp://0.0.0.0:2375` mode.
 RUN mkdir -p /etc/docker && \
-    printf '{\n  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375"],\n  "tls": false\n}\n' \
+    printf '{\n  "tls": false\n}\n' \
         > /etc/docker/daemon.json
+
+ENV DOCKER_TLS_CERTDIR=""
+
+RUN apk add --no-cache bash
 
 COPY verify.sh /verify.sh
 RUN chmod +x /verify.sh
