@@ -43,35 +43,48 @@ done
 
 echo "[reset] waiting for WinRM on dc + ca and SSH on attacker"
 
-wait_winrm() {
-    local port=$1 name=$2 deadline=$((SECONDS + 600))
+# Resolve guest->host forwarded port from VBoxManage rather than hardcoding:
+# vagrant auto-assigns SSH ports per-VM (2200/2201/2204/...) so attacker's
+# SSH port isn't fixed.
+forwarded_port() {
+    local vb=$1 rule=$2  # rule is "ssh" or "winrm_http" etc.
+    VBoxManage showvminfo "$vb" --machinereadable 2>&1 \
+      | awk -F'=' -v r="$rule" '
+          /^Forwarding\(/ {
+              gsub(/"/, "", $2)
+              split($2, f, ",")
+              if (f[1] == r) { print f[4]; exit }
+          }'
+}
+
+wait_tcp() {
+    local port=$1 name=$2 kind=$3 deadline=$((SECONDS + 600))
     while [ $SECONDS -lt $deadline ]; do
-        if curl -s -o /dev/null --max-time 5 "http://127.0.0.1:${port}/wsman" 2>/dev/null; then
-            echo "[$name] WinRM ready"
+        if (echo > "/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+            echo "[$name] $kind ready (tcp/$port)"
             return 0
         fi
         sleep 5
     done
-    echo "ERROR: [$name] WinRM did not come up within 10 min" >&2
+    echo "ERROR: [$name] $kind did not come up within 10 min (tcp/$port)" >&2
     return 1
 }
 
-wait_ssh() {
-    local port=$1 name=$2 deadline=$((SECONDS + 300))
-    while [ $SECONDS -lt $deadline ]; do
-        if nc -z 127.0.0.1 "$port" 2>/dev/null; then
-            echo "[$name] SSH ready"
-            return 0
-        fi
-        sleep 3
-    done
-    echo "ERROR: [$name] SSH did not come up within 5 min" >&2
-    return 1
-}
+DC_WINRM=$(forwarded_port meta4-ad-dc       winrm)
+CA_WINRM=$(forwarded_port meta4-ad-ca       winrm)
+AT_SSH=$(  forwarded_port meta4-ad-attacker ssh)
 
-# Port mapping from the Vagrantfile forwarded_ports. Defaults: dc=55985, ca=2202.
-wait_winrm 55985 dc
-wait_winrm 2202  ca
-wait_ssh   2222  attacker
+# Fallbacks if vagrant hasn't labelled the rule name as "winrm" (old boxes
+# sometimes call it "winrm_http").
+[ -z "$DC_WINRM" ] && DC_WINRM=$(forwarded_port meta4-ad-dc winrm_http)
+[ -z "$CA_WINRM" ] && CA_WINRM=$(forwarded_port meta4-ad-ca winrm_http)
+
+: "${DC_WINRM:?could not resolve dc WinRM forwarded port}"
+: "${CA_WINRM:?could not resolve ca WinRM forwarded port}"
+: "${AT_SSH:?could not resolve attacker ssh forwarded port}"
+
+wait_tcp "$DC_WINRM" dc       winrm
+wait_tcp "$CA_WINRM" ca       winrm
+wait_tcp "$AT_SSH"   attacker ssh
 
 echo "[reset] all three VMs restored to baseline and reachable"
