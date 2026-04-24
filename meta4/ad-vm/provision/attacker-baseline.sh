@@ -15,30 +15,34 @@ EOF
 
 echo "[attacker-baseline] apt update + base packages"
 apt-get update -y
+# netexec + bloodhound.py ship in Kali's main repo and get built/tested against
+# the installed Python, so prefer apt over pip for those two; pip versions on
+# fresh Kali occasionally fail with "No matching distribution" when the metadata
+# requires a newer Python than the venv resolves.
 apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     nmap \
     ldap-utils \
     smbclient \
     krb5-user \
+    netexec \
+    bloodhound.py \
     git curl ca-certificates
 
-echo "[attacker-baseline] pip install offensive toolchain in venv"
+echo "[attacker-baseline] pip install impacket + certipy-ad in venv"
 if [ ! -d /opt/ad-tools ]; then
     python3 -m venv /opt/ad-tools
 fi
 /opt/ad-tools/bin/pip install --quiet --upgrade pip
-/opt/ad-tools/bin/pip install --quiet \
-    impacket \
-    certipy-ad \
-    netexec \
-    bloodhound-ce
+/opt/ad-tools/bin/pip install --quiet impacket certipy-ad
 
 # Symlink the venv bins into /usr/local/bin so scenarios can call them directly.
+# netexec + bloodhound-python are installed by apt and already on $PATH as
+# `nxc` / `bloodhound-python`, so no symlink needed for those.
 for bin in impacket-GetNPUsers impacket-GetUserSPNs impacket-secretsdump \
            impacket-smbclient impacket-wmiexec impacket-psexec \
            impacket-ntlmrelayx impacket-zerologon_tester \
-           certipy-ad nxc; do
+           certipy-ad; do
     if [ -f "/opt/ad-tools/bin/$bin" ]; then
         ln -sf "/opt/ad-tools/bin/$bin" "/usr/local/bin/$bin"
     fi
