@@ -1,0 +1,7 @@
+{
+  "mode": "vm-ad",
+  "id": "meta4-adv-06",
+  "inject":         { "target": "dc", "script": "inject.ps1" },
+  "verify_poc":     { "target": "attacker", "script": "verify-poc.sh" },
+  "verify_service": { "target": "dc", "script": "verify-service.ps1" }
+}
