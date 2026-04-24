@@ -25,13 +25,39 @@ Linux LPEs.
   on first `vagrant up`; a reproducible Packer template is on the
   roadmap for later phases)
 
-## Quick start
+## Quick start (manual route)
+
+Fresh-clone DC bringup currently requires a two-step dance: `vagrant up dc`
+will time out mid-DCPROMO with a WinRM auth error, but the bootstrap chain
+keeps running in the background on the VM. You wait for it to finish, then
+bring up the other two VMs.
 
 ```bash
 cd meta4/ad-vm
 
 vagrant plugin install vagrant-reload   # first time only
-vagrant up                              # ~20 min on a cold host
+
+# --- step 1: DC (expect a WinRM timeout; that's fine) ---
+vagrant up dc
+#   ==> dc: [dc-baseline] pass 1 complete; awaiting reload + bootstrap.ps1 chain
+#   ==> dc: Running provisioner: reload...
+#   ==> dc: [dc-baseline] AD DS role installed; waiting for Meta4-Bootstrap chain to finish
+#   WinRM::WinRMAuthorizationError                              <-- expected on fresh clone
+
+# --- step 2: wait ~10-15 min, then poll until the DC reports ready ---
+while [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:55985/wsman)" != "405" ]; do
+    echo "waiting for DC WinRM to come back up..."; sleep 30
+done
+
+vagrant winrm dc -s powershell -c "(Get-ADDomain).DNSRoot; Test-Path C:\meta4-setup\BOOTSTRAP_COMPLETE"
+#   corp.local
+#   True                                                        <-- DC is fully baked
+
+# --- step 3: CA + attacker (these run cleanly, no manual wait) ---
+vagrant up ca
+vagrant up attacker
+
+# --- step 4: baseline snapshot + smoke test ---
 ./capture-baselines.sh                  # one-time snapshot capture
 
 ./run-scenario.sh 13                    # restore + inject S13
@@ -41,6 +67,20 @@ ssh vagrant@10.20.30.10                 # (password: vagrant)
 # When the agent signals done:
 ./run-scenario.sh 13 --verify-only      # exits 0 iff both checks pass
 ```
+
+### Why the DC bringup times out
+
+`Install-ADDSForest` strips the local SAM the moment it runs, which
+invalidates the WinRM session vagrant is holding during pass-2's
+"wait for bootstrap" loop. The bootstrap chain (DCPROMO + directory
+seeding + Meta4-Bootstrap Phase B) runs to completion on the VM regardless,
+writing `C:\meta4-setup\BOOTSTRAP_COMPLETE` when done. The manual wait
+above just holds off on the next step until that marker exists.
+
+If `curl` shows `winrm=000` for more than 25 min after the timeout,
+something broke — open the VirtualBox GUI (`VBoxManage startvm meta4-ad-dc
+--type separate`) or RDP to `127.0.0.1:3389` as `Administrator` /
+`Vagrant1DSRM!` and check `C:\meta4-setup\bootstrap.log`.
 
 ## VMs
 
