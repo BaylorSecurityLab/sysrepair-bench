@@ -22,7 +22,7 @@ for vm in dc ca attacker; do
         vagrant snapshot delete "$vm" baseline
     fi
     echo "[$vm] capturing baseline snapshot"
-    vagrant snapshot save "$vm" baseline --no-provision
+    vagrant snapshot save "$vm" baseline
 done
 
 echo "[capture-baselines] all three baselines captured"
