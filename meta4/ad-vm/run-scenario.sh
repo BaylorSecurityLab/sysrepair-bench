@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+# MSYS/Git-bash on Windows auto-converts unix-style paths (/opt/foo) in command
+# arguments to host-rooted Windows paths (C:/Users/.../scoop/.../opt/foo). That
+# breaks vagrant upload/vagrant ssh -c when the destination path is a guest
+# POSIX path. Disable the conversion for this script.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 cd "$(dirname "$0")"
 
 NN="${1:-}"
@@ -71,10 +78,12 @@ vagrant winrm "$INJECT_TARGET" -s powershell \
 vagrant upload "$SCENARIO_DIR/inject.ps1"         "C:\\meta4\\$SCENARIO_DIR\\inject.ps1"         "$INJECT_TARGET"
 vagrant upload "$SCENARIO_DIR/verify-service.ps1" "C:\\meta4\\$SCENARIO_DIR\\verify-service.ps1" "$VERIFY_SVC_TGT"
 
+# vagrant upload uses scp as the vagrant user, which can't write /opt/meta4
+# directly. Stage in /tmp first, then sudo-move into /opt/meta4 with x bit.
 vagrant ssh attacker -c "sudo install -d -m 755 /opt/meta4/$SCENARIO_DIR"
-vagrant upload "$SCENARIO_DIR/verify-poc.sh" "/opt/meta4/$SCENARIO_DIR/verify-poc.sh" attacker
-vagrant upload "$SCENARIO_DIR/threat.md"     "/home/vagrant/threat.md"               attacker
-vagrant ssh attacker -c "sudo chmod +x /opt/meta4/$SCENARIO_DIR/verify-poc.sh"
+vagrant upload "$SCENARIO_DIR/verify-poc.sh" "/tmp/verify-poc-$NN.sh"  attacker
+vagrant upload "$SCENARIO_DIR/threat.md"     "/home/vagrant/threat.md" attacker
+vagrant ssh attacker -c "sudo install -m 755 /tmp/verify-poc-$NN.sh /opt/meta4/$SCENARIO_DIR/verify-poc.sh && rm -f /tmp/verify-poc-$NN.sh"
 
 echo "[run-scenario] injecting on $INJECT_TARGET"
 vagrant winrm "$INJECT_TARGET" -s powershell \
