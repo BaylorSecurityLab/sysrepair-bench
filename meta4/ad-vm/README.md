@@ -92,30 +92,32 @@ something broke — open the VirtualBox GUI (`VBoxManage startvm meta4-ad-dc
 
 ## Scenario matrix
 
-Phase 0 ships one smoke-test scenario. Phase 1–4 plans land the rest.
+All 20 scenarios shipped (Phase 0–4 complete; final Phase 4 batch landed
+2026-04-24). Each ships behavioral PoC + service probes — no config-only
+checks. User-side smoke validation pending.
 
-| # | Title | Category | Severity | CVE | Comp-ctrl |
-|---|---|---|---|---|---|
-| 01 | Zerologon | Access Control | Critical | CVE-2020-1472 | No |
-| 02 | NoPac (sAMAccountName spoofing) | Access Control | Critical | CVE-2021-42278 / 42287 | No |
-| 03 | Kerberoasting | Access Control | High | n/a | Yes |
-| 04 | AS-REP roasting | Access Control | High | n/a | Yes |
-| 05 | Unconstrained delegation | Access Control | High | n/a | Yes |
-| 06 | DCSync rights to non-admin | Access Control | Critical | n/a | No |
-| 07 | ADCS ESC1 | Configuration Hardening | Critical | n/a | Yes |
-| 08 | ADCS ESC2 | Configuration Hardening | Critical | n/a | Yes |
-| 09 | ADCS ESC3 | Configuration Hardening | High | n/a | Yes |
-| 10 | ADCS ESC6 | Configuration Hardening | Critical | n/a | No |
-| 11 | ADCS ESC8 | Configuration Hardening | Critical | n/a | Yes |
-| 12 | LDAP signing not required | Compensating Controls | High | n/a | Yes |
-| **13** | **SMB signing disabled (smoke test)** | **Compensating Controls** | **High** | **n/a** | **Yes** |
-| 14 | NTLMv1 allowed | Compensating Controls | High | n/a | Yes |
-| 15 | LLMNR / NBT-NS enabled | Network Security | Medium | n/a | Yes |
-| 16 | PrintNightmare | Dependency Management | Critical | CVE-2021-34527 | Yes |
-| 17 | PetitPotam (MS-EFSR) | Configuration Hardening | High | CVE-2021-36942 | Yes |
-| 18 | GPP cpassword in SYSVOL | Access Control | High | n/a | No |
-| 19 | LAPS not enforced | Access Control | Medium | n/a | Yes |
-| 20 | AdminSDHolder backdoor ACL | Access Control | Critical | n/a | No |
+| # | Title | Category | Severity | CVE | Comp-ctrl | Shipped |
+|---|---|---|---|---|---|---|
+| 01 | Zerologon | Access Control | Critical | CVE-2020-1472 | No | ✓ |
+| 02 | MachineAccountQuota foothold (NoPac chain) | Access Control | Critical | CVE-2021-42278 / 42287 | No | ✓ |
+| 03 | Kerberoasting | Compensating Controls | High | n/a | Yes | ✓ |
+| 04 | AS-REP roasting | Compensating Controls | High | n/a | Yes | ✓ |
+| 05 | Unconstrained delegation | Compensating Controls | High | n/a | Yes | ✓ |
+| 06 | DCSync rights to non-admin | Access Control | Critical | n/a | No | ✓ |
+| 07 | ADCS ESC1 | Configuration Hardening | Critical | n/a | Yes | ✓ |
+| 08 | ADCS ESC2 | Configuration Hardening | Critical | n/a | Yes | ✓ |
+| 09 | ADCS ESC3 | Configuration Hardening | High | n/a | Yes | ✓ |
+| 10 | ADCS ESC6 | Configuration Hardening | Critical | n/a | Yes | ✓ |
+| 11 | ADCS ESC8 (Web Enrollment relay surface) | Configuration Hardening | Critical | n/a | Yes | ✓ |
+| 12 | LDAP signing not required | Compensating Controls | High | n/a | Yes | ✓ |
+| **13** | **SMB signing disabled (smoke test)** | **Compensating Controls** | **High** | **n/a** | **Yes** | **✓** |
+| 14 | NTLMv1 allowed | Compensating Controls | High | n/a | Yes | ✓ |
+| 15 | LLMNR / NBT-NS responder | Network Security | Medium | n/a | Yes | ✓ |
+| 16 | PrintNightmare (CVE-2021-34527) | Dependency Management | Critical | CVE-2021-34527 | Yes | ✓ |
+| 17 | PetitPotam / EFSRPC coercion | Configuration Hardening | High | CVE-2021-36942 | Yes | ✓ |
+| 18 | GPP cpassword in SYSVOL | Access Control | High | n/a | No | ✓ |
+| 19 | LAPS not enforced | Access Control | Medium | n/a | Yes | ✓ |
+| 20 | AdminSDHolder backdoor ACL | Access Control | Critical | n/a | No | ✓ |
 
 ## Scoring rubric
 
