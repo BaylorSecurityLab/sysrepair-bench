@@ -80,6 +80,7 @@ def discover_scenarios(
                 "name": child.name,
                 "path": child,
                 "privileged": needs_privileged(child),
+                "preserve_cmd": (child / ".preserve-cmd").exists(),
             })
 
     scenarios.sort(key=lambda s: (s["bench"], int(s["name"].split("-")[1])))
@@ -140,16 +141,26 @@ def build_image(scenario_path: Path, tag: str) -> tuple[bool, str]:
 def run_container(
     image_tag: str,
     privileged: bool,
-    cap_add: list[str] | None = None,
+    preserve_cmd: bool = False,
 ) -> tuple[str | None, str]:
-    """Start a detached container. Returns (container_name, error_msg)."""
+    """Start a detached container. Returns (container_name, error_msg).
+
+    Mirrors the Inspect harness behaviour:
+    - Always adds NET_ADMIN (required for iptables scenarios).
+    - Unless .preserve-cmd is set, overrides CMD with `sleep infinity` so
+      single-service containers don't race with exec commands.
+    """
     name = f"sysrepair-validate-{uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "-d", "--name", name]
+    cmd = ["docker", "run", "-d", "--name", name, "--cap-add", "NET_ADMIN"]
     if privileged:
         cmd.append("--privileged")
-    for cap in (cap_add or []):
-        cmd += ["--cap-add", cap]
-    cmd.append(image_tag)
+    if not preserve_cmd:
+        # Clear any ENTRYPOINT so sleep infinity runs directly
+        cmd += ["--entrypoint", ""]
+        cmd.append(image_tag)
+        cmd += ["sleep", "infinity"]
+    else:
+        cmd.append(image_tag)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -162,11 +173,35 @@ def run_container(
         return None, str(exc)
 
 
+def inject_verify_sh(container_name: str, verify_src: str) -> tuple[bool, str]:
+    """Write verify.sh content into the container at /tmp/verify.sh."""
+    # Use docker exec + bash to write the file so we don't need docker cp (avoids temp files)
+    cmd = [
+        "docker", "exec", "-i", container_name,
+        "/bin/bash", "-c", "cat > /tmp/verify.sh && chmod +x /tmp/verify.sh",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            input=verify_src,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return False, result.stderr.strip()
+        return True, ""
+    except subprocess.TimeoutExpired:
+        return False, "inject verify.sh timed out"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def exec_verify(container_name: str) -> tuple[int, str]:
-    """Run /verify.sh inside the container. Returns (exit_code, output)."""
+    """Run /tmp/verify.sh inside the container. Returns (exit_code, output)."""
     cmd = [
         "docker", "exec", container_name,
-        "/bin/bash", "/verify.sh",
+        "/bin/bash", "/tmp/verify.sh",
     ]
     try:
         result = subprocess.run(
@@ -204,8 +239,8 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     name = scenario["name"]
     path = scenario["path"]
     privileged = scenario["privileged"]
+    preserve_cmd = scenario.get("preserve_cmd", False)
     tag = make_image_tag(bench, name)
-    cap_add = META2_CAP_ADD if bench == "meta2" else []
 
     label = f"{bench}/{name}"
     log(f"  [ BUILD ] {label}")
@@ -221,7 +256,7 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         }
 
     log(f"  [  RUN  ] {label}")
-    container_name, run_err = run_container(tag, privileged, cap_add)
+    container_name, run_err = run_container(tag, privileged, preserve_cmd)
     if container_name is None:
         log(f"  [ERROR ] {label} — container start failed")
         return {
@@ -232,6 +267,18 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
+        # Inject verify.sh — Dockerfiles no longer COPY it (prevents test leakage)
+        verify_src = (path / "verify.sh").read_text(encoding="utf-8")
+        ok, inject_err = inject_verify_sh(container_name, verify_src)
+        if not ok:
+            log(f"  [ERROR ] {label} — verify.sh inject failed")
+            return {
+                "bench": bench, "name": name, "tag": tag,
+                "status": "ERROR", "reason": "inject_failed",
+                "exit_code": None,
+                "detail": inject_err,
+            }
+
         log(f"  [VERIFY ] {label}")
         exit_code, verify_out = exec_verify(container_name)
     finally:
