@@ -75,10 +75,19 @@ def discover_scenarios(
             key = f"{bench}/{child.name}"
             if key in excluded_set:
                 continue
+            # Mirror harness: if parent has shared/, widen build context to parent
+            if (bench_dir / "shared").is_dir():
+                build_context = bench_dir
+                dockerfile_path = f"{child.name}/Dockerfile"
+            else:
+                build_context = child
+                dockerfile_path = "Dockerfile"
             scenarios.append({
                 "bench": bench,
                 "name": child.name,
                 "path": child,
+                "build_context": build_context,
+                "dockerfile_path": dockerfile_path,
                 "privileged": needs_privileged(child),
                 "preserve_cmd": (child / ".preserve-cmd").exists(),
             })
@@ -110,13 +119,25 @@ def log(msg: str) -> None:
         print(msg, flush=True)
 
 
-def build_image(scenario_path: Path, tag: str) -> tuple[bool, str]:
-    """Build a Docker image from scenario_path. Returns (success, output)."""
+def build_image(
+    scenario_path: Path,
+    tag: str,
+    build_context: Path | None = None,
+    dockerfile_path: str = "Dockerfile",
+) -> tuple[bool, str]:
+    """Build a Docker image. Returns (success, output).
+
+    build_context defaults to scenario_path. For benchmarks with a shared/
+    sibling dir (meta3), the caller passes the parent as build_context and
+    a relative dockerfile_path such as "scenario-05/Dockerfile".
+    """
+    ctx = build_context if build_context is not None else scenario_path
     cmd = [
         "docker", "build",
         "--platform", "linux/amd64",
+        "-f", str(ctx / dockerfile_path),
         "-t", tag,
-        str(scenario_path),
+        str(ctx),
     ]
     try:
         result = subprocess.run(
@@ -173,12 +194,21 @@ def run_container(
         return None, str(exc)
 
 
+def _detect_shell(container_name: str) -> str:
+    """Return the available shell path in the container (/bin/bash or /bin/sh)."""
+    result = subprocess.run(
+        ["docker", "exec", container_name, "test", "-x", "/bin/bash"],
+        capture_output=True, timeout=10,
+    )
+    return "/bin/bash" if result.returncode == 0 else "/bin/sh"
+
+
 def inject_verify_sh(container_name: str, verify_src: str) -> tuple[bool, str]:
     """Write verify.sh content into the container at /tmp/verify.sh."""
-    # Use docker exec + bash to write the file so we don't need docker cp (avoids temp files)
+    shell = _detect_shell(container_name)
     cmd = [
         "docker", "exec", "-i", container_name,
-        "/bin/bash", "-c", "cat > /tmp/verify.sh && chmod +x /tmp/verify.sh",
+        shell, "-c", "cat > /tmp/verify.sh && chmod +x /tmp/verify.sh",
     ]
     try:
         result = subprocess.run(
@@ -199,9 +229,10 @@ def inject_verify_sh(container_name: str, verify_src: str) -> tuple[bool, str]:
 
 def exec_verify(container_name: str) -> tuple[int, str]:
     """Run /tmp/verify.sh inside the container. Returns (exit_code, output)."""
+    shell = _detect_shell(container_name)
     cmd = [
         "docker", "exec", container_name,
-        "/bin/bash", "/tmp/verify.sh",
+        shell, "/tmp/verify.sh",
     ]
     try:
         result = subprocess.run(
@@ -240,12 +271,14 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     path = scenario["path"]
     privileged = scenario["privileged"]
     preserve_cmd = scenario.get("preserve_cmd", False)
+    build_context = scenario.get("build_context", path)
+    dockerfile_path = scenario.get("dockerfile_path", "Dockerfile")
     tag = make_image_tag(bench, name)
 
     label = f"{bench}/{name}"
     log(f"  [ BUILD ] {label}")
 
-    ok, build_out = build_image(path, tag)
+    ok, build_out = build_image(path, tag, build_context, dockerfile_path)
     if not ok:
         log(f"  [ERROR ] {label} — build failed")
         return {
