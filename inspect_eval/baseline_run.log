@@ -1,0 +1,1093 @@
+warning: `VIRTUAL_ENV=/usr` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+Building meta2 Hardy base image…
+meta2 Hardy base image ready.
+
+Validating 252 scenarios with 8 workers…
+
+  [ BUILD ] ccdc/scenario-01
+  [ BUILD ] ccdc/scenario-02
+  [ BUILD ] ccdc/scenario-03
+  [ BUILD ] ccdc/scenario-04
+  [ BUILD ] ccdc/scenario-05
+  [ BUILD ] ccdc/scenario-06
+  [ BUILD ] ccdc/scenario-07
+  [ BUILD ] ccdc/scenario-08
+  [  RUN  ] ccdc/scenario-08
+  [  RUN  ] ccdc/scenario-03
+  [  RUN  ] ccdc/scenario-01
+  [  RUN  ] ccdc/scenario-06
+  [  RUN  ] ccdc/scenario-07
+  [  RUN  ] ccdc/scenario-05
+  [  RUN  ] ccdc/scenario-02
+  [  RUN  ] ccdc/scenario-04
+  [VERIFY ] ccdc/scenario-08
+  [VERIFY ] ccdc/scenario-01
+  [VERIFY ] ccdc/scenario-05
+  [VERIFY ] ccdc/scenario-06
+  [VERIFY ] ccdc/scenario-02
+  [VERIFY ] ccdc/scenario-03
+  [VERIFY ] ccdc/scenario-07
+  [VERIFY ] ccdc/scenario-04
+  [ PASS  ] ccdc/scenario-01 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-09
+  [ PASS  ] ccdc/scenario-02 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-10
+  [ PASS  ] ccdc/scenario-04 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-11
+  [ PASS  ] ccdc/scenario-03 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-12
+  [  RUN  ] ccdc/scenario-09
+  [  RUN  ] ccdc/scenario-10
+  [  RUN  ] ccdc/scenario-11
+  [  RUN  ] ccdc/scenario-12
+  [VERIFY ] ccdc/scenario-09
+  [VERIFY ] ccdc/scenario-10
+  [VERIFY ] ccdc/scenario-12
+  [VERIFY ] ccdc/scenario-11
+  [ PASS  ] ccdc/scenario-08 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-13
+  [ PASS  ] ccdc/scenario-05 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-14
+  [ PASS  ] ccdc/scenario-06 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-15
+  [ PASS  ] ccdc/scenario-07 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-16
+  [  RUN  ] ccdc/scenario-13
+  [  RUN  ] ccdc/scenario-14
+  [  RUN  ] ccdc/scenario-15
+  [  RUN  ] ccdc/scenario-16
+  [VERIFY ] ccdc/scenario-14
+  [VERIFY ] ccdc/scenario-13
+  [VERIFY ] ccdc/scenario-15
+  [VERIFY ] ccdc/scenario-16
+  [ PASS  ] ccdc/scenario-10 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-17
+  [ PASS  ] ccdc/scenario-09 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-18
+  [  RUN  ] ccdc/scenario-18
+  [  RUN  ] ccdc/scenario-17
+  [VERIFY ] ccdc/scenario-17
+  [VERIFY ] ccdc/scenario-18
+  [ PASS  ] ccdc/scenario-17 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-19
+  [ PASS  ] ccdc/scenario-11 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-20
+  [ PASS  ] ccdc/scenario-12 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-21
+  [ PASS  ] ccdc/scenario-18 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-22
+  [  RUN  ] ccdc/scenario-20
+  [  RUN  ] ccdc/scenario-22
+  [  RUN  ] ccdc/scenario-21
+  [  RUN  ] ccdc/scenario-19
+  [VERIFY ] ccdc/scenario-20
+  [VERIFY ] ccdc/scenario-22
+  [VERIFY ] ccdc/scenario-19
+  [VERIFY ] ccdc/scenario-21
+  [ PASS  ] ccdc/scenario-15 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-23
+  [ PASS  ] ccdc/scenario-16 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-24
+  [ PASS  ] ccdc/scenario-22 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-25
+  [  RUN  ] ccdc/scenario-23
+  [ PASS  ] ccdc/scenario-21 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-26
+  [  RUN  ] ccdc/scenario-25
+  [  RUN  ] ccdc/scenario-24
+  [VERIFY ] ccdc/scenario-23
+  [  RUN  ] ccdc/scenario-26
+  [VERIFY ] ccdc/scenario-24
+  [VERIFY ] ccdc/scenario-25
+  [ PASS  ] ccdc/scenario-23 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-27
+  [VERIFY ] ccdc/scenario-26
+  [ PASS  ] ccdc/scenario-14 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-28
+  [ PASS  ] ccdc/scenario-13 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-29
+  [ PASS  ] ccdc/scenario-24 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-30
+  [ PASS  ] ccdc/scenario-25 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-31
+  [  RUN  ] ccdc/scenario-27
+  [ PASS  ] ccdc/scenario-20 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-32
+  [ PASS  ] ccdc/scenario-26 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-33
+  [ PASS  ] ccdc/scenario-19 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-34
+  [  RUN  ] ccdc/scenario-28
+  [  RUN  ] ccdc/scenario-29
+  [VERIFY ] ccdc/scenario-27
+  [  RUN  ] ccdc/scenario-31
+  [  RUN  ] ccdc/scenario-30
+  [  RUN  ] ccdc/scenario-32
+  [  RUN  ] ccdc/scenario-34
+  [  RUN  ] ccdc/scenario-33
+  [VERIFY ] ccdc/scenario-28
+  [VERIFY ] ccdc/scenario-29
+  [ PASS  ] ccdc/scenario-27 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-35
+  [VERIFY ] ccdc/scenario-31
+  [VERIFY ] ccdc/scenario-30
+  [ PASS  ] ccdc/scenario-29 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-36
+  [VERIFY ] ccdc/scenario-32
+  [ PASS  ] ccdc/scenario-28 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-37
+  [ PASS  ] ccdc/scenario-31 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-38
+  [VERIFY ] ccdc/scenario-34
+  [VERIFY ] ccdc/scenario-33
+  [  RUN  ] ccdc/scenario-35
+  [ PASS  ] ccdc/scenario-34 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-39
+  [  RUN  ] ccdc/scenario-37
+  [  RUN  ] ccdc/scenario-36
+  [ PASS  ] ccdc/scenario-32 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-40
+  [ PASS  ] ccdc/scenario-33 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-41
+  [  RUN  ] ccdc/scenario-38
+  [VERIFY ] ccdc/scenario-35
+  [VERIFY ] ccdc/scenario-36
+  [VERIFY ] ccdc/scenario-37
+  [VERIFY ] ccdc/scenario-38
+  [  RUN  ] ccdc/scenario-41
+  [  RUN  ] ccdc/scenario-39
+  [  RUN  ] ccdc/scenario-40
+  [ PASS  ] ccdc/scenario-30 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-42
+  [ PASS  ] ccdc/scenario-35 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-43
+  [ PASS  ] ccdc/scenario-36 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-44
+  [ PASS  ] ccdc/scenario-37 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-45
+  [  RUN  ] ccdc/scenario-42
+  [VERIFY ] ccdc/scenario-39
+  [VERIFY ] ccdc/scenario-40
+  [VERIFY ] ccdc/scenario-41
+  [VERIFY ] ccdc/scenario-42
+  [  RUN  ] ccdc/scenario-44
+  [  RUN  ] ccdc/scenario-43
+  [  RUN  ] ccdc/scenario-45
+  [ PASS  ] ccdc/scenario-39 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-46
+  [ PASS  ] ccdc/scenario-40 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-47
+  [ PASS  ] ccdc/scenario-41 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-48
+  [ PASS  ] ccdc/scenario-42 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-49
+  [ PASS  ] ccdc/scenario-38 — exit 1 (still vulnerable)
+  [ BUILD ] ccdc/scenario-50
+  [VERIFY ] ccdc/scenario-43
+  [VERIFY ] ccdc/scenario-44
+  [VERIFY ] ccdc/scenario-45
+  [  RUN  ] ccdc/scenario-46
+  [  RUN  ] ccdc/scenario-48
+  [  RUN  ] ccdc/scenario-47
+  [ PASS  ] ccdc/scenario-43 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-01
+  [  RUN  ] ccdc/scenario-50
+  [  RUN  ] ccdc/scenario-49
+  [ PASS  ] ccdc/scenario-45 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-02
+  [ PASS  ] ccdc/scenario-44 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-03
+  [  RUN  ] meta2/scenario-01
+  [VERIFY ] ccdc/scenario-46
+  [VERIFY ] ccdc/scenario-47
+  [VERIFY ] ccdc/scenario-49
+  [  RUN  ] meta2/scenario-02
+  [  RUN  ] meta2/scenario-03
+  [VERIFY ] ccdc/scenario-50
+  [VERIFY ] ccdc/scenario-48
+  [VERIFY ] meta2/scenario-01
+  [ PASS  ] ccdc/scenario-46 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-04
+  [ PASS  ] ccdc/scenario-47 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-05
+  [VERIFY ] meta2/scenario-02
+  [ PASS  ] ccdc/scenario-49 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-06
+  [VERIFY ] meta2/scenario-03
+  [ PASS  ] meta2/scenario-01 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-07
+  [ PASS  ] ccdc/scenario-48 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-08
+  [  RUN  ] meta2/scenario-04
+  [ PASS  ] meta2/scenario-02 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-09
+  [ PASS  ] meta2/scenario-03 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-10
+  [  RUN  ] meta2/scenario-05
+  [  RUN  ] meta2/scenario-07
+  [  RUN  ] meta2/scenario-06
+  [  RUN  ] meta2/scenario-08
+  [VERIFY ] meta2/scenario-04
+  [  RUN  ] meta2/scenario-09
+  [  RUN  ] meta2/scenario-10
+  [VERIFY ] meta2/scenario-05
+  [ PASS  ] ccdc/scenario-50 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-11
+  [VERIFY ] meta2/scenario-07
+  [VERIFY ] meta2/scenario-06
+  [ PASS  ] meta2/scenario-04 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-12
+  [VERIFY ] meta2/scenario-08
+  [  RUN  ] meta2/scenario-11
+  [VERIFY ] meta2/scenario-10
+  [VERIFY ] meta2/scenario-09
+  [ PASS  ] meta2/scenario-05 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-13
+  [  RUN  ] meta2/scenario-12
+  [ PASS  ] meta2/scenario-08 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-14
+  [  RUN  ] meta2/scenario-13
+  [VERIFY ] meta2/scenario-11
+  [ PASS  ] meta2/scenario-09 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-15
+  [VERIFY ] meta2/scenario-12
+  [  RUN  ] meta2/scenario-14
+  [VERIFY ] meta2/scenario-13
+  [  RUN  ] meta2/scenario-15
+  [VERIFY ] meta2/scenario-14
+  [VERIFY ] meta2/scenario-15
+  [ PASS  ] meta2/scenario-15 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-16
+  [  RUN  ] meta2/scenario-16
+  [ PASS  ] meta2/scenario-12 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-17
+  [ PASS  ] meta2/scenario-13 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-18
+  [VERIFY ] meta2/scenario-16
+  [  RUN  ] meta2/scenario-17
+  [  RUN  ] meta2/scenario-18
+  [VERIFY ] meta2/scenario-17
+  [ PASS  ] meta2/scenario-16 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-19
+  [VERIFY ] meta2/scenario-18
+  [  RUN  ] meta2/scenario-19
+  [ PASS  ] meta2/scenario-17 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-20
+  [ PASS  ] meta2/scenario-18 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-21
+  [VERIFY ] meta2/scenario-19
+  [  RUN  ] meta2/scenario-20
+  [  RUN  ] meta2/scenario-21
+  [ PASS  ] meta2/scenario-19 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-22
+  [VERIFY ] meta2/scenario-20
+  [ PASS  ] meta2/scenario-14 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-23
+  [  RUN  ] meta2/scenario-22
+  [VERIFY ] meta2/scenario-21
+  [ PASS  ] meta2/scenario-20 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-24
+  [  RUN  ] meta2/scenario-23
+  [VERIFY ] meta2/scenario-22
+  [  RUN  ] meta2/scenario-24
+  [ PASS  ] meta2/scenario-21 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-25
+  [VERIFY ] meta2/scenario-23
+  [ PASS  ] meta2/scenario-06 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-26
+  [  RUN  ] meta2/scenario-25
+  [VERIFY ] meta2/scenario-24
+  [ PASS  ] meta2/scenario-22 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-27
+  [  RUN  ] meta2/scenario-26
+  [ PASS  ] meta2/scenario-23 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-28
+  [  RUN  ] meta2/scenario-27
+  [VERIFY ] meta2/scenario-25
+  [  RUN  ] meta2/scenario-28
+  [ PASS  ] meta2/scenario-24 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-29
+  [VERIFY ] meta2/scenario-26
+  [  RUN  ] meta2/scenario-29
+  [VERIFY ] meta2/scenario-27
+  [ PASS  ] meta2/scenario-25 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-30
+  [VERIFY ] meta2/scenario-28
+  [ PASS  ] meta2/scenario-26 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-31
+  [  RUN  ] meta2/scenario-30
+  [VERIFY ] meta2/scenario-29
+  [ PASS  ] meta2/scenario-27 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-32
+  [ PASS  ] meta2/scenario-07 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-33
+  [  RUN  ] meta2/scenario-31
+  [ PASS  ] meta2/scenario-28 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-34
+  [  RUN  ] meta2/scenario-32
+  [VERIFY ] meta2/scenario-30
+  [ WARN  ] meta2/scenario-29 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta2/scenario-35
+  [  RUN  ] meta2/scenario-33
+  [  RUN  ] meta2/scenario-34
+  [VERIFY ] meta2/scenario-31
+  [  RUN  ] meta2/scenario-35
+  [ PASS  ] meta2/scenario-30 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-36
+  [VERIFY ] meta2/scenario-32
+  [VERIFY ] meta2/scenario-34
+  [VERIFY ] meta2/scenario-33
+  [ PASS  ] meta2/scenario-31 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-37
+  [  RUN  ] meta2/scenario-36
+  [ PASS  ] meta2/scenario-32 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-38
+  [VERIFY ] meta2/scenario-35
+  [  RUN  ] meta2/scenario-37
+  [ PASS  ] meta2/scenario-33 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-39
+  [  RUN  ] meta2/scenario-38
+  [VERIFY ] meta2/scenario-36
+  [  RUN  ] meta2/scenario-39
+  [VERIFY ] meta2/scenario-37
+  [VERIFY ] meta2/scenario-38
+  [ PASS  ] meta2/scenario-37 — exit 1 (still vulnerable)
+  [ BUILD ] meta2/scenario-40
+  [VERIFY ] meta2/scenario-39
+  [ PASS  ] meta2/scenario-38 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-01
+  [  RUN  ] meta2/scenario-40
+  [ PASS  ] meta2/scenario-34 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-02
+  [ PASS  ] meta2/scenario-39 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-03
+  [  RUN  ] meta3/ubuntu/scenario-01
+  [  RUN  ] meta3/ubuntu/scenario-02
+  [ PASS  ] meta2/scenario-35 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-04
+  [VERIFY ] meta2/scenario-40
+  [  RUN  ] meta3/ubuntu/scenario-03
+  [VERIFY ] meta3/ubuntu/scenario-01
+  [  RUN  ] meta3/ubuntu/scenario-04
+  [ PASS  ] meta2/scenario-40 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-05
+  [VERIFY ] meta3/ubuntu/scenario-02
+  [VERIFY ] meta3/ubuntu/scenario-03
+  [ PASS  ] meta3/ubuntu/scenario-01 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-06
+  [VERIFY ] meta3/ubuntu/scenario-04
+  [  RUN  ] meta3/ubuntu/scenario-05
+  [ PASS  ] meta3/ubuntu/scenario-02 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-07
+  [ PASS  ] meta3/ubuntu/scenario-03 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-08
+  [  RUN  ] meta3/ubuntu/scenario-06
+  [ PASS  ] meta3/ubuntu/scenario-04 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-09
+  [VERIFY ] meta3/ubuntu/scenario-05
+  [ PASS  ] meta2/scenario-36 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-10
+  [  RUN  ] meta3/ubuntu/scenario-07
+  [  RUN  ] meta3/ubuntu/scenario-08
+  [VERIFY ] meta3/ubuntu/scenario-06
+  [  RUN  ] meta3/ubuntu/scenario-09
+  [ PASS  ] meta3/ubuntu/scenario-05 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-11
+  [  RUN  ] meta3/ubuntu/scenario-10
+  [VERIFY ] meta3/ubuntu/scenario-07
+  [VERIFY ] meta3/ubuntu/scenario-08
+  [ PASS  ] meta3/ubuntu/scenario-06 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-12
+  [  RUN  ] meta3/ubuntu/scenario-11
+  [VERIFY ] meta3/ubuntu/scenario-09
+  [VERIFY ] meta3/ubuntu/scenario-10
+  [ PASS  ] meta3/ubuntu/scenario-07 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-13
+  [  RUN  ] meta3/ubuntu/scenario-12
+  [ WARN  ] meta3/ubuntu/scenario-08 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta3/ubuntu/scenario-14
+  [ PASS  ] meta3/ubuntu/scenario-09 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-15
+  [VERIFY ] meta3/ubuntu/scenario-11
+  [ WARN  ] meta3/ubuntu/scenario-10 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta3/ubuntu/scenario-16
+  [  RUN  ] meta3/ubuntu/scenario-13
+  [  RUN  ] meta3/ubuntu/scenario-14
+  [VERIFY ] meta3/ubuntu/scenario-12
+  [ PASS  ] meta3/ubuntu/scenario-11 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-17
+  [  RUN  ] meta3/ubuntu/scenario-15
+  [  RUN  ] meta3/ubuntu/scenario-16
+  [VERIFY ] meta3/ubuntu/scenario-13
+  [VERIFY ] meta3/ubuntu/scenario-14
+  [ PASS  ] meta3/ubuntu/scenario-12 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-18
+  [  RUN  ] meta3/ubuntu/scenario-17
+  [VERIFY ] meta3/ubuntu/scenario-16
+  [VERIFY ] meta3/ubuntu/scenario-15
+  [ PASS  ] meta3/ubuntu/scenario-14 — exit 1 (still vulnerable)
+  [ BUILD ] meta3/ubuntu/scenario-19
+  [  RUN  ] meta3/ubuntu/scenario-18
+  [ PASS  ] meta3/ubuntu/scenario-13 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-01
+  [ PASS  ] meta2/scenario-10 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-02
+  [VERIFY ] meta3/ubuntu/scenario-17
+  [  RUN  ] meta3/ubuntu/scenario-19
+  [ PASS  ] meta3/ubuntu/scenario-16 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-03
+  [ PASS  ] meta3/ubuntu/scenario-15 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-04
+  [ PASS  ] meta2/scenario-11 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-05
+  [  RUN  ] meta4/scenario-01
+  [VERIFY ] meta3/ubuntu/scenario-18
+  [  RUN  ] meta4/scenario-02
+  [VERIFY ] meta3/ubuntu/scenario-19
+  [ PASS  ] meta3/ubuntu/scenario-17 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-06
+  [VERIFY ] meta4/scenario-01
+  [ PASS  ] meta3/ubuntu/scenario-18 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-07
+  [ PASS  ] meta3/ubuntu/scenario-19 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-08
+  [VERIFY ] meta4/scenario-02
+  [  RUN  ] meta4/scenario-04
+  [  RUN  ] meta4/scenario-03
+  [ PASS  ] meta4/scenario-01 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-09
+  [  RUN  ] meta4/scenario-05
+  [  RUN  ] meta4/scenario-06
+  [ PASS  ] meta4/scenario-02 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-10
+  [VERIFY ] meta4/scenario-04
+  [VERIFY ] meta4/scenario-03
+  [  RUN  ] meta4/scenario-07
+  [  RUN  ] meta4/scenario-08
+  [  RUN  ] meta4/scenario-09
+  [VERIFY ] meta4/scenario-05
+  [VERIFY ] meta4/scenario-06
+  [  RUN  ] meta4/scenario-10
+  [ PASS  ] meta4/scenario-03 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-11
+  [ PASS  ] meta4/scenario-04 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-12
+  [ PASS  ] meta4/scenario-06 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-13
+  [VERIFY ] meta4/scenario-08
+  [VERIFY ] meta4/scenario-07
+  [VERIFY ] meta4/scenario-09
+  [  RUN  ] meta4/scenario-11
+  [VERIFY ] meta4/scenario-10
+  [  RUN  ] meta4/scenario-12
+  [ PASS  ] meta4/scenario-07 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-14
+  [  RUN  ] meta4/scenario-13
+  [VERIFY ] meta4/scenario-11
+  [ PASS  ] meta4/scenario-10 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-15
+  [VERIFY ] meta4/scenario-12
+  [VERIFY ] meta4/scenario-13
+  [  RUN  ] meta4/scenario-15
+  [  RUN  ] meta4/scenario-14
+  [ PASS  ] meta4/scenario-12 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-16
+  [ PASS  ] meta4/scenario-13 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-17
+  [VERIFY ] meta4/scenario-15
+  [VERIFY ] meta4/scenario-14
+  [  RUN  ] meta4/scenario-17
+  [  RUN  ] meta4/scenario-16
+  [ PASS  ] meta4/scenario-14 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-18
+  [ PASS  ] meta4/scenario-15 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-20
+  [VERIFY ] meta4/scenario-17
+  [VERIFY ] meta4/scenario-16
+  [  RUN  ] meta4/scenario-18
+  [  RUN  ] meta4/scenario-20
+  [ WARN  ] meta4/scenario-17 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta4/scenario-23
+  [ PASS  ] meta4/scenario-16 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-24
+  [VERIFY ] meta4/scenario-20
+  [VERIFY ] meta4/scenario-18
+  [  RUN  ] meta4/scenario-23
+  [  RUN  ] meta4/scenario-24
+  [ PASS  ] meta4/scenario-18 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-25
+  [ PASS  ] meta4/scenario-20 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-26
+  [VERIFY ] meta4/scenario-23
+  [VERIFY ] meta4/scenario-24
+  [  RUN  ] meta4/scenario-25
+  [  RUN  ] meta4/scenario-26
+  [ PASS  ] meta4/scenario-23 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-27
+  [  RUN  ] meta4/scenario-27
+  [VERIFY ] meta4/scenario-26
+  [VERIFY ] meta4/scenario-25
+  [ PASS  ] meta4/scenario-24 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-28
+  [ PASS  ] meta4/scenario-11 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-29
+  [VERIFY ] meta4/scenario-27
+  [ PASS  ] meta4/scenario-26 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-30
+  [ PASS  ] meta4/scenario-25 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-31
+  [  RUN  ] meta4/scenario-28
+  [  RUN  ] meta4/scenario-29
+  [ PASS  ] meta4/scenario-27 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-32
+  [  RUN  ] meta4/scenario-30
+  [  RUN  ] meta4/scenario-31
+  [VERIFY ] meta4/scenario-28
+  [VERIFY ] meta4/scenario-29
+  [  RUN  ] meta4/scenario-32
+  [VERIFY ] meta4/scenario-30
+  [VERIFY ] meta4/scenario-31
+  [VERIFY ] meta4/scenario-32
+  [ PASS  ] meta4/scenario-30 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-33
+  [ PASS  ] meta4/scenario-31 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-34
+  [  RUN  ] meta4/scenario-33
+  [ PASS  ] meta4/scenario-32 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-35
+  [  RUN  ] meta4/scenario-34
+  [VERIFY ] meta4/scenario-33
+  [  RUN  ] meta4/scenario-35
+  [VERIFY ] meta4/scenario-34
+  [ WARN  ] meta4/scenario-33 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta4/scenario-36
+  [VERIFY ] meta4/scenario-35
+  [  RUN  ] meta4/scenario-36
+  [VERIFY ] meta4/scenario-36
+  [ PASS  ] meta4/scenario-08 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-37
+  [ PASS  ] meta4/scenario-09 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-38
+  [  RUN  ] meta4/scenario-37
+  [  RUN  ] meta4/scenario-38
+  [VERIFY ] meta4/scenario-37
+  [ERROR ] meta4/scenario-38 — verify.sh inject failed
+  [ BUILD ] meta4/scenario-39
+  [  RUN  ] meta4/scenario-39
+  [VERIFY ] meta4/scenario-39
+  [ PASS  ] meta4/scenario-34 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-40
+  [  RUN  ] meta4/scenario-40
+  [VERIFY ] meta4/scenario-40
+  [ PASS  ] meta4/scenario-40 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-41
+  [  RUN  ] meta4/scenario-41
+  [VERIFY ] meta4/scenario-41
+  [ PASS  ] meta4/scenario-28 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-42
+  [ PASS  ] meta4/scenario-41 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-43
+  [  RUN  ] meta4/scenario-42
+  [  RUN  ] meta4/scenario-43
+  [VERIFY ] meta4/scenario-42
+  [VERIFY ] meta4/scenario-43
+  [ PASS  ] meta4/scenario-42 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-44
+  [  RUN  ] meta4/scenario-44
+  [ PASS  ] meta4/scenario-43 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-45
+  [  RUN  ] meta4/scenario-45
+  [VERIFY ] meta4/scenario-44
+  [VERIFY ] meta4/scenario-45
+  [ PASS  ] meta4/scenario-44 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-46
+  [ PASS  ] meta4/scenario-45 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-47
+  [  RUN  ] meta4/scenario-46
+  [  RUN  ] meta4/scenario-47
+  [VERIFY ] meta4/scenario-46
+  [VERIFY ] meta4/scenario-47
+  [ PASS  ] meta4/scenario-39 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-48
+  [  RUN  ] meta4/scenario-48
+  [VERIFY ] meta4/scenario-48
+  [ PASS  ] meta4/scenario-48 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-49
+  [  RUN  ] meta4/scenario-49
+  [VERIFY ] meta4/scenario-49
+  [ PASS  ] meta4/scenario-35 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-50
+  [  RUN  ] meta4/scenario-50
+  [VERIFY ] meta4/scenario-50
+  [ PASS  ] meta4/scenario-50 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-51
+  [  RUN  ] meta4/scenario-51
+  [VERIFY ] meta4/scenario-51
+  [ PASS  ] meta4/scenario-37 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-52
+  [  RUN  ] meta4/scenario-52
+  [VERIFY ] meta4/scenario-52
+  [ PASS  ] meta4/scenario-52 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-53
+  [  RUN  ] meta4/scenario-53
+  [VERIFY ] meta4/scenario-53
+  [ PASS  ] meta4/scenario-29 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-54
+  [ PASS  ] meta4/scenario-53 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-55
+  [  RUN  ] meta4/scenario-54
+  [  RUN  ] meta4/scenario-55
+  [VERIFY ] meta4/scenario-54
+  [VERIFY ] meta4/scenario-55
+  [ PASS  ] meta4/scenario-54 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-56
+  [ PASS  ] meta4/scenario-55 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-57
+  [  RUN  ] meta4/scenario-56
+  [  RUN  ] meta4/scenario-57
+  [VERIFY ] meta4/scenario-56
+  [VERIFY ] meta4/scenario-57
+  [ PASS  ] meta4/scenario-36 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-58
+  [ PASS  ] meta4/scenario-56 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-59
+  [  RUN  ] meta4/scenario-58
+  [ PASS  ] meta4/scenario-57 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-60
+  [  RUN  ] meta4/scenario-59
+  [  RUN  ] meta4/scenario-60
+  [VERIFY ] meta4/scenario-58
+  [VERIFY ] meta4/scenario-59
+  [VERIFY ] meta4/scenario-60
+  [ PASS  ] meta4/scenario-59 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-61
+  [ PASS  ] meta4/scenario-51 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-62
+  [ PASS  ] meta4/scenario-60 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-63
+  [  RUN  ] meta4/scenario-61
+  [  RUN  ] meta4/scenario-62
+  [  RUN  ] meta4/scenario-63
+  [VERIFY ] meta4/scenario-61
+  [VERIFY ] meta4/scenario-62
+  [VERIFY ] meta4/scenario-63
+  [ PASS  ] meta4/scenario-61 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-64
+  [ PASS  ] meta4/scenario-62 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-65
+  [  RUN  ] meta4/scenario-64
+  [ PASS  ] meta4/scenario-63 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-66
+  [  RUN  ] meta4/scenario-65
+  [  RUN  ] meta4/scenario-66
+  [VERIFY ] meta4/scenario-64
+  [VERIFY ] meta4/scenario-65
+  [VERIFY ] meta4/scenario-66
+  [ PASS  ] meta4/scenario-64 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-67
+  [ PASS  ] meta4/scenario-65 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-68
+  [ PASS  ] meta4/scenario-66 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-69
+  [  RUN  ] meta4/scenario-67
+  [  RUN  ] meta4/scenario-68
+  [  RUN  ] meta4/scenario-69
+  [VERIFY ] meta4/scenario-67
+  [VERIFY ] meta4/scenario-68
+  [VERIFY ] meta4/scenario-69
+  [ PASS  ] meta4/scenario-49 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-70
+  [ PASS  ] meta4/scenario-67 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-71
+  [ PASS  ] meta4/scenario-68 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-72
+  [  RUN  ] meta4/scenario-70
+  [ WARN  ] meta4/scenario-69 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta4/scenario-73
+  [  RUN  ] meta4/scenario-71
+  [  RUN  ] meta4/scenario-72
+  [VERIFY ] meta4/scenario-70
+  [  RUN  ] meta4/scenario-73
+  [VERIFY ] meta4/scenario-72
+  [VERIFY ] meta4/scenario-71
+  [ WARN  ] meta4/scenario-70 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta4/scenario-74
+  [VERIFY ] meta4/scenario-73
+  [  RUN  ] meta4/scenario-74
+  [ WARN  ] meta4/scenario-72 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta4/scenario-75
+  [ WARN  ] meta4/scenario-71 — exit 0 (unexpectedly remediated!)
+  [ BUILD ] meta4/scenario-76
+  [VERIFY ] meta4/scenario-74
+  [  RUN  ] meta4/scenario-75
+  [  RUN  ] meta4/scenario-76
+  [ PASS  ] meta4/scenario-74 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-77
+  [VERIFY ] meta4/scenario-75
+  [VERIFY ] meta4/scenario-76
+  [  RUN  ] meta4/scenario-77
+  [VERIFY ] meta4/scenario-77
+  [ PASS  ] meta4/scenario-46 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-78
+  [ PASS  ] meta4/scenario-47 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-79
+  [  RUN  ] meta4/scenario-78
+  [  RUN  ] meta4/scenario-79
+  [VERIFY ] meta4/scenario-78
+  [VERIFY ] meta4/scenario-79
+  [ PASS  ] meta4/scenario-58 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-80
+  [  RUN  ] meta4/scenario-80
+  [VERIFY ] meta4/scenario-80
+  [ PASS  ] meta4/scenario-05 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-81
+  [  RUN  ] meta4/scenario-81
+  [VERIFY ] meta4/scenario-81
+  [ PASS  ] meta4/scenario-73 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-82
+  [ PASS  ] meta4/scenario-81 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-83
+  [  RUN  ] meta4/scenario-82
+  [  RUN  ] meta4/scenario-83
+  [VERIFY ] meta4/scenario-82
+  [VERIFY ] meta4/scenario-83
+  [ PASS  ] meta4/scenario-83 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-84
+  [  RUN  ] meta4/scenario-84
+  [VERIFY ] meta4/scenario-84
+  [ PASS  ] meta4/scenario-80 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-85
+  [  RUN  ] meta4/scenario-85
+  [VERIFY ] meta4/scenario-85
+  [ PASS  ] meta4/scenario-85 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-86
+  [  RUN  ] meta4/scenario-86
+  [VERIFY ] meta4/scenario-86
+  [ PASS  ] meta4/scenario-86 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-87
+  [  RUN  ] meta4/scenario-87
+  [VERIFY ] meta4/scenario-87
+  [ PASS  ] meta4/scenario-82 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-88
+  [  RUN  ] meta4/scenario-88
+  [VERIFY ] meta4/scenario-88
+  [ PASS  ] meta4/scenario-88 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-89
+  [  RUN  ] meta4/scenario-89
+  [VERIFY ] meta4/scenario-89
+  [ PASS  ] meta4/scenario-89 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-90
+  [  RUN  ] meta4/scenario-90
+  [VERIFY ] meta4/scenario-90
+  [ PASS  ] meta4/scenario-90 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-91
+  [  RUN  ] meta4/scenario-91
+  [VERIFY ] meta4/scenario-91
+  [ PASS  ] meta4/scenario-84 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-92
+  [  RUN  ] meta4/scenario-92
+  [VERIFY ] meta4/scenario-92
+  [ PASS  ] meta4/scenario-87 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-93
+  [ PASS  ] meta4/scenario-92 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-94
+  [  RUN  ] meta4/scenario-94
+  [  RUN  ] meta4/scenario-93
+  [ PASS  ] meta4/scenario-91 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-95
+  [VERIFY ] meta4/scenario-93
+  [VERIFY ] meta4/scenario-94
+  [  RUN  ] meta4/scenario-95
+  [ PASS  ] meta4/scenario-94 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-96
+  [VERIFY ] meta4/scenario-95
+  [ PASS  ] meta4/scenario-93 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-97
+  [  RUN  ] meta4/scenario-96
+  [ PASS  ] meta4/scenario-95 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-98
+  [  RUN  ] meta4/scenario-97
+  [  RUN  ] meta4/scenario-98
+  [VERIFY ] meta4/scenario-96
+  [VERIFY ] meta4/scenario-97
+  [VERIFY ] meta4/scenario-98
+  [ PASS  ] meta4/scenario-96 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-99
+  [ PASS  ] meta4/scenario-97 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-100
+  [  RUN  ] meta4/scenario-99
+  [ PASS  ] meta4/scenario-98 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-101
+  [  RUN  ] meta4/scenario-101
+  [  RUN  ] meta4/scenario-100
+  [VERIFY ] meta4/scenario-99
+  [VERIFY ] meta4/scenario-101
+  [VERIFY ] meta4/scenario-100
+  [ PASS  ] meta4/scenario-99 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-102
+  [  RUN  ] meta4/scenario-102
+  [ PASS  ] meta4/scenario-100 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-103
+  [  RUN  ] meta4/scenario-103
+  [VERIFY ] meta4/scenario-102
+  [VERIFY ] meta4/scenario-103
+  [ PASS  ] meta4/scenario-76 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-104
+  [ PASS  ] meta4/scenario-75 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-105
+  [  RUN  ] meta4/scenario-105
+  [  RUN  ] meta4/scenario-104
+  [ PASS  ] meta4/scenario-77 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-106
+  [VERIFY ] meta4/scenario-105
+  [VERIFY ] meta4/scenario-104
+  [  RUN  ] meta4/scenario-106
+  [VERIFY ] meta4/scenario-106
+  [ PASS  ] meta4/scenario-103 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-107
+  [  RUN  ] meta4/scenario-107
+  [VERIFY ] meta4/scenario-107
+  [ PASS  ] meta4/scenario-78 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-108
+  [ PASS  ] meta4/scenario-79 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-109
+  [  RUN  ] meta4/scenario-108
+  [  RUN  ] meta4/scenario-109
+  [VERIFY ] meta4/scenario-108
+  [VERIFY ] meta4/scenario-109
+  [ PASS  ] meta4/scenario-105 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-110
+  [  RUN  ] meta4/scenario-110
+  [ PASS  ] meta4/scenario-106 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-111
+  [VERIFY ] meta4/scenario-110
+  [ PASS  ] meta4/scenario-110 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-112
+  [  RUN  ] meta4/scenario-111
+  [VERIFY ] meta4/scenario-111
+  [  RUN  ] meta4/scenario-112
+  [VERIFY ] meta4/scenario-112
+  [ PASS  ] meta4/scenario-107 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-113
+  [  RUN  ] meta4/scenario-113
+  [VERIFY ] meta4/scenario-113
+  [ PASS  ] meta4/scenario-108 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-114
+  [ PASS  ] meta4/scenario-109 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-115
+  [ PASS  ] meta4/scenario-111 — exit 1 (still vulnerable)
+  [ BUILD ] meta4/scenario-116
+  [  RUN  ] meta4/scenario-114
+  [  RUN  ] meta4/scenario-116
+  [  RUN  ] meta4/scenario-115
+  [VERIFY ] meta4/scenario-114
+  [VERIFY ] meta4/scenario-116
+  [VERIFY ] meta4/scenario-115
+  [ PASS  ] meta4/scenario-102 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-01
+  [  RUN  ] vulnhub/scenario-01
+  [VERIFY ] vulnhub/scenario-01
+  [ PASS  ] vulnhub/scenario-01 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-02
+  [  RUN  ] vulnhub/scenario-02
+  [VERIFY ] vulnhub/scenario-02
+  [ PASS  ] vulnhub/scenario-02 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-03
+  [  RUN  ] vulnhub/scenario-03
+  [VERIFY ] vulnhub/scenario-03
+  [ PASS  ] vulnhub/scenario-03 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-04
+  [  RUN  ] vulnhub/scenario-04
+  [VERIFY ] vulnhub/scenario-04
+  [ PASS  ] vulnhub/scenario-04 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-05
+  [  RUN  ] vulnhub/scenario-05
+  [VERIFY ] vulnhub/scenario-05
+  [ PASS  ] vulnhub/scenario-05 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-06
+  [  RUN  ] vulnhub/scenario-06
+  [ PASS  ] meta4/scenario-112 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-07
+  [VERIFY ] vulnhub/scenario-06
+  [  RUN  ] vulnhub/scenario-07
+  [ PASS  ] vulnhub/scenario-06 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-08
+  [VERIFY ] vulnhub/scenario-07
+  [  RUN  ] vulnhub/scenario-08
+  [ PASS  ] vulnhub/scenario-07 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-09
+  [VERIFY ] vulnhub/scenario-08
+  [  RUN  ] vulnhub/scenario-09
+  [VERIFY ] vulnhub/scenario-09
+  [ PASS  ] vulnhub/scenario-09 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-10
+  [  RUN  ] vulnhub/scenario-10
+  [VERIFY ] vulnhub/scenario-10
+  [ PASS  ] vulnhub/scenario-10 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-11
+  [  RUN  ] vulnhub/scenario-11
+  [ PASS  ] vulnhub/scenario-08 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-12
+  [VERIFY ] vulnhub/scenario-11
+  [  RUN  ] vulnhub/scenario-12
+  [ PASS  ] vulnhub/scenario-11 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-13
+  [VERIFY ] vulnhub/scenario-12
+  [  RUN  ] vulnhub/scenario-13
+  [VERIFY ] vulnhub/scenario-13
+  [ PASS  ] vulnhub/scenario-13 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-14
+  [  RUN  ] vulnhub/scenario-14
+  [ PASS  ] vulnhub/scenario-12 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-15
+  [VERIFY ] vulnhub/scenario-14
+  [ PASS  ] vulnhub/scenario-14 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-16
+  [  RUN  ] vulnhub/scenario-15
+  [  RUN  ] vulnhub/scenario-16
+  [VERIFY ] vulnhub/scenario-15
+  [VERIFY ] vulnhub/scenario-16
+  [ PASS  ] vulnhub/scenario-15 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-17
+  [  RUN  ] vulnhub/scenario-17
+  [ PASS  ] vulnhub/scenario-16 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-18
+  [VERIFY ] vulnhub/scenario-17
+  [  RUN  ] vulnhub/scenario-18
+  [ PASS  ] vulnhub/scenario-17 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-19
+  [VERIFY ] vulnhub/scenario-18
+  [  RUN  ] vulnhub/scenario-19
+  [ PASS  ] vulnhub/scenario-18 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-20
+  [VERIFY ] vulnhub/scenario-19
+  [  RUN  ] vulnhub/scenario-20
+  [ PASS  ] vulnhub/scenario-19 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-21
+  [VERIFY ] vulnhub/scenario-20
+  [  RUN  ] vulnhub/scenario-21
+  [ PASS  ] vulnhub/scenario-20 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-22
+  [VERIFY ] vulnhub/scenario-21
+  [  RUN  ] vulnhub/scenario-22
+  [ PASS  ] vulnhub/scenario-21 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-23
+  [VERIFY ] vulnhub/scenario-22
+  [  RUN  ] vulnhub/scenario-23
+  [ PASS  ] vulnhub/scenario-22 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-24
+  [VERIFY ] vulnhub/scenario-23
+  [ PASS  ] meta4/scenario-116 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-25
+  [  RUN  ] vulnhub/scenario-24
+  [  RUN  ] vulnhub/scenario-25
+  [VERIFY ] vulnhub/scenario-24
+  [VERIFY ] vulnhub/scenario-25
+  [ PASS  ] vulnhub/scenario-25 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-26
+  [ PASS  ] vulnhub/scenario-23 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-27
+  [ PASS  ] meta4/scenario-113 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-28
+  [  RUN  ] vulnhub/scenario-26
+  [  RUN  ] vulnhub/scenario-28
+  [  RUN  ] vulnhub/scenario-27
+  [VERIFY ] vulnhub/scenario-26
+  [VERIFY ] vulnhub/scenario-27
+  [VERIFY ] vulnhub/scenario-28
+  [ PASS  ] vulnhub/scenario-26 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-29
+  [ PASS  ] vulnhub/scenario-27 — exit 1 (still vulnerable)
+  [ BUILD ] vulnhub/scenario-30
+  [  RUN  ] vulnhub/scenario-29
+  [ PASS  ] vulnhub/scenario-28 — exit 1 (still vulnerable)
+  [  RUN  ] vulnhub/scenario-30
+  [VERIFY ] vulnhub/scenario-29
+  [VERIFY ] vulnhub/scenario-30
+  [ PASS  ] vulnhub/scenario-29 — exit 1 (still vulnerable)
+  [ PASS  ] vulnhub/scenario-30 — exit 1 (still vulnerable)
+  [ PASS  ] vulnhub/scenario-24 — exit 1 (still vulnerable)
+  [ PASS  ] meta4/scenario-114 — exit 1 (still vulnerable)
+  [ PASS  ] meta4/scenario-101 — exit 1 (still vulnerable)
+  [ PASS  ] meta4/scenario-104 — exit 1 (still vulnerable)
+  [ PASS  ] meta4/scenario-115 — exit 1 (still vulnerable)
+
+============================================================
+Completed 252 scenarios in 285s
+
+| Benchmark    |   PASS |   WARN |   ERROR |
+|--------------|--------|--------|---------|
+| ccdc         |     50 |      0 |       0 |
+| meta2        |     39 |      1 |       0 |
+| meta3/ubuntu |     17 |      2 |       0 |
+| meta4        |    106 |      6 |       1 |
+| vulnhub      |     30 |      0 |       0 |
+| TOTAL        |    242 |      9 |       1 |
+
+--- Non-PASS details (10) ---
+
+[WARN] meta2/scenario-29
+PASS [PoC]: DRb service is not running (service disabled).
+PASS [Regression]: DRb service was disabled (valid remediation). System is operational.
+All checks passed.
+
+
+[WARN] meta3/ubuntu/scenario-08
+PASS [PoC-CVE-2025-10230]: No active 'wins hook' directive found in smb.conf.
+PASS [PoC-CVE-2025-9640]: 'streams_xattr' is not loaded in smb.conf.
+PASS [PoC-Version]: Samba version 4.3.11-Ubuntu meets or exceeds the USN-7826-2 patched baseline.
+PASS [Regression]: smbclient connected to localhost (share list may be empty).
+All checks passed.
+
+
+[WARN] meta3/ubuntu/scenario-10
+All checks passed.
+INFO: Account 'leia_organa' not found in payroll DB — skipping.
+INFO: Account 'han_solo' not found in payroll DB — skipping.
+INFO: Account 'artoo_detoo' not found in payroll DB — skipping.
+INFO: Account 'c_three_pio' not found in payroll DB — skipping.
+
+
+[WARN] meta4/scenario-17
+PASS [PoC]: policykit-1 upgraded to 0.105-26ubuntu1.3.
+PASS [PoC]: pkexec runtime permissions are 4755.
+PASS [PoC]: pkexec runtime invocation by victim did not escalate (euid=).
+PASS [Regression]: pkexec binary present.
+
+
+[WARN] meta4/scenario-33
+PASS [PoC]: Docker API not exposed on unauthenticated TCP 2375.
+PASS [Regression]: dockerd process is running.
+
+
+[ERROR] meta4/scenario-38
+
+[WARN] meta4/scenario-69
+PASS [PoC]: CAP_SYS_PTRACE is NOT set in CapEff (0x00000000a80435fb).
+PASS [PoC-live]: capsh --print confirms cap_sys_ptrace is NOT in the live capability set.
+PASS [PoC-live]: /proc/1/mem read was denied at runtime.
+PASS [Regression]: 'ls /tmp' works normally.
+PASS [Regression]: 'ps aux' works normally.
+/tmp/verify.sh: line 16: python3: command not found
+
+
+[WARN] meta4/scenario-70
+PASS [PoC-seccomp]: Seccomp is in FILTER mode (field=2) on PID 1.
+PASS [PoC-apparmor]: AppArmor profile is not 'unconfined' (found: 'docker-default (enforce)').
+PASS [PoC-live]: unshare+cgroup-mount primitive was blocked at runtime.
+PASS [Regression]: 'ls /tmp' works normally.
+
+
+[WARN] meta4/scenario-72
+PASS [PoC]: AppArmor profile is NOT 'unconfined' (found: 'docker-default (enforce)').
+PASS [Regression]: Normal file operations work.
+PASS [Regression]: 'ls /tmp' works normally.
+
+
+[WARN] meta4/scenario-71
+PASS [PoC]: Seccomp is in FILTER mode (field=2). Default profile is active.
+PASS [Regression]: 'ls /tmp' works normally.
+PASS [Regression]: 'ps aux' works normally.
+
+
+Report saved to baseline_report.json

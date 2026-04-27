@@ -1,0 +1,2270 @@
+[
+  {
+    "bench": "ccdc",
+    "name": "scenario-01",
+    "tag": "sysrepair/ccdc-scenario-01",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-02",
+    "tag": "sysrepair/ccdc-scenario-02",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-04",
+    "tag": "sysrepair/ccdc-scenario-04",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-03",
+    "tag": "sysrepair/ccdc-scenario-03",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-08",
+    "tag": "sysrepair/ccdc-scenario-08",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-05",
+    "tag": "sysrepair/ccdc-scenario-05",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-06",
+    "tag": "sysrepair/ccdc-scenario-06",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-07",
+    "tag": "sysrepair/ccdc-scenario-07",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-10",
+    "tag": "sysrepair/ccdc-scenario-10",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-09",
+    "tag": "sysrepair/ccdc-scenario-09",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-17",
+    "tag": "sysrepair/ccdc-scenario-17",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-11",
+    "tag": "sysrepair/ccdc-scenario-11",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-12",
+    "tag": "sysrepair/ccdc-scenario-12",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-18",
+    "tag": "sysrepair/ccdc-scenario-18",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-15",
+    "tag": "sysrepair/ccdc-scenario-15",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-16",
+    "tag": "sysrepair/ccdc-scenario-16",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-22",
+    "tag": "sysrepair/ccdc-scenario-22",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-21",
+    "tag": "sysrepair/ccdc-scenario-21",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-23",
+    "tag": "sysrepair/ccdc-scenario-23",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-14",
+    "tag": "sysrepair/ccdc-scenario-14",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-13",
+    "tag": "sysrepair/ccdc-scenario-13",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-24",
+    "tag": "sysrepair/ccdc-scenario-24",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-25",
+    "tag": "sysrepair/ccdc-scenario-25",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-20",
+    "tag": "sysrepair/ccdc-scenario-20",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-26",
+    "tag": "sysrepair/ccdc-scenario-26",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-19",
+    "tag": "sysrepair/ccdc-scenario-19",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-27",
+    "tag": "sysrepair/ccdc-scenario-27",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-29",
+    "tag": "sysrepair/ccdc-scenario-29",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-28",
+    "tag": "sysrepair/ccdc-scenario-28",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-31",
+    "tag": "sysrepair/ccdc-scenario-31",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-34",
+    "tag": "sysrepair/ccdc-scenario-34",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-32",
+    "tag": "sysrepair/ccdc-scenario-32",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-33",
+    "tag": "sysrepair/ccdc-scenario-33",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-30",
+    "tag": "sysrepair/ccdc-scenario-30",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-35",
+    "tag": "sysrepair/ccdc-scenario-35",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-36",
+    "tag": "sysrepair/ccdc-scenario-36",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-37",
+    "tag": "sysrepair/ccdc-scenario-37",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-39",
+    "tag": "sysrepair/ccdc-scenario-39",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-40",
+    "tag": "sysrepair/ccdc-scenario-40",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-41",
+    "tag": "sysrepair/ccdc-scenario-41",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-42",
+    "tag": "sysrepair/ccdc-scenario-42",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-38",
+    "tag": "sysrepair/ccdc-scenario-38",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-43",
+    "tag": "sysrepair/ccdc-scenario-43",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-45",
+    "tag": "sysrepair/ccdc-scenario-45",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-44",
+    "tag": "sysrepair/ccdc-scenario-44",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-46",
+    "tag": "sysrepair/ccdc-scenario-46",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-47",
+    "tag": "sysrepair/ccdc-scenario-47",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-49",
+    "tag": "sysrepair/ccdc-scenario-49",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-01",
+    "tag": "sysrepair/meta2-scenario-01",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-48",
+    "tag": "sysrepair/ccdc-scenario-48",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-02",
+    "tag": "sysrepair/meta2-scenario-02",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-03",
+    "tag": "sysrepair/meta2-scenario-03",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "ccdc",
+    "name": "scenario-50",
+    "tag": "sysrepair/ccdc-scenario-50",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-04",
+    "tag": "sysrepair/meta2-scenario-04",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-05",
+    "tag": "sysrepair/meta2-scenario-05",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-08",
+    "tag": "sysrepair/meta2-scenario-08",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-09",
+    "tag": "sysrepair/meta2-scenario-09",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-15",
+    "tag": "sysrepair/meta2-scenario-15",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-12",
+    "tag": "sysrepair/meta2-scenario-12",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-13",
+    "tag": "sysrepair/meta2-scenario-13",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-16",
+    "tag": "sysrepair/meta2-scenario-16",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-17",
+    "tag": "sysrepair/meta2-scenario-17",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-18",
+    "tag": "sysrepair/meta2-scenario-18",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-19",
+    "tag": "sysrepair/meta2-scenario-19",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-14",
+    "tag": "sysrepair/meta2-scenario-14",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-20",
+    "tag": "sysrepair/meta2-scenario-20",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-21",
+    "tag": "sysrepair/meta2-scenario-21",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-06",
+    "tag": "sysrepair/meta2-scenario-06",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-22",
+    "tag": "sysrepair/meta2-scenario-22",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-23",
+    "tag": "sysrepair/meta2-scenario-23",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-24",
+    "tag": "sysrepair/meta2-scenario-24",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-25",
+    "tag": "sysrepair/meta2-scenario-25",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-26",
+    "tag": "sysrepair/meta2-scenario-26",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-27",
+    "tag": "sysrepair/meta2-scenario-27",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-07",
+    "tag": "sysrepair/meta2-scenario-07",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-28",
+    "tag": "sysrepair/meta2-scenario-28",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-29",
+    "tag": "sysrepair/meta2-scenario-29",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC]: DRb service is not running (service disabled).\nPASS [Regression]: DRb service was disabled (valid remediation). System is operational.\nAll checks passed.\n"
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-30",
+    "tag": "sysrepair/meta2-scenario-30",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-31",
+    "tag": "sysrepair/meta2-scenario-31",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-32",
+    "tag": "sysrepair/meta2-scenario-32",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-33",
+    "tag": "sysrepair/meta2-scenario-33",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-37",
+    "tag": "sysrepair/meta2-scenario-37",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-38",
+    "tag": "sysrepair/meta2-scenario-38",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-34",
+    "tag": "sysrepair/meta2-scenario-34",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-39",
+    "tag": "sysrepair/meta2-scenario-39",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-35",
+    "tag": "sysrepair/meta2-scenario-35",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-40",
+    "tag": "sysrepair/meta2-scenario-40",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-01",
+    "tag": "sysrepair/meta3-ubuntu-scenario-01",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-02",
+    "tag": "sysrepair/meta3-ubuntu-scenario-02",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-03",
+    "tag": "sysrepair/meta3-ubuntu-scenario-03",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-04",
+    "tag": "sysrepair/meta3-ubuntu-scenario-04",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-36",
+    "tag": "sysrepair/meta2-scenario-36",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-05",
+    "tag": "sysrepair/meta3-ubuntu-scenario-05",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-06",
+    "tag": "sysrepair/meta3-ubuntu-scenario-06",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-07",
+    "tag": "sysrepair/meta3-ubuntu-scenario-07",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-08",
+    "tag": "sysrepair/meta3-ubuntu-scenario-08",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC-CVE-2025-10230]: No active 'wins hook' directive found in smb.conf.\nPASS [PoC-CVE-2025-9640]: 'streams_xattr' is not loaded in smb.conf.\nPASS [PoC-Version]: Samba version 4.3.11-Ubuntu meets or exceeds the USN-7826-2 patched baseline.\nPASS [Regression]: smbclient connected to localhost (share list may be empty).\nAll checks passed.\n"
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-09",
+    "tag": "sysrepair/meta3-ubuntu-scenario-09",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-10",
+    "tag": "sysrepair/meta3-ubuntu-scenario-10",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "All checks passed.\nINFO: Account 'leia_organa' not found in payroll DB \u2014 skipping.\nINFO: Account 'han_solo' not found in payroll DB \u2014 skipping.\nINFO: Account 'artoo_detoo' not found in payroll DB \u2014 skipping.\nINFO: Account 'c_three_pio' not found in payroll DB \u2014 skipping.\n"
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-11",
+    "tag": "sysrepair/meta3-ubuntu-scenario-11",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-12",
+    "tag": "sysrepair/meta3-ubuntu-scenario-12",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-14",
+    "tag": "sysrepair/meta3-ubuntu-scenario-14",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-13",
+    "tag": "sysrepair/meta3-ubuntu-scenario-13",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-10",
+    "tag": "sysrepair/meta2-scenario-10",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-16",
+    "tag": "sysrepair/meta3-ubuntu-scenario-16",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-15",
+    "tag": "sysrepair/meta3-ubuntu-scenario-15",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta2",
+    "name": "scenario-11",
+    "tag": "sysrepair/meta2-scenario-11",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-17",
+    "tag": "sysrepair/meta3-ubuntu-scenario-17",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-18",
+    "tag": "sysrepair/meta3-ubuntu-scenario-18",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta3/ubuntu",
+    "name": "scenario-19",
+    "tag": "sysrepair/meta3-ubuntu-scenario-19",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-01",
+    "tag": "sysrepair/meta4-scenario-01",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-02",
+    "tag": "sysrepair/meta4-scenario-02",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-03",
+    "tag": "sysrepair/meta4-scenario-03",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-04",
+    "tag": "sysrepair/meta4-scenario-04",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-06",
+    "tag": "sysrepair/meta4-scenario-06",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-07",
+    "tag": "sysrepair/meta4-scenario-07",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-10",
+    "tag": "sysrepair/meta4-scenario-10",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-12",
+    "tag": "sysrepair/meta4-scenario-12",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-13",
+    "tag": "sysrepair/meta4-scenario-13",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-14",
+    "tag": "sysrepair/meta4-scenario-14",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-15",
+    "tag": "sysrepair/meta4-scenario-15",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-17",
+    "tag": "sysrepair/meta4-scenario-17",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC]: policykit-1 upgraded to 0.105-26ubuntu1.3.\nPASS [PoC]: pkexec runtime permissions are 4755.\nPASS [PoC]: pkexec runtime invocation by victim did not escalate (euid=).\nPASS [Regression]: pkexec binary present.\n"
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-16",
+    "tag": "sysrepair/meta4-scenario-16",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-18",
+    "tag": "sysrepair/meta4-scenario-18",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-20",
+    "tag": "sysrepair/meta4-scenario-20",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-23",
+    "tag": "sysrepair/meta4-scenario-23",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-24",
+    "tag": "sysrepair/meta4-scenario-24",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-11",
+    "tag": "sysrepair/meta4-scenario-11",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-26",
+    "tag": "sysrepair/meta4-scenario-26",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-25",
+    "tag": "sysrepair/meta4-scenario-25",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-27",
+    "tag": "sysrepair/meta4-scenario-27",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-30",
+    "tag": "sysrepair/meta4-scenario-30",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-31",
+    "tag": "sysrepair/meta4-scenario-31",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-32",
+    "tag": "sysrepair/meta4-scenario-32",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-33",
+    "tag": "sysrepair/meta4-scenario-33",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC]: Docker API not exposed on unauthenticated TCP 2375.\nPASS [Regression]: dockerd process is running.\n"
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-08",
+    "tag": "sysrepair/meta4-scenario-08",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-09",
+    "tag": "sysrepair/meta4-scenario-09",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-38",
+    "tag": "sysrepair/meta4-scenario-38",
+    "status": "ERROR",
+    "reason": "inject_failed",
+    "exit_code": null,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-34",
+    "tag": "sysrepair/meta4-scenario-34",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-40",
+    "tag": "sysrepair/meta4-scenario-40",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-28",
+    "tag": "sysrepair/meta4-scenario-28",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-41",
+    "tag": "sysrepair/meta4-scenario-41",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-42",
+    "tag": "sysrepair/meta4-scenario-42",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-43",
+    "tag": "sysrepair/meta4-scenario-43",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-44",
+    "tag": "sysrepair/meta4-scenario-44",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-45",
+    "tag": "sysrepair/meta4-scenario-45",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-39",
+    "tag": "sysrepair/meta4-scenario-39",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-48",
+    "tag": "sysrepair/meta4-scenario-48",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-35",
+    "tag": "sysrepair/meta4-scenario-35",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-50",
+    "tag": "sysrepair/meta4-scenario-50",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-37",
+    "tag": "sysrepair/meta4-scenario-37",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-52",
+    "tag": "sysrepair/meta4-scenario-52",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-29",
+    "tag": "sysrepair/meta4-scenario-29",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-53",
+    "tag": "sysrepair/meta4-scenario-53",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-54",
+    "tag": "sysrepair/meta4-scenario-54",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-55",
+    "tag": "sysrepair/meta4-scenario-55",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-36",
+    "tag": "sysrepair/meta4-scenario-36",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-56",
+    "tag": "sysrepair/meta4-scenario-56",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-57",
+    "tag": "sysrepair/meta4-scenario-57",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-59",
+    "tag": "sysrepair/meta4-scenario-59",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-51",
+    "tag": "sysrepair/meta4-scenario-51",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-60",
+    "tag": "sysrepair/meta4-scenario-60",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-61",
+    "tag": "sysrepair/meta4-scenario-61",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-62",
+    "tag": "sysrepair/meta4-scenario-62",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-63",
+    "tag": "sysrepair/meta4-scenario-63",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-64",
+    "tag": "sysrepair/meta4-scenario-64",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-65",
+    "tag": "sysrepair/meta4-scenario-65",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-66",
+    "tag": "sysrepair/meta4-scenario-66",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-49",
+    "tag": "sysrepair/meta4-scenario-49",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-67",
+    "tag": "sysrepair/meta4-scenario-67",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-68",
+    "tag": "sysrepair/meta4-scenario-68",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-69",
+    "tag": "sysrepair/meta4-scenario-69",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC]: CAP_SYS_PTRACE is NOT set in CapEff (0x00000000a80435fb).\nPASS [PoC-live]: capsh --print confirms cap_sys_ptrace is NOT in the live capability set.\nPASS [PoC-live]: /proc/1/mem read was denied at runtime.\nPASS [Regression]: 'ls /tmp' works normally.\nPASS [Regression]: 'ps aux' works normally.\n/tmp/verify.sh: line 16: python3: command not found\n"
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-70",
+    "tag": "sysrepair/meta4-scenario-70",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC-seccomp]: Seccomp is in FILTER mode (field=2) on PID 1.\nPASS [PoC-apparmor]: AppArmor profile is not 'unconfined' (found: 'docker-default (enforce)').\nPASS [PoC-live]: unshare+cgroup-mount primitive was blocked at runtime.\nPASS [Regression]: 'ls /tmp' works normally.\n"
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-72",
+    "tag": "sysrepair/meta4-scenario-72",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC]: AppArmor profile is NOT 'unconfined' (found: 'docker-default (enforce)').\nPASS [Regression]: Normal file operations work.\nPASS [Regression]: 'ls /tmp' works normally.\n"
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-71",
+    "tag": "sysrepair/meta4-scenario-71",
+    "status": "WARN",
+    "reason": "",
+    "exit_code": 0,
+    "detail": "PASS [PoC]: Seccomp is in FILTER mode (field=2). Default profile is active.\nPASS [Regression]: 'ls /tmp' works normally.\nPASS [Regression]: 'ps aux' works normally.\n"
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-74",
+    "tag": "sysrepair/meta4-scenario-74",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-46",
+    "tag": "sysrepair/meta4-scenario-46",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-47",
+    "tag": "sysrepair/meta4-scenario-47",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-58",
+    "tag": "sysrepair/meta4-scenario-58",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-05",
+    "tag": "sysrepair/meta4-scenario-05",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-73",
+    "tag": "sysrepair/meta4-scenario-73",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-81",
+    "tag": "sysrepair/meta4-scenario-81",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-83",
+    "tag": "sysrepair/meta4-scenario-83",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-80",
+    "tag": "sysrepair/meta4-scenario-80",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-85",
+    "tag": "sysrepair/meta4-scenario-85",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-86",
+    "tag": "sysrepair/meta4-scenario-86",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-82",
+    "tag": "sysrepair/meta4-scenario-82",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-88",
+    "tag": "sysrepair/meta4-scenario-88",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-89",
+    "tag": "sysrepair/meta4-scenario-89",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-90",
+    "tag": "sysrepair/meta4-scenario-90",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-84",
+    "tag": "sysrepair/meta4-scenario-84",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-87",
+    "tag": "sysrepair/meta4-scenario-87",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-92",
+    "tag": "sysrepair/meta4-scenario-92",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-91",
+    "tag": "sysrepair/meta4-scenario-91",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-94",
+    "tag": "sysrepair/meta4-scenario-94",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-93",
+    "tag": "sysrepair/meta4-scenario-93",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-95",
+    "tag": "sysrepair/meta4-scenario-95",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-96",
+    "tag": "sysrepair/meta4-scenario-96",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-97",
+    "tag": "sysrepair/meta4-scenario-97",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-98",
+    "tag": "sysrepair/meta4-scenario-98",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-99",
+    "tag": "sysrepair/meta4-scenario-99",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-100",
+    "tag": "sysrepair/meta4-scenario-100",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-76",
+    "tag": "sysrepair/meta4-scenario-76",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-75",
+    "tag": "sysrepair/meta4-scenario-75",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-77",
+    "tag": "sysrepair/meta4-scenario-77",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-103",
+    "tag": "sysrepair/meta4-scenario-103",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-78",
+    "tag": "sysrepair/meta4-scenario-78",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-79",
+    "tag": "sysrepair/meta4-scenario-79",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-105",
+    "tag": "sysrepair/meta4-scenario-105",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-106",
+    "tag": "sysrepair/meta4-scenario-106",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-110",
+    "tag": "sysrepair/meta4-scenario-110",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-107",
+    "tag": "sysrepair/meta4-scenario-107",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-108",
+    "tag": "sysrepair/meta4-scenario-108",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-109",
+    "tag": "sysrepair/meta4-scenario-109",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-111",
+    "tag": "sysrepair/meta4-scenario-111",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-102",
+    "tag": "sysrepair/meta4-scenario-102",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-01",
+    "tag": "sysrepair/vulnhub-scenario-01",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-02",
+    "tag": "sysrepair/vulnhub-scenario-02",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-03",
+    "tag": "sysrepair/vulnhub-scenario-03",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-04",
+    "tag": "sysrepair/vulnhub-scenario-04",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-05",
+    "tag": "sysrepair/vulnhub-scenario-05",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-112",
+    "tag": "sysrepair/meta4-scenario-112",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-06",
+    "tag": "sysrepair/vulnhub-scenario-06",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-07",
+    "tag": "sysrepair/vulnhub-scenario-07",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-09",
+    "tag": "sysrepair/vulnhub-scenario-09",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-10",
+    "tag": "sysrepair/vulnhub-scenario-10",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-08",
+    "tag": "sysrepair/vulnhub-scenario-08",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-11",
+    "tag": "sysrepair/vulnhub-scenario-11",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-13",
+    "tag": "sysrepair/vulnhub-scenario-13",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-12",
+    "tag": "sysrepair/vulnhub-scenario-12",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-14",
+    "tag": "sysrepair/vulnhub-scenario-14",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-15",
+    "tag": "sysrepair/vulnhub-scenario-15",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-16",
+    "tag": "sysrepair/vulnhub-scenario-16",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-17",
+    "tag": "sysrepair/vulnhub-scenario-17",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-18",
+    "tag": "sysrepair/vulnhub-scenario-18",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-19",
+    "tag": "sysrepair/vulnhub-scenario-19",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-20",
+    "tag": "sysrepair/vulnhub-scenario-20",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-21",
+    "tag": "sysrepair/vulnhub-scenario-21",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-22",
+    "tag": "sysrepair/vulnhub-scenario-22",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-116",
+    "tag": "sysrepair/meta4-scenario-116",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-25",
+    "tag": "sysrepair/vulnhub-scenario-25",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-23",
+    "tag": "sysrepair/vulnhub-scenario-23",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-113",
+    "tag": "sysrepair/meta4-scenario-113",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-26",
+    "tag": "sysrepair/vulnhub-scenario-26",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-27",
+    "tag": "sysrepair/vulnhub-scenario-27",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-28",
+    "tag": "sysrepair/vulnhub-scenario-28",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-29",
+    "tag": "sysrepair/vulnhub-scenario-29",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-30",
+    "tag": "sysrepair/vulnhub-scenario-30",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "vulnhub",
+    "name": "scenario-24",
+    "tag": "sysrepair/vulnhub-scenario-24",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-114",
+    "tag": "sysrepair/meta4-scenario-114",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-101",
+    "tag": "sysrepair/meta4-scenario-101",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-104",
+    "tag": "sysrepair/meta4-scenario-104",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  },
+  {
+    "bench": "meta4",
+    "name": "scenario-115",
+    "tag": "sysrepair/meta4-scenario-115",
+    "status": "PASS",
+    "reason": "",
+    "exit_code": 1,
+    "detail": ""
+  }
+]
