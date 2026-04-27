@@ -86,6 +86,16 @@ def test_discover_nested_benchmark(tmp_path):
     assert results[0]["bench"] == "meta3/ubuntu"
 
 
+def test_discover_sorts_numerically(tmp_path):
+    """scenario-9 must sort before scenario-10, not after (lexicographic trap)."""
+    _make_scenario(tmp_path, "ccdc", "scenario-9")
+    _make_scenario(tmp_path, "ccdc", "scenario-10")
+
+    results = discover_scenarios(root=tmp_path, benchmarks=["ccdc"], exclude=[])
+    names = [r["name"] for r in results]
+    assert names == ["scenario-9", "scenario-10"]
+
+
 # ---------------------------------------------------------------------------
 # needs_privileged
 # ---------------------------------------------------------------------------

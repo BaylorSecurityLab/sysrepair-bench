@@ -67,7 +67,7 @@ def discover_scenarios(
         bench_dir = root / bench
         if not bench_dir.is_dir():
             continue
-        for child in sorted(bench_dir.iterdir()):
+        for child in bench_dir.iterdir():
             if not child.is_dir():
                 continue
             if not _SCENARIO_RE.match(child.name):
@@ -82,6 +82,7 @@ def discover_scenarios(
                 "privileged": needs_privileged(child),
             })
 
+    scenarios.sort(key=lambda s: (s["bench"], int(s["name"].split("-")[1])))
     return scenarios
 
 
