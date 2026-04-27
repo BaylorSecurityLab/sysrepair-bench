@@ -216,6 +216,7 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         return {
             "bench": bench, "name": name, "tag": tag,
             "status": "ERROR", "reason": "build_failed",
+            "exit_code": None,
             "detail": build_out[-500:],
         }
 
@@ -226,6 +227,7 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         return {
             "bench": bench, "name": name, "tag": tag,
             "status": "ERROR", "reason": "run_failed",
+            "exit_code": None,
             "detail": run_err,
         }
 
@@ -247,7 +249,8 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "bench": bench, "name": name, "tag": tag,
-        "status": status, "exit_code": exit_code,
+        "status": status, "reason": "",
+        "exit_code": exit_code,
         "detail": verify_out[-500:] if status != "PASS" else "",
     }
 
@@ -339,7 +342,17 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(validate_scenario, s): s for s in scenarios}
         for future in as_completed(futures):
-            results.append(future.result())
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                s = futures[future]
+                results.append({
+                    "bench": s["bench"], "name": s["name"],
+                    "tag": make_image_tag(s["bench"], s["name"]),
+                    "status": "ERROR", "reason": "worker_exception",
+                    "exit_code": None,
+                    "detail": str(exc),
+                })
 
     elapsed = time.monotonic() - start
     print(f"\n{'='*60}")
