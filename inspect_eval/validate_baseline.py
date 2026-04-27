@@ -126,7 +126,12 @@ def build_image(scenario_path: Path, tag: str) -> tuple[bool, str]:
         )
         output = result.stdout + result.stderr
         return result.returncode == 0, output
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        try:
+            exc.process.kill()
+            exc.process.communicate()
+        except Exception:
+            pass
         return False, f"docker build timed out after {BUILD_TIMEOUT}s"
     except Exception as exc:
         return False, str(exc)
@@ -179,8 +184,11 @@ def exec_verify(container_name: str) -> tuple[int, str]:
 
 def cleanup_container(container_name: str) -> None:
     """Remove a container, ignoring errors."""
-    subprocess.run(
-        ["docker", "rm", "-f", container_name],
-        capture_output=True,
-        timeout=30,
-    )
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:
+        pass
