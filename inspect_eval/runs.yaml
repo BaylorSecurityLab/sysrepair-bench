@@ -13,7 +13,6 @@ defaults:
   retry_on_error: 2
 
 presets:
-
   smoke:
     model: openai/MODEL_NAME
     solver: react
