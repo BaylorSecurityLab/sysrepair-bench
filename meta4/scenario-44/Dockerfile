@@ -11,8 +11,6 @@ USER root
 RUN sed -i 's|mirrorlist=|#mirrorlist=|g; s|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
 RUN yum install -y curl && yum clean all
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 USER elasticsearch
 

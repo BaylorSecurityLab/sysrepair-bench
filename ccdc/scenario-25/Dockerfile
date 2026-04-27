@@ -20,7 +20,5 @@ RUN sed -i '/^requirepass/d' /etc/redis/redis.conf
 RUN printf '#!/bin/bash\nredis-server /etc/redis/redis.conf --daemonize yes\nsleep infinity\n' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["/entrypoint.sh"]

@@ -24,8 +24,6 @@ RUN mkdir -p /opt/app && cd /opt/app && \
     git add config.env && \
     git commit -m "Remove password from config (security fix)"
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 WORKDIR /opt/app
 

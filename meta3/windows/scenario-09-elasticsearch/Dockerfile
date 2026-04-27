@@ -33,7 +33,6 @@ ENV ES_HOME=C:\\elasticsearch-1.6.0
 # — both conditions reproduce the CVE-2015-1427 RCE surface.
 COPY elasticsearch.yml C:/elasticsearch-1.6.0/config/elasticsearch.yml
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 9200 9300 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\elasticsearch-1.6.0\\bin\\elasticsearch.bat"]

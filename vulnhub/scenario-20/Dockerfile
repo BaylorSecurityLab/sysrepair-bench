@@ -5,5 +5,4 @@ RUN a2enmod cgi
 RUN mkdir -p /usr/lib/cgi-bin && echo '#!/bin/bash\necho "Content-type: text/html"\necho ""\necho "CGI Test: $(date)"' > /usr/lib/cgi-bin/test.cgi && chmod 755 /usr/lib/cgi-bin/test.cgi
 # Note: Debian 10 bash is patched, but the CGI setup mirrors the vulnerable config
 EXPOSE 80
-COPY verify.sh /verify.sh
 CMD ["apachectl", "-D", "FOREGROUND"]

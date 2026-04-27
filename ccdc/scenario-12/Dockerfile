@@ -20,8 +20,6 @@ RUN mysqld --initialize-insecure --user=mysql 2>/dev/null; \
     mysql -u root -e "CREATE DATABASE IF NOT EXISTS testdb; CREATE TABLE IF NOT EXISTS testdb.items (id INT PRIMARY KEY, name VARCHAR(100)); INSERT INTO testdb.items VALUES (1, 'test');" 2>/dev/null; \
     mysqladmin -u root shutdown 2>/dev/null || true
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 3306
 CMD ["mysqld", "--user=mysql"]

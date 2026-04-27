@@ -14,6 +14,5 @@ RUN echo "[options]" > /etc/knockd.conf && \
     echo "    command = /sbin/iptables -A INPUT -s %IP% -p tcp --dport 22 -j ACCEPT" >> /etc/knockd.conf && \
     echo "    tcpflags = syn" >> /etc/knockd.conf
 
-COPY verify.sh /verify.sh
 
 CMD ["knockd", "-d"]

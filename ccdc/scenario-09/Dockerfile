@@ -14,8 +14,6 @@ RUN sed -i '/server_tokens/d' /etc/nginx/nginx.conf && \
 # Create a test page
 RUN echo '<html><body><h1>Test Page</h1></body></html>' > /var/www/html/index.html
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

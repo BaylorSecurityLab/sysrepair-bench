@@ -11,8 +11,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY bacnet_server.py /opt/bacnet_server.py
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 47808/udp
 

@@ -28,6 +28,5 @@ RUN cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set site "MetaFTP" /ftpServer
 # Passive port range so the host port-map can work deterministically
 RUN cmd /c 'C:\Windows\System32\inetsrv\appcmd.exe set config /section:system.ftpServer/firewallSupport /lowDataChannelPort:50000 /highDataChannelPort:50050 /commit:apphost'
 
-COPY verify.ps1 C:/verify/verify.ps1
 EXPOSE 21 50000-50050 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service ftpsvc; while ($true) { Start-Sleep 60 }"]

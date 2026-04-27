@@ -63,8 +63,6 @@ EOF
 # Pre-build the app so startup is fast
 RUN npx next build
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 3000
 

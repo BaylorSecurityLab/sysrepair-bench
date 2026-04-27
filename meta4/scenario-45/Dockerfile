@@ -19,8 +19,6 @@ RUN mkdir -p /etc/influxdb && \
     printf '[meta]\n  dir = /var/lib/influxdb/meta\n\n[data]\n  dir = /var/lib/influxdb/data\n  wal-dir = /var/lib/influxdb/wal\n\n[http]\n  enabled = true\n  bind-address = ":8086"\n  auth-enabled = true\n  shared-secret = ""\n' \
     > /etc/influxdb/influxdb.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8086
 

@@ -22,5 +22,4 @@ RUN service mariadb start && \
 
 EXPOSE 80
 
-COPY verify.sh /verify.sh
 CMD service mariadb start && apachectl -D FOREGROUND

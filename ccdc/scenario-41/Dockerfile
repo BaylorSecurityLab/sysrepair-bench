@@ -16,7 +16,5 @@ RUN chmod u+s /usr/bin/python3* /usr/bin/perl
 # Create a non-root test user
 RUN useradd -m -s /bin/bash testuser
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

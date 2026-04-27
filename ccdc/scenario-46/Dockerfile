@@ -20,7 +20,5 @@ RUN sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS\t99999/' /etc/login.defs && \
 RUN useradd -m -s /bin/bash testuser && \
     echo "testuser:TestP@ss123" | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

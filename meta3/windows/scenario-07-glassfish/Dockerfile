@@ -37,7 +37,6 @@ RUN & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin start-domain domain1 ; 
     & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile C:\passfile stop-domain domain1 ; \
     Remove-Item C:\passfile, C:\passfile_new
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 4848 8080 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; $env:Path = 'C:\\Java\\jdk8u402-b06\\bin;' + $env:Path; & C:\\glassfish4\\glassfish\\bin\\asadmin.bat start-domain --verbose domain1"]

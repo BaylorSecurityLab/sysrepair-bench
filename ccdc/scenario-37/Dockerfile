@@ -17,7 +17,5 @@ RUN apt-get update && apt-get install -y \
 # Enable the Avahi daemon
 RUN systemctl enable avahi-daemon 2>/dev/null || true
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

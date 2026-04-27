@@ -31,8 +31,6 @@ RUN echo 'server { listen 80; root /var/www/html; index index.php index.html; lo
 # Create a test PHP file
 RUN echo '<?php echo "PHP is working: " . phpversion(); ?>' > /var/www/html/index.php
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["bash", "-c", "service $(ls /etc/init.d/ | grep php.*fpm | head -1) start && nginx -g 'daemon off;'"]

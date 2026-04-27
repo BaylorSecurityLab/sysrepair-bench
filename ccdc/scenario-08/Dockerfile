@@ -13,8 +13,6 @@ RUN echo 'TraceEnable On' >> /etc/apache2/conf-enabled/security.conf
 # Create a test page
 RUN echo '<html><body><h1>Test Page</h1></body></html>' > /var/www/html/index.html
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["apachectl", "-D", "FOREGROUND"]

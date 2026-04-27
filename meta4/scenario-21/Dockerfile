@@ -19,7 +19,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # carry CAP_SETUID through an overlay copy-up.
 RUN cp /bin/bash /opt/marker-bash
 
-COPY verify.sh /verify.sh
-RUN sed -i 's/\r$//' /verify.sh && chmod +x /verify.sh
 
 CMD ["/bin/bash", "-c", "tail -f /dev/null"]

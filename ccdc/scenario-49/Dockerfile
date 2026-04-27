@@ -20,8 +20,6 @@ RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh && \
 # Create a legitimate user
 RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D"]

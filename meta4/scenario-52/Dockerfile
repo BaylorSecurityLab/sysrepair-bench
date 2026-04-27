@@ -12,8 +12,6 @@ RUN apk add --no-cache bash coreutils netcat-openbsd
 # Copy nats-server binary from the official image
 COPY --from=nats-bin /nats-server /usr/bin/nats-server
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 # Seed a vulnerable config with no authorization block
 RUN mkdir -p /etc/nats && \

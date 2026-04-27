@@ -25,7 +25,5 @@ RUN echo "admin" > /opt/authorized_sudoers
 # Create a regular test user (not in sudo)
 RUN useradd -m -s /bin/bash testuser
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

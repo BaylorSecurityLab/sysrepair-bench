@@ -32,8 +32,6 @@ RUN mkdir -p /var/run/vsftpd/empty
 # Create a legitimate FTP user for functionality testing
 RUN useradd -m -s /bin/bash ftpuser && echo 'ftpuser:ftppass123' | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 21
 CMD ["/usr/sbin/vsftpd", "/etc/vsftpd.conf"]

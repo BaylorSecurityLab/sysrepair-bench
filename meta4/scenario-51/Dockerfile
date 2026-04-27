@@ -10,8 +10,6 @@ USER root
 # eclipse-mosquitto is Alpine-based
 RUN apk add --no-cache mosquitto-clients netcat-openbsd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 # Seed a vulnerable configuration
 RUN echo "listener 1883" > /mosquitto/config/mosquitto.conf && \

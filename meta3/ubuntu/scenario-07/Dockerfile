@@ -26,9 +26,8 @@ RUN chmod 760 /etc/init.d/proftpd && \
 RUN mkdir -p /var/run/proftpd
 
 # ---------- Entrypoint & verify ----------
-COPY scenario-07/verify.sh /verify.sh
 COPY scenario-07/entrypoint.sh /entrypoint.sh
-RUN chmod +x /verify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 21
 CMD ["/entrypoint.sh"]

@@ -31,8 +31,6 @@ RUN service mysql start && \
 RUN echo '# No restrictions -- vulnerable default' > /etc/hosts.allow && \
     echo '# No blanket deny -- vulnerable default' > /etc/hosts.deny
 
-COPY scenario-16/verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 3306
 

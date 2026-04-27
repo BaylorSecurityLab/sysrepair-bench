@@ -18,8 +18,6 @@ RUN mkdir -p /var/www/html/files && \
     echo "config" > /var/www/html/files/database.conf && \
     echo '<html><body><h1>Main Page</h1></body></html>' > /var/www/html/index.html
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

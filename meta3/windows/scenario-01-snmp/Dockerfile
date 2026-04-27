@@ -19,7 +19,6 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\install-python.ps1 ; 
 COPY snmp_agent.py C:/snmp/snmp_agent.py
 COPY snmp_probe.py C:/snmp/snmp_probe.py
 COPY entrypoint.ps1 C:/entrypoint.ps1
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 161/udp 22 5985
 CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\entrypoint.ps1"]

@@ -27,8 +27,6 @@ RUN sed -i 's/^BrowseRemoteProtocols.*/BrowseRemoteProtocols dnssd cups/' \
 RUN sed -i 's/^Listen localhost:631/Port 631/' /etc/cups/cupsd.conf && \
     sed -i 's|<Location />|<Location />\n  Allow all|' /etc/cups/cupsd.conf || true
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 631
 

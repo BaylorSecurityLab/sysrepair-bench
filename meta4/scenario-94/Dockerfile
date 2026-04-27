@@ -14,8 +14,6 @@ RUN apt-get update && \
 # Vulnerable default config — ships with a known SECRET_KEY
 RUN echo "SECRET_KEY = 'CHANGE_ME_TO_A_COMPLEX_RANDOM_SECRET'" >> /app/pythonpath/superset_config.py
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8088
 

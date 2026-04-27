@@ -16,8 +16,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -y \
 RUN mkdir -p /opt
 COPY scenario-12/admin_app.rb /opt/admin_app.rb
 
-COPY scenario-12/verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 3500
 

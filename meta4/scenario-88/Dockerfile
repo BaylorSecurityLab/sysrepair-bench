@@ -15,7 +15,5 @@ RUN mkdir -p /opt/app
 COPY app.sh /opt/app/app.sh
 RUN chmod +x /opt/app/app.sh
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["/opt/app/app.sh"]

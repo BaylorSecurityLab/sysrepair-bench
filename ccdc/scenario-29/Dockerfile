@@ -18,8 +18,6 @@ RUN mkdir -p /run/sshd && \
 # Create a user
 RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 22 80
 CMD service ssh start && nginx -g "daemon off;"

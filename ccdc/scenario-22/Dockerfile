@@ -12,7 +12,5 @@ RUN apt-get update && apt-get install -y \
 # Disable ASLR - makes memory layout predictable for exploits
 RUN echo "kernel.randomize_va_space = 0" >> /etc/sysctl.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

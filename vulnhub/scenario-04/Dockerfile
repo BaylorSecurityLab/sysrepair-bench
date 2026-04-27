@@ -23,5 +23,4 @@ RUN mkdir -p /usr/share/tomcat9-admin/manager/META-INF && \
 
 EXPOSE 8080
 
-COPY verify.sh /verify.sh
 CMD ["catalina.sh", "run"]

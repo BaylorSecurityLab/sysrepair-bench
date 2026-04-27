@@ -52,8 +52,6 @@ RUN ln -sf /etc/nginx/sites-available/metabase \
         /etc/nginx/sites-enabled/metabase && \
     rm -f /etc/nginx/sites-enabled/default
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 3000
 

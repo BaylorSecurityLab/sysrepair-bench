@@ -14,7 +14,6 @@ RUN $pw = ConvertTo-SecureString 'P@ssw0rd!' -AsPlainText -Force ; \
     New-LocalUser -Name 'support$' -Password $pw -FullName 'IT Support' -Description 'Break-glass support account' -PasswordNeverExpires -UserMayNotChangePassword ; \
     Add-LocalGroupMember -Group 'Administrators' -Member 'support$'
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 22 5985 3389
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service TermService; while ($true) { Start-Sleep 60 }"]

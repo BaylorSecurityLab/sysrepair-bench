@@ -15,8 +15,6 @@ RUN echo '<html><body><h1>Production Server</h1></body></html>' > /var/www/html/
 # Create a user
 RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

@@ -49,8 +49,6 @@ ns1 IN  A   10.0.0.1
 app IN  A   10.0.0.2
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 53/tcp 53/udp
 

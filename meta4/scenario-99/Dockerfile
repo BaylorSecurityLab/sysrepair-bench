@@ -41,8 +41,6 @@ RUN cat > ${HADOOP_HOME}/etc/hadoop/yarn-site.xml <<'EOF'
 </configuration>
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8088
 

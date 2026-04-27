@@ -34,8 +34,6 @@ RUN useradd -m -s /bin/bash elastic && \
 RUN echo 'server.host: "0.0.0.0"' >> /opt/kibana/config/kibana.yml && \
     echo 'elasticsearch.url: "http://localhost:9200"' >> /opt/kibana/config/kibana.yml
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 5601
 

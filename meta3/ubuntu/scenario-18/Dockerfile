@@ -85,9 +85,8 @@ RUN printf '<?xml version="1.0"?><configuration><system.webServer><rewrite><rule
     > /var/www/html/drupal/web.config
 
 # ---------- Entrypoint & verify ----------
-COPY scenario-18/verify.sh /verify.sh
 COPY scenario-18/entrypoint.sh /entrypoint.sh
-RUN chmod +x /verify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 80
 CMD ["/entrypoint.sh"]

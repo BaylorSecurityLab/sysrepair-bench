@@ -37,8 +37,6 @@ PYEOF
 
 RUN chown -R appuser:appuser /app
 
-COPY verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 8080
 USER appuser

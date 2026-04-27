@@ -8,8 +8,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends postfix curl netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 25
 

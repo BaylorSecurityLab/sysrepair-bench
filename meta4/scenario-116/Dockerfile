@@ -29,8 +29,6 @@ EOF
 RUN mkdir -p /srv/data && \
     echo "rsync test data" > /srv/data/testfile.txt
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 873
 

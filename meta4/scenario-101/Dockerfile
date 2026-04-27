@@ -48,8 +48,6 @@ EOF
 RUN ln -sf /etc/nginx/sites-available/nacos /etc/nginx/sites-enabled/nacos && \
     rm -f /etc/nginx/sites-enabled/default
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8080 8848
 

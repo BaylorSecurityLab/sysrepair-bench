@@ -16,8 +16,6 @@ RUN useradd -m -s /bin/bash webadmin && echo 'webadmin:webpass456' | chpasswd
 
 RUN mkdir -p /run/sshd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D"]

@@ -26,7 +26,5 @@ RUN if [ -d /etc/apparmor.d ]; then \
 RUN echo "apparmor_disabled=true" > /etc/apparmor/apparmor_status.conf 2>/dev/null || \
     mkdir -p /etc/apparmor && echo "apparmor_disabled=true" > /etc/apparmor/apparmor_status.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

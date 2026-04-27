@@ -38,8 +38,6 @@ RUN mkdir -p /srv/samba/public && chmod 0777 /srv/samba/public && \
 RUN useradd -M -s /usr/sbin/nologin smbguest 2>/dev/null || true && \
     (echo "smbguest" | smbpasswd -a -s smbguest 2>/dev/null || true)
 
-COPY scenario-08/verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 445
 

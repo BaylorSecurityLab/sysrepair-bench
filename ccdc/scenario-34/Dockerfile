@@ -16,7 +16,5 @@ RUN apt-get purge -y unattended-upgrades 2>/dev/null || true
 RUN rm -f /etc/apt/apt.conf.d/20auto-upgrades
 RUN rm -f /etc/apt/apt.conf.d/50unattended-upgrades
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

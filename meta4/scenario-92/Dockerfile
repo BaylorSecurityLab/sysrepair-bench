@@ -15,8 +15,6 @@ COPY --from=prom-bin /etc/prometheus/ /etc/prometheus/
 COPY --from=prom-bin /usr/share/prometheus/ /usr/share/prometheus/
 RUN mkdir -p /prometheus
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 9090
 

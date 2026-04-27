@@ -62,8 +62,6 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7001)
 PYEOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 7001
 

@@ -12,8 +12,6 @@ RUN mkdir -p /vault/data /vault/config && chmod 755 /vault/data
 
 COPY vault.hcl /vault/config/vault.hcl
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8200
 

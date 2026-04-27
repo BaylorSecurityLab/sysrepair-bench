@@ -134,9 +134,8 @@ RUN service mysql start && \
     service mysql stop
 
 # ---------- Entrypoint & verify ----------
-COPY scenario-10/verify.sh /verify.sh
 COPY scenario-10/entrypoint.sh /entrypoint.sh
-RUN chmod +x /verify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 80
 CMD ["/entrypoint.sh"]

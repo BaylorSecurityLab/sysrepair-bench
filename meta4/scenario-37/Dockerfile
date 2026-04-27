@@ -28,8 +28,6 @@ wait $REDIS_PID
 BASH
 RUN chmod +x /start.sh
 
-COPY verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 6379
 CMD ["/start.sh"]

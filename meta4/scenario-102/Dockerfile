@@ -57,8 +57,6 @@ RUN ln -sf /etc/nginx/sites-available/zabbix-protected \
 # Create htpasswd for the API proxy (non-default credentials)
 RUN htpasswd -bc /etc/nginx/.htpasswd-zabbix zabbixapi 'S3cur3ProxyP@ss!'
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8080
 

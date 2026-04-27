@@ -5,8 +5,7 @@ FROM --platform=linux/amd64 rancher/k3s:v1.27.1-k3s1
 # in the etcd datastore and can be read by any party with etcd access.
 
 COPY start.sh /opt/start.sh
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/start.sh /opt/verify.sh
+RUN chmod +x /opt/start.sh
 
 EXPOSE 6443
 

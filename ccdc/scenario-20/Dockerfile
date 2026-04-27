@@ -40,8 +40,6 @@ WPEOF
 
 RUN chown -R www-data:www-data /var/www/html && chmod 644 /var/www/html/wp-config.php
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["apachectl", "-D", "FOREGROUND"]

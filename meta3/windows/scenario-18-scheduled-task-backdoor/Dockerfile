@@ -14,7 +14,6 @@ RUN icacls C:\Users\Public\Updater /grant 'BUILTIN\Users:(OI)(CI)M' /T
 
 # Task Scheduler service runs at container runtime but not at build time.
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; schtasks.exe /Create /TN '\\Microsoft\\Windows\\UpdateOrchestrator\\Windows Update Assistant' /TR 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\\Users\\Public\\Updater\\updater.ps1' /SC HOURLY /RU SYSTEM /RL HIGHEST /F; while ($true) { Start-Sleep 60 }"]

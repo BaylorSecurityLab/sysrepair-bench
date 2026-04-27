@@ -58,9 +58,8 @@ RUN mkdir -p /etc/stunnel /var/run/stunnel4 && \
     chmod 600 /etc/stunnel/stunnel.pem
 
 # ---------- Entrypoint & verify ----------
-COPY scenario-15/verify.sh /verify.sh
 COPY scenario-15/entrypoint.sh /entrypoint.sh
-RUN chmod +x /verify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Expose stunnel TLS port (post-remediation) and raw IRC (pre-remediation)
 EXPOSE 6667 6697

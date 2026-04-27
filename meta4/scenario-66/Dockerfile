@@ -13,8 +13,6 @@ RUN apt-get update && \
 
 COPY ipmi_server.py /opt/ipmi_server.py
 COPY ipmi.conf /etc/ipmi.conf
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 623/udp
 

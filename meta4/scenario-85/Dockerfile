@@ -8,8 +8,6 @@ USER root
 
 RUN apk add --no-cache bash procps curl coreutils
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8200
 

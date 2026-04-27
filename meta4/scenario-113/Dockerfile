@@ -28,8 +28,6 @@ COPY app.py /opt/confluence/app.py
 COPY start.sh /opt/start.sh
 RUN chmod +x /opt/start.sh
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80 8090
 

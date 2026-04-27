@@ -75,8 +75,6 @@ exec python3 /app/server.py
 BASH
 RUN chmod +x /app/start.sh
 
-COPY verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 5000
 CMD ["/app/start.sh"]

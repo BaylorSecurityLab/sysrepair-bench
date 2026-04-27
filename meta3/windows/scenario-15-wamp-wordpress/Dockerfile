@@ -54,7 +54,6 @@ RUN New-Item -ItemType Directory -Path 'C:\wamp\www' -Force | Out-Null ; \
 COPY wp-config.php C:/wamp/www/wordpress/wp-config.php
 COPY init-wordpress.sql C:/init-wordpress.sql
 COPY install-wordpress.php C:/install-wordpress.php
-COPY verify.ps1 C:/verify/verify.ps1
 
 # Bootstrap: start MariaDB, seed the WordPress DB + grants, then run WordPress's
 # own installer to populate the full schema with admin:admin (weak creds are

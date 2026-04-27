@@ -81,9 +81,8 @@ RUN cd /tmp && \
     cp /tmp/pma_config.inc.php /var/www/html/phpmyadmin/config.inc.php
 
 # ---------- Entrypoint & verify ----------
-COPY scenario-06/verify.sh /verify.sh
 COPY scenario-06/entrypoint.sh /entrypoint.sh
-RUN chmod +x /verify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 80
 CMD ["/entrypoint.sh"]

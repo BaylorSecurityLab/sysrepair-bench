@@ -18,8 +18,6 @@ RUN apk add --no-cache curl apache2-utils bash
 RUN mkdir -p /auth && \
     htpasswd -Bbn admin password > /auth/htpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 5000
 

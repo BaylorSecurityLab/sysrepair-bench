@@ -18,7 +18,5 @@ RUN echo "root:root123" | chpasswd && \
 RUN useradd -m -s /bin/bash testuser && \
     echo "testuser:testpass" | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

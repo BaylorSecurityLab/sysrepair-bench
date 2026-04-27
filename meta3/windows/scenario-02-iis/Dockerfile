@@ -28,6 +28,5 @@ RUN New-Item -ItemType Directory -Path 'C:\inetpub\wwwroot\reports' -Force | Out
     Set-Content -Path 'C:\inetpub\wwwroot\reports\q1.txt' -Value 'Q1 financials (placeholder)' ; \
     Set-Content -Path 'C:\inetpub\wwwroot\reports\q2.txt' -Value 'Q2 financials (placeholder)'
 
-COPY verify.ps1 C:/verify/verify.ps1
 EXPOSE 80 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service W3SVC; while ($true) { Start-Sleep 60 }"]

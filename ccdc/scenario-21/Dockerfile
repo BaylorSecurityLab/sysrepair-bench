@@ -16,7 +16,5 @@ RUN echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf && \
     echo "net.ipv4.conf.all.send_redirects = 1" >> /etc/sysctl.conf && \
     echo "net.ipv4.conf.default.send_redirects = 1" >> /etc/sysctl.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

@@ -16,7 +16,5 @@ RUN chmod 777 /tmp
 RUN useradd -m -s /bin/bash alice && \
     useradd -m -s /bin/bash bob
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

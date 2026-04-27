@@ -13,8 +13,6 @@ RUN apt-get update && \
 RUN mkdir -p /etc/rabbitmq && \
     printf 'loopback_users.guest = false\n' > /etc/rabbitmq/rabbitmq.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 5672 15672
 

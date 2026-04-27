@@ -14,7 +14,5 @@ RUN apt-get update && apt-get install -y \
 # Ensure auditd is not installed (default state - no audit framework)
 # No audit rules, no logging of security-relevant events
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

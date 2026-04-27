@@ -26,8 +26,6 @@ RUN wget -q "https://archive.apache.org/dist/druid/${DRUID_VERSION}/apache-druid
 # Vulnerable default: JavaScript enabled
 RUN echo "druid.javascript.enabled=true" >> ${DRUID_HOME}/conf/druid/single-server/nano-quickstart/coordinator-overlord/runtime.properties
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8081
 

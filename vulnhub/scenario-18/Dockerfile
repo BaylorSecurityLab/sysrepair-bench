@@ -13,7 +13,6 @@ RUN mkdir -p /var/www/html/wp-admin /var/www/html/wp-content/uploads && \
     echo "dictionary" > /var/www/html/fsocity.dic && \
     chmod -R 777 /var/www/html
 
-COPY verify.sh /verify.sh
 
 EXPOSE 80
 

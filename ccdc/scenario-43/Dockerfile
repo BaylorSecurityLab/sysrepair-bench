@@ -16,7 +16,5 @@ RUN useradd -o -u 0 -g 0 -M -d /root -s /bin/bash backdoor && \
 # Create a normal test user
 RUN useradd -m -s /bin/bash testuser
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

@@ -9,8 +9,6 @@ USER root
 # grafana:8.3.0 is Alpine-based
 RUN apk add --no-cache curl nginx coreutils
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 3000
 

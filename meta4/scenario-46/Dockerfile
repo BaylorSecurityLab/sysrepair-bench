@@ -15,8 +15,6 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y --no-install-recommends curl netcat-openbsd iptables && \
     rm -rf /var/lib/apt/lists/*
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 ENV NEO4J_dbms_shell_enabled=true
 ENV NEO4J_dbms_shell_host=0.0.0.0

@@ -15,7 +15,6 @@ RUN New-Item -Path 'HKLM:\Software\Policies\Microsoft\Windows NT\DNSClient' -For
         Set-ItemProperty -Path $_.PSPath -Name NetbiosOptions -Value 1 -Type DWord \
     }
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; while ($true) { Start-Sleep 60 }"]

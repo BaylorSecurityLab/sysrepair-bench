@@ -49,8 +49,6 @@ RUN mkdir -p /root/.ssh && \
      openssl genrsa -out ssh_host_rsa_key 2048 2>/dev/null && \
      chmod 600 ssh_host_rsa_key)
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 2222
 

@@ -20,8 +20,6 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update && \
 ENV COUCHDB_USER=""
 ENV COUCHDB_PASSWORD=""
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 5984
 

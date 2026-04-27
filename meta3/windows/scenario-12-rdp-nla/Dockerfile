@@ -11,7 +11,6 @@ RUN Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Serv
 # Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY rdp_nla_probe.ps1 C:/verify/rdp_nla_probe.ps1
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 3389 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service TermService; while ($true) { Start-Sleep 60 }"]

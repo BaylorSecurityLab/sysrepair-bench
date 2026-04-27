@@ -33,8 +33,6 @@ RUN mkdir -p /opt/rocketmq/conf && \
     printf 'brokerClusterName=DefaultCluster\nbrokerName=broker-a\nbrokerId=0\nautoCreateTopicEnable=true\naclEnable=false\n' \
     > /opt/rocketmq/conf/broker.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 9876 10911
 

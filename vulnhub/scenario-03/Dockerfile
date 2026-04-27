@@ -18,5 +18,4 @@ RUN service mariadb start && \
 
 EXPOSE 3306
 
-COPY verify.sh /verify.sh
 CMD ["mysqld_safe"]

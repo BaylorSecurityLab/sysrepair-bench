@@ -64,8 +64,6 @@ RUN echo "Listen 8080" > /etc/apache2/ports.conf && \
 COPY start.sh /opt/start.sh
 RUN chmod +x /opt/start.sh
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80 8080
 

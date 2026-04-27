@@ -24,7 +24,5 @@ RUN apt-mark hold openssl libssl3t64 2>/dev/null || apt-mark hold openssl libssl
 RUN openssl version > /opt/.openssl_vulnerable_version
 RUN echo "VULNERABLE_OPENSSL=true" > /opt/.openssl_status
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

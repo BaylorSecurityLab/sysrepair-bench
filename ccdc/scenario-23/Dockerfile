@@ -16,7 +16,5 @@ RUN echo "net.ipv4.tcp_syncookies = 0" >> /etc/sysctl.conf && \
     echo "net.ipv4.conf.all.accept_source_route = 1" >> /etc/sysctl.conf && \
     echo "net.ipv4.conf.default.accept_source_route = 1" >> /etc/sysctl.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

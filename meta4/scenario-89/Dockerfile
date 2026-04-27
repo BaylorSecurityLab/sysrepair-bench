@@ -14,7 +14,5 @@ RUN apt-get update && \
 RUN mkdir -p /etc/app && \
     echo "token=${SECRET_TOKEN}" > /etc/app/config.ini
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["bash", "-c", "echo 'App config:'; cat /etc/app/config.ini; exec sleep infinity"]

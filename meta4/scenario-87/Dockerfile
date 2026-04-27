@@ -12,8 +12,6 @@ RUN mkdir -p /consul/config /consul/data
 
 COPY consul.hcl /consul/config/consul.hcl
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8500 8600
 

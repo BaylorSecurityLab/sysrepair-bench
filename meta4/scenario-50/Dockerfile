@@ -10,8 +10,6 @@ USER root
 # apache/kafka is Alpine-based
 RUN apk add --no-cache netcat-openbsd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 9092
 

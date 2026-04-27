@@ -17,7 +17,6 @@ RUN New-Item -ItemType Directory -Path 'C:\Program Files\Meta Vuln\bin' -Force |
     icacls 'C:\Program Files\Meta Vuln' /grant 'BUILTIN\Users:(OI)(CI)M' /T ; \
     New-Service -Name 'MetaVulnSvc' -DisplayName 'Meta Vuln Service' -BinaryPathName 'C:\Program Files\Meta Vuln\bin\vulnsvc.exe --run' -StartupType Manual
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; while ($true) { Start-Sleep 60 }"]

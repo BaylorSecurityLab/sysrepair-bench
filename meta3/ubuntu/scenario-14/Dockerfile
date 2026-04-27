@@ -39,9 +39,8 @@ RUN if [ -f /opt/proftpd/etc/proftpd.conf ]; then \
     fi
 
 # ---------- Entrypoint & verify ----------
-COPY scenario-14/verify.sh /verify.sh
 COPY scenario-14/entrypoint.sh /entrypoint.sh
-RUN chmod +x /verify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 21
 CMD ["/entrypoint.sh"]

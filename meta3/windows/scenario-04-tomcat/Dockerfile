@@ -33,6 +33,5 @@ COPY tomcat-users.xml C:/tomcat/conf/tomcat-users.xml
 RUN $ctx = 'C:\tomcat\webapps\manager\META-INF\context.xml' ; \
     (Get-Content $ctx) -replace '<Valve className="org.apache.catalina.valves.RemoteAddrValve".*?/>', '' | Set-Content $ctx
 
-COPY verify.ps1 C:/verify/verify.ps1
 EXPOSE 8080 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\tomcat\\bin\\catalina.bat run"]

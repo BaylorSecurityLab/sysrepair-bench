@@ -41,8 +41,6 @@ wait $MINIO_PID
 BASH
 RUN chmod +x /opt/start.sh
 
-COPY verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 9000 9001
 ENTRYPOINT ["/opt/start.sh"]

@@ -29,7 +29,5 @@ RUN sed -i 's/^# minlen.*/minlen = 1/' /etc/security/pwquality.conf && \
 RUN useradd -m -s /bin/bash testuser && \
     echo "testuser:TestP@ss123" | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

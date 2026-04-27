@@ -21,8 +21,6 @@ RUN sed -i \
         /etc/cassandra/cassandra.yaml || \
     echo 'enable_user_defined_functions: true' >> /etc/cassandra/cassandra.yaml
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 9042
 

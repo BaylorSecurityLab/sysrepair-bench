@@ -17,7 +17,5 @@ RUN apt-get update && \
 # all coders are permitted (same effect as a fully permissive policy).
 RUN rm -f /etc/ImageMagick-6/policy.xml
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["bash"]

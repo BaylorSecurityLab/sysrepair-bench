@@ -10,7 +10,5 @@ USER root
 COPY init-iam-policy-rollback.sh /etc/localstack/init/ready.d/init.sh
 RUN chmod +x /etc/localstack/init/ready.d/init.sh
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 4566

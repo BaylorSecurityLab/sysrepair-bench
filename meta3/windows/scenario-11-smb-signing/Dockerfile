@@ -11,7 +11,6 @@ RUN Set-SmbServerConfiguration -RequireSecuritySignature $false -EnableSecurityS
 # Firewall is disabled in the base image; no explicit allow rule required.
 
 COPY smb_signing_probe.ps1 C:/verify/smb_signing_probe.ps1
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 445 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service LanmanServer; while ($true) { Start-Sleep 60 }"]

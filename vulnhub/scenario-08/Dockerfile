@@ -8,5 +8,4 @@ RUN service mariadb start && \
     mysql -e "INSERT INTO wordpress.wp_users VALUES (2, 'editor', '\$P\$BVXxf.YpxRwQY6miGkfRdkjox3v3N7/', 'editor@local.host');" && \
     service mariadb stop
 EXPOSE 80
-COPY verify.sh /verify.sh
 CMD service mariadb start && apachectl -D FOREGROUND

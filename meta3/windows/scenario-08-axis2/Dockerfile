@@ -29,7 +29,6 @@ RUN Invoke-WebRequest -Uri $env:AXIS2_URL -OutFile 'C:\axis2.zip' ; \
     Copy-Item 'C:\axis2\axis2.war' 'C:\tomcat\webapps\axis2.war' ; \
     Remove-Item -Recurse -Force 'C:\axis2','C:\axis2.zip'
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 8080 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\tomcat\\bin\\catalina.bat run"]

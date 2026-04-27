@@ -26,7 +26,5 @@ RUN echo "/srv/nfs *(rw,sync,no_root_squash,no_subtree_check)" > /etc/exports
 # Enable the NFS server
 RUN systemctl enable nfs-kernel-server 2>/dev/null || true
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

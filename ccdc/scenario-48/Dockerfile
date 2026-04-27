@@ -23,7 +23,5 @@ RUN echo '0 2 * * * root /usr/bin/apt-get update -q' >> /etc/crontab
 # Create a test user
 RUN useradd -m -s /bin/bash testuser
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

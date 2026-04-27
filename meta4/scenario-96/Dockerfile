@@ -15,8 +15,6 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y --allow-unauthenticated --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 USER airflow
 

@@ -14,8 +14,6 @@ RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir pyModbusTCP
 
 COPY modbus_server.py /opt/modbus_server.py
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 502
 

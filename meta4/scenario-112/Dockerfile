@@ -47,8 +47,6 @@ ScriptAlias /cgi-bin/ /usr/local/apache2/cgi-bin/
 </Directory>
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 

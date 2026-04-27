@@ -38,7 +38,6 @@ RUN net user vagrant vagrant /add ; \
     net localgroup Administrators vagrant /add
 # Firewall is disabled in the base image; no explicit allow rule required.
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; while ($true) { Start-Sleep 60 }"]

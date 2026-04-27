@@ -48,8 +48,6 @@ EOF
 RUN echo '+ +' > /root/.rhosts && chmod 644 /root/.rhosts
 RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 513 514
 CMD ["xinetd", "-dontfork"]

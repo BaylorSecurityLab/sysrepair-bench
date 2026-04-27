@@ -30,8 +30,6 @@ RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-19.
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y docker-engine 2>/dev/null || true )
 
-COPY scenario-11/verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 # No network service; container stays up with a sleep loop for exec-based testing
 CMD ["bash", "-c", "while true; do sleep 60; done"]

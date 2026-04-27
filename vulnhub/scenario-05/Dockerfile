@@ -22,5 +22,4 @@ RUN printf '%s\n' \
 
 # Metasploitable 2 has Samba configured with wide links = yes
 
-COPY verify.sh /verify.sh
 CMD ["/bin/services.sh"]

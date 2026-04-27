@@ -7,5 +7,4 @@ RUN echo "bob ALL=(root) NOPASSWD: /usr/bin/awk" >> /etc/sudoers && \
     echo "bob ALL=(root) NOPASSWD: /bin/tar" >> /etc/sudoers && \
     echo "bob ALL=(root) NOPASSWD: /usr/bin/nmap" >> /etc/sudoers && \
     echo "bob ALL=(root) NOPASSWD: /usr/bin/find" >> /etc/sudoers
-COPY verify.sh /verify.sh
 CMD ["/bin/bash"]

@@ -51,8 +51,6 @@ app IN  A   10.0.0.2
 db  IN  A   10.0.0.3
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 53/tcp 53/udp
 

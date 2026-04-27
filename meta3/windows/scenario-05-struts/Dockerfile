@@ -32,7 +32,6 @@ RUN Invoke-WebRequest -Uri $env:STRUTS_URL -OutFile 'C:\struts.zip' ; \
     Copy-Item \"C:\\struts-apps\\struts-$env:STRUTS_VERSION\\apps\\struts2-rest-showcase.war\" 'C:\tomcat\webapps\struts2-rest-showcase.war' ; \
     Remove-Item -Recurse -Force 'C:\struts-apps','C:\struts.zip'
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 8080 22 5985
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\tomcat\\bin\\catalina.bat run"]

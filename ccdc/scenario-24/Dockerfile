@@ -17,7 +17,5 @@ RUN echo "net.ipv4.conf.all.accept_redirects = 1" >> /etc/sysctl.conf && \
     echo "net.ipv4.conf.all.log_martians = 0" >> /etc/sysctl.conf && \
     echo "net.ipv4.conf.default.log_martians = 0" >> /etc/sysctl.conf
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

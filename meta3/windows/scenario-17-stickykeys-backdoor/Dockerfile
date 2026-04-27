@@ -16,7 +16,6 @@ RUN New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image Fil
     New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\utilman.exe' -Force | Out-Null ; \
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\utilman.exe' -Name 'Debugger' -Value 'C:\Windows\System32\cmd.exe'
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 22 5985 3389
 CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; Start-Service TermService; while ($true) { Start-Sleep 60 }"]

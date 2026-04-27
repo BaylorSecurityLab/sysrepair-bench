@@ -43,8 +43,6 @@ RUN useradd -m -s /bin/bash smbuser && \
     echo 'smbuser:smbpass123' | chpasswd && \
     (echo 'smbpass123'; echo 'smbpass123') | smbpasswd -a smbuser 2>/dev/null
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 139 445
 CMD ["smbd", "--foreground", "--no-process-group"]

@@ -112,8 +112,6 @@ webserver-allow-from=0.0.0.0/0,::/0
 loglevel=4
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 53/tcp 53/udp 8081/tcp
 

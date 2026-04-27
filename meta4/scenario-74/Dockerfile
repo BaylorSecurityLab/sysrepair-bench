@@ -23,8 +23,6 @@ RUN apt-get update && \
 # Application entry point reads config from /run/secrets/config if present,
 # otherwise falls back to environment variables (the vulnerable path).
 RUN mkdir -p /app
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 # Simple application script that uses mounted config when available
 RUN cat > /app/start.sh << 'APPEOF'

@@ -28,8 +28,6 @@ ret_port: 4506
 # No publisher_acl configured — any caller can invoke ClearFuncs
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 4505 4506
 

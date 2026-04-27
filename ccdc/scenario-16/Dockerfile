@@ -27,8 +27,6 @@ EOF
 # Create FTP user
 RUN useradd -m -s /bin/bash ftpuser && echo 'ftpuser:ftppass123' | chpasswd
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 21
 CMD ["/usr/sbin/vsftpd", "/etc/vsftpd.conf"]

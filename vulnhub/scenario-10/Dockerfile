@@ -4,5 +4,4 @@ RUN apt-get update && apt-get install -y exim4-daemon-light && apt-get clean && 
 # Set SUID bit (VULNERABLE)
 RUN chmod u+s /usr/sbin/exim4
 EXPOSE 25
-COPY verify.sh /verify.sh
 CMD ["/usr/sbin/exim4", "-bd", "-q30m"]

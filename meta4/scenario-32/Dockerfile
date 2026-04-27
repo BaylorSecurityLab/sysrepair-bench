@@ -17,8 +17,6 @@ Ciphers chacha20-poly1305@openssh.com,aes128-cbc,aes256-cbc,aes128-ctr,aes256-ct
 MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512\n\
 PermitRootLogin yes\n' >> /etc/ssh/sshd_config
 
-COPY verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D"]

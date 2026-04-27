@@ -19,6 +19,5 @@ RUN mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld && \
 
 EXPOSE 3306
 
-COPY verify.sh /verify.sh
 
 CMD mysqld

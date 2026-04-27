@@ -17,8 +17,6 @@ ENV DOCKER_TLS_CERTDIR=""
 
 RUN apk add --no-cache bash
 
-COPY verify.sh /verify.sh
-RUN chmod +x /verify.sh
 
 EXPOSE 2375 2376
 ENTRYPOINT ["dockerd-entrypoint.sh"]

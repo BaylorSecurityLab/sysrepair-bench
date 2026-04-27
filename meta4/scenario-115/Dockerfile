@@ -18,8 +18,6 @@ RUN apt-get update && \
 COPY create-core.sh /docker-entrypoint-initdb.d/create-core.sh
 RUN chmod +x /docker-entrypoint-initdb.d/create-core.sh
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 8983
 

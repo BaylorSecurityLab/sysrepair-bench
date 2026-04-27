@@ -44,8 +44,6 @@ internal IN A   10.0.0.50
 secret  IN  A   10.0.0.100
 EOF
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 53/tcp 53/udp
 CMD ["named", "-g", "-u", "bind"]

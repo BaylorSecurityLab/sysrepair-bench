@@ -17,8 +17,6 @@ RUN apt-get update && \
 RUN grep -q 'monster' /opt/couchdb/etc/vm.args || \
     sed -i 's/^-setcookie .*/\-setcookie monster/' /opt/couchdb/etc/vm.args
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 5984 4369
 

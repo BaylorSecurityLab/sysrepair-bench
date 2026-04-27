@@ -23,8 +23,6 @@ RUN pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') start 2>/dev/null; 
     pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') stop 2>/dev/null || true
 USER root
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 5432
 CMD ["su", "-c", "pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') start --foreground", "postgres"]

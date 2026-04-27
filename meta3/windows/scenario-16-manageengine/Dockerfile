@@ -80,7 +80,6 @@ RUN Stop-Service 'DesktopCentralServer' -ErrorAction SilentlyContinue ; \
 COPY dc-run.bat C:/dc-run.bat
 COPY dc-stdin.txt C:/dc-stdin.txt
 
-COPY verify.ps1 C:/verify/verify.ps1
 
 EXPOSE 8020 8040 8383 22 5985
 # Start sshd + WinRM + the two real DC services (Apache reverse-proxy and

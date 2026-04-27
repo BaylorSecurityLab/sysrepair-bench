@@ -12,7 +12,5 @@ RUN apt-get update && \
         libcap2-bin && \
     rm -rf /var/lib/apt/lists/*
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["/bin/bash", "-c", "sleep infinity"]

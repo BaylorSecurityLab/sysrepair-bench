@@ -16,7 +16,5 @@ RUN apt-get update && apt-get install -y \
 RUN systemctl enable cups 2>/dev/null || true
 RUN systemctl enable cups-browsed 2>/dev/null || true
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 CMD ["sleep", "infinity"]

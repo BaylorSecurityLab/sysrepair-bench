@@ -6,5 +6,4 @@ RUN mkdir -p /var/www/html/core/lib/Drupal
 RUN printf '<?php\nnamespace Drupal;\nclass Drupal {\n  const VERSION = '"'"'8.5.0'"'"';\n}\n?>' > /var/www/html/core/lib/Drupal.php
 RUN printf '8.5.0' > /var/www/html/core/VERSION.txt
 EXPOSE 80
-COPY verify.sh /verify.sh
 CMD service mariadb start && apachectl -D FOREGROUND

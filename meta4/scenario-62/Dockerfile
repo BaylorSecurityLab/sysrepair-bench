@@ -14,8 +14,6 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update && \
         iptables iproute2 curl netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 143 993
 

@@ -14,8 +14,6 @@ RUN echo '<html><body><h1>Company Website</h1><p>Welcome to our site.</p></body>
 # Make web document root world-writable (vulnerable)
 RUN chmod -R 777 /var/www/html
 
-COPY verify.sh /opt/verify.sh
-RUN chmod +x /opt/verify.sh
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
