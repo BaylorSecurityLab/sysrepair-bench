@@ -30,10 +30,11 @@ RUN Invoke-WebRequest -Uri 'https://windows.php.net/downloads/releases/archives/
     Copy-Item 'C:\php\php.ini-production' 'C:\php\php.ini' -Force ; \
     (Get-Content 'C:\php\php.ini') -replace ';extension=mysqli','extension=mysqli' -replace ';extension=mbstring','extension=mbstring' | Set-Content 'C:\php\php.ini'
 
-# MariaDB 10.1.21 (zip distribution — no installer needed)
-RUN Invoke-WebRequest -Uri 'https://archive.mariadb.org/mariadb-10.1.21/winx64-packages/mariadb-10.1.21-winx64.zip' -OutFile 'C:\mariadb.zip' -UseBasicParsing ; \
+# MariaDB 10.1.48 (zip distribution — no installer needed; archive.mariadb.org
+# serves corrupt/incomplete zips for 10.1.21, use legacy-downloads instead)
+RUN Invoke-WebRequest -Uri 'https://legacy-downloads.mariadb.com/MariaDB/mariadb-10.1.48/winx64-packages/mariadb-10.1.48-winx64.zip' -OutFile 'C:\mariadb.zip' -UseBasicParsing ; \
     Expand-Archive 'C:\mariadb.zip' -DestinationPath 'C:\' -Force ; \
-    Rename-Item 'C:\mariadb-10.1.21-winx64' 'C:\mariadb' ; \
+    Rename-Item 'C:\mariadb-10.1.48-winx64' 'C:\mariadb' ; \
     Remove-Item 'C:\mariadb.zip' ; \
     & 'C:\mariadb\bin\mysql_install_db.exe' --datadir='C:\mariadb\data' --service='mariadb' ; \
     Set-Content 'C:\mariadb\data\my.ini' "[mysqld]`r`ndatadir=C:/mariadb/data`r`nbind-address=0.0.0.0`r`n`r`n[client]`r`nplugin-dir=C:/mariadb/lib/plugin`r`n"
