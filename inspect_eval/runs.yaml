@@ -39,9 +39,9 @@ presets:
 
   # Windows containers across all benches except hivestorm.
   windows_all:
-    model: openai/MODEL_NAME
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    modes: ["zero_day"]
+    model: openai/qwen3.5-9b
+    solvers: ["react"]
+    modes: ["day1", "zero_day"]
     benchmarks: ["meta3/windows"]
     message_limit: 0
     token_limit: 0

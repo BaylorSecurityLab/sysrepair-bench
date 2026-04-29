@@ -23,35 +23,60 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Shared base images that child scenario Dockerfiles reference by tag. If a run
 # touches any meta2 scenario, ensure the base is built locally — Inspect AI's
 # per-sample `docker build` will otherwise try to pull it from a registry and
-# fail. Each entry maps `image tag -> build context directory`.
-BASE_IMAGES = {
-    "sysrepair/meta2-hardy:latest": REPO_ROOT / "meta2" / "_base",
+# fail. Each entry maps `image tag -> (build context directory, extra build flags)`.
+BASE_IMAGES: dict[str, tuple[Path, list[str]]] = {
+    "sysrepair/meta2-hardy:latest": (REPO_ROOT / "meta2" / "_base", []),
+    # Windows Server Core base — requires Hyper-V isolation on Win 10/11 Home.
+    "sysrepair/meta3-win-base:ltsc2019": (
+        REPO_ROOT / "meta3" / "windows" / "base",
+        ["--isolation=hyperv"],
+    ),
 }
+
+# Map from benchmark path prefix to the base image tag it requires.
+_BENCHMARK_BASE: list[tuple[str, str]] = [
+    ("meta2", "sysrepair/meta2-hardy:latest"),
+    ("meta3/windows", "sysrepair/meta3-win-base:ltsc2019"),
+]
 
 
 def _ensure_base_images(cfg: dict) -> None:
     """Build any shared base images that the selected scenarios depend on."""
     benchmarks = cfg.get("benchmarks") or []
     scenarios = cfg.get("scenarios") or []
-    touches_meta2 = (
-        "meta2" in benchmarks
-        or any(s.startswith("meta2/") for s in scenarios)
-        or not benchmarks and not scenarios  # defaults include meta2
-    )
-    if not touches_meta2:
-        return
-    tag = "sysrepair/meta2-hardy:latest"
-    ctx = BASE_IMAGES[tag]
-    # Check local presence (suppress stderr if docker missing; let inspect's own
-    # error handling surface the problem instead of swallowing it here).
-    probe = subprocess.run(
-        ["docker", "image", "inspect", tag],
-        capture_output=True, text=True,
-    )
-    if probe.returncode == 0:
-        return
-    print(f"[pre-build] {tag} missing; building from {ctx} ...")
-    subprocess.run(["docker", "build", "-t", tag, str(ctx)], check=True)
+    default_benchmarks = not benchmarks and not scenarios
+
+    needed: set[str] = set()
+    for prefix, tag in _BENCHMARK_BASE:
+        bench_hit = any(b == prefix or b.startswith(prefix + "/") for b in benchmarks)
+        scenario_hit = any(s.startswith(prefix + "/") for s in scenarios)
+        # meta2 is in the task.py default benchmarks, so include it when no
+        # explicit filter is given.
+        default_hit = default_benchmarks and prefix == "meta2"
+        if bench_hit or scenario_hit or default_hit:
+            needed.add(tag)
+
+    for tag in needed:
+        ctx, extra_args = BASE_IMAGES[tag]
+        # Check local presence (suppress stderr if docker missing; let inspect's
+        # own error handling surface the problem instead of swallowing it here).
+        probe = subprocess.run(
+            ["docker", "image", "inspect", tag],
+            capture_output=True, text=True,
+        )
+        if probe.returncode == 0:
+            continue
+        print(f"[pre-build] {tag} missing; building from {ctx} ...")
+        result = subprocess.run(["docker", "build", *extra_args, "-t", tag, str(ctx)])
+        if result.returncode != 0:
+            is_windows_image = "windows" in tag or "win" in tag
+            hint = (
+                "\nHint: Windows container images require Docker Desktop to be in "
+                "Windows containers mode.\n"
+                "Right-click the Docker system-tray icon → "
+                "\"Switch to Windows containers...\" and retry."
+            ) if is_windows_image else ""
+            raise SystemExit(f"[pre-build] Failed to build {tag}.{hint}")
 
 
 def _load(runs_path: Path, preset_name: str) -> dict:
