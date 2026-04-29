@@ -19,14 +19,13 @@ RUN reg add 'HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\Fire
 
 # --- benchmark admin user (upstream default: vagrant/vagrant, weak on purpose) ---
 # Server Core ltsc2019 enforces password complexity by default, which blocks
-# the intentionally-weak 'vagrant' password. Disable it via secedit before
-# creating the user, then re-export to confirm. The weak credentials are
-# deliberate — this is a vulnerable-by-design benchmark image.
-RUN $cfg = "$env:TEMP\secpol.cfg" ; \
-    secedit /export /cfg $cfg /quiet ; \
-    (Get-Content $cfg) -replace 'PasswordComplexity\s*=\s*1', 'PasswordComplexity = 0' | Set-Content $cfg ; \
-    secedit /configure /db "$env:windir\security\local.sdb" /cfg $cfg /areas SECURITYPOLICY /quiet ; \
-    Remove-Item $cfg -Force ; \
+# the intentionally-weak 'vagrant' password. Disable it via secedit first.
+# Hardcoded path avoids Docker's outer -Command quoting stripping inner quotes
+# around $env:TEMP-based paths. Weak credentials are deliberate here.
+RUN secedit /export /cfg C:\secpol.cfg /quiet ; \
+    (Get-Content C:\secpol.cfg) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | Set-Content C:\secpol.cfg ; \
+    secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY /quiet ; \
+    Remove-Item C:\secpol.cfg -Force ; \
     net user vagrant 'vagrant' /add ; \
     net localgroup Administrators vagrant /add ; \
     net accounts /maxpwage:unlimited
