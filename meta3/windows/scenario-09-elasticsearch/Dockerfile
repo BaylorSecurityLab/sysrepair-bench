@@ -17,7 +17,7 @@ RUN Invoke-WebRequest -Uri $env:TEMURIN_URL -OutFile 'C:\jre.zip' ; \
 ENV JAVA_HOME=C:\\Java\\jdk8u312-b07-jre
 
 # --- Elasticsearch 1.6.0 ---
-ARG ES_URL=https://download.elastic.co/elasticsearch/elasticsearch/elasticsearch-1.6.0.zip
+ARG ES_URL=https://repo1.maven.org/maven2/org/elasticsearch/elasticsearch/1.6.0/elasticsearch-1.6.0.zip
 RUN Invoke-WebRequest -Uri $env:ES_URL -OutFile 'C:\es.zip' ; \
     Expand-Archive 'C:\es.zip' -DestinationPath 'C:\' ; \
     Remove-Item 'C:\es.zip' ; \
