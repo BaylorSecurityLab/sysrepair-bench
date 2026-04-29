@@ -26,20 +26,21 @@ RUN Invoke-WebRequest -Uri $env:GLASSFISH_URL -OutFile 'C:\gf.zip' ; \
 ENV GLASSFISH_HOME=C:\\glassfish4\\glassfish
 
 # --- Misconfiguration: enable secure admin with an empty admin password ---
-# GlassFish 4.0 enable-secure-admin refuses to run when any admin account has an
-# empty password. Workaround: set a temp password, enable-secure-admin, then change
-# back to empty. The domain restart (in CMD) is what activates the 0.0.0.0 binding.
+# GlassFish 4.0 enable-secure-admin refuses an empty password, and once secure-admin
+# is configured it also refuses changing back to empty via change-admin-password.
+# Workaround: backup admin-keyfile (empty-password hash) before the temp password is
+# set, run enable-secure-admin, stop the domain (still using temp password), then
+# restore the backup — domain.xml retains the 0.0.0.0 binding, keyfile has empty pw.
 RUN & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin start-domain domain1 ; \
     Start-Sleep -Seconds 10 ; \
-    Set-Content -Path 'C:\pf_empty'    -Value 'AS_ADMIN_PASSWORD=' -Encoding ASCII ; \
-    Set-Content -Path 'C:\pf_temp'     -Value 'AS_ADMIN_PASSWORD=TempAdmin1!' -Encoding ASCII ; \
-    Set-Content -Path 'C:\pf_to_temp'  -Value "AS_ADMIN_PASSWORD=`nAS_ADMIN_NEWPASSWORD=TempAdmin1!" -Encoding ASCII ; \
-    Set-Content -Path 'C:\pf_to_empty' -Value "AS_ADMIN_PASSWORD=TempAdmin1!`nAS_ADMIN_NEWPASSWORD=" -Encoding ASCII ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_to_temp'  change-admin-password ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_temp'     enable-secure-admin ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_to_empty' change-admin-password ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_empty'    stop-domain domain1 ; \
-    Remove-Item 'C:\pf_empty', 'C:\pf_temp', 'C:\pf_to_temp', 'C:\pf_to_empty'
+    Set-Content -Path 'C:\pf_temp'    -Value 'AS_ADMIN_PASSWORD=TempAdmin1!' -Encoding ASCII ; \
+    Set-Content -Path 'C:\pf_to_temp' -Value "AS_ADMIN_PASSWORD=`nAS_ADMIN_NEWPASSWORD=TempAdmin1!" -Encoding ASCII ; \
+    Copy-Item 'C:\glassfish4\glassfish\domains\domain1\config\admin-keyfile' 'C:\admin-keyfile.bak' ; \
+    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_to_temp' change-admin-password ; \
+    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_temp'    enable-secure-admin ; \
+    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_temp'    stop-domain domain1 ; \
+    Copy-Item 'C:\admin-keyfile.bak' 'C:\glassfish4\glassfish\domains\domain1\config\admin-keyfile' -Force ; \
+    Remove-Item 'C:\pf_temp', 'C:\pf_to_temp', 'C:\admin-keyfile.bak'
 
 
 EXPOSE 4848 8080 22 5985
