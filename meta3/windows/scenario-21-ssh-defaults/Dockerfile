@@ -34,8 +34,9 @@ RUN secedit /export /cfg C:\secpol.cfg ; \
     (Get-Content C:\secpol.cfg) -replace 'PasswordComplexity\s*=\s*1','PasswordComplexity = 0' | Set-Content C:\secpol.cfg ; \
     secedit /configure /db C:\secedit.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY ; \
     Remove-Item C:\secpol.cfg, C:\secedit.sdb -ErrorAction SilentlyContinue
-RUN net user vagrant vagrant /add ; \
-    net localgroup Administrators vagrant /add
+RUN net user vagrant vagrant /add 2>&1 | Out-Null ; \
+    net user vagrant vagrant ; \
+    cmd /c 'net localgroup Administrators vagrant /add & exit /b 0'
 # Firewall is disabled in the base image; no explicit allow rule required.
 
 
