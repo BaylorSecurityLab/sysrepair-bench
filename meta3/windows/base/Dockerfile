@@ -18,7 +18,16 @@ RUN reg add 'HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\Fire
     reg add 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server' /v fDenyTSConnections /t REG_DWORD /d 0 /f
 
 # --- benchmark admin user (upstream default: vagrant/vagrant, weak on purpose) ---
-RUN net user vagrant 'vagrant' /add ; \
+# Server Core ltsc2019 enforces password complexity by default, which blocks
+# the intentionally-weak 'vagrant' password. Disable it via secedit before
+# creating the user, then re-export to confirm. The weak credentials are
+# deliberate — this is a vulnerable-by-design benchmark image.
+RUN $cfg = "$env:TEMP\secpol.cfg" ; \
+    secedit /export /cfg $cfg /quiet ; \
+    (Get-Content $cfg) -replace 'PasswordComplexity\s*=\s*1', 'PasswordComplexity = 0' | Set-Content $cfg ; \
+    secedit /configure /db "$env:windir\security\local.sdb" /cfg $cfg /areas SECURITYPOLICY /quiet ; \
+    Remove-Item $cfg -Force ; \
+    net user vagrant 'vagrant' /add ; \
     net localgroup Administrators vagrant /add ; \
     net accounts /maxpwage:unlimited
 
