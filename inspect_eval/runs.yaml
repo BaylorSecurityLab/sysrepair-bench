@@ -23,8 +23,9 @@ presets:
   # Linux containers across all benches except hivestorm.
   # Excludes meta4 scenarios that require a kernel-vm host (run via `kernel_vm`).
   linux_all:
-    model: openai/MODEL_NAME
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    model: openai/qwen3.5-9b
+    solvers: ["react"]
+    max_connections: 10
     modes: ["day1", "zero_day"]
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
     exclude:
@@ -40,7 +41,7 @@ presets:
   windows_all:
     model: openai/MODEL_NAME
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    modes: ["day1", "zero_day"]
+    modes: ["zero_day"]
     benchmarks: ["meta3/windows"]
     message_limit: 0
     token_limit: 0
@@ -64,8 +65,8 @@ presets:
 
   # Hivestorm Linux + FreeBSD — zero-day only (free-roam hardening).
   hivestorm_linux:
-    model: openai/MODEL_NAME
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    model: openai/qwen3.5-9b
+    solvers: ["react"]
     mode: zero_day
     scenarios:
       - "hivestorm/scenario-01-debian9"
@@ -75,9 +76,21 @@ presets:
       - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
       - "hivestorm/scenario-10-ubuntu-faillock"
       - "hivestorm/scenario-12-centos7-lamp"
-      - "hivestorm/scenario-14-freebsd13"
       - "hivestorm/scenario-15-docker-host"
       - "hivestorm/scenario-16-nginx-phpfpm"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  # Hivestorm FreeBSD — must run inside a live FreeBSD 13 Vagrant VM
+  # (see hivestorm/scenario-14-freebsd13/Vagrantfile). Zero-day only.
+  freebsd_vm:
+    model: openai/MODEL_NAME
+    solvers: ["react"]
+    mode: zero_day
+    scenarios:
+      - "hivestorm/scenario-14-freebsd13"
     message_limit: 0
     token_limit: 0
     time_limit: 3600

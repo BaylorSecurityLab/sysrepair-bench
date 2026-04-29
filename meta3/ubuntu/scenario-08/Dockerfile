@@ -25,6 +25,9 @@ RUN mkdir -p /srv/samba/public && chmod 0777 /srv/samba/public && \
     '    log file = /var/log/samba/log.%m' \
     '    max log size = 50' \
     '    security = user' \
+    '    wins support = yes' \
+    '    wins hook = /usr/local/bin/wins-hook.sh' \
+    '    vfs objects = streams_xattr' \
     '' \
     '[public]' \
     '    comment = Public Share' \

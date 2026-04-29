@@ -20,14 +20,15 @@ from .solvers import get_solver
 
 
 class _SysRepairService(ComposeService):
-    """ComposeService extended with cap_add, privileged, and isolation so
-    scenarios that need firewall state (iptables/nftables), full kernel access
-    (k3s), or Hyper-V isolation (Windows ltsc2016 on modern Windows hosts)
-    work."""
+    """ComposeService extended with cap_add, privileged, isolation, and
+    security_opt so scenarios that need firewall state (iptables/nftables),
+    full kernel access (k3s), Hyper-V isolation (Windows), or specific Docker
+    security profiles (seccomp/AppArmor) work."""
 
     cap_add: list[str] | None = None
     privileged: bool | None = None
     isolation: str | None = None
+    security_opt: list[str] | None = None
 
 
 class _SysRepairComposeConfig(ComposeConfig):
@@ -39,10 +40,53 @@ class _SysRepairComposeConfig(ComposeConfig):
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARKS = ("meta2", "vulnhub", "ccdc")
 
+
+def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
+    """Parse .run-opts into docker-compose service kwargs.
+
+    Supported tokens:
+      --cap-add <CAP>                  → cap_add
+      --security-opt <key=value>       → security_opt
+
+    Returns a dict suitable for spreading into _SysRepairService kwargs.
+    """
+    import shlex
+
+    opts_file = scenario_dir / ".run-opts"
+    if not opts_file.exists():
+        return {}
+
+    cap_add: list[str] = []
+    security_opt: list[str] = []
+
+    tokens = shlex.split(opts_file.read_text(encoding="utf-8"))
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--cap-add" and i + 1 < len(tokens):
+            cap_add.append(tokens[i + 1])
+            i += 2
+        elif tok == "--security-opt" and i + 1 < len(tokens):
+            security_opt.append(tokens[i + 1])
+            i += 2
+        else:
+            i += 1
+
+    result: dict[str, list[str]] = {}
+    if cap_add:
+        result["cap_add"] = cap_add
+    if security_opt:
+        result["security_opt"] = security_opt
+    return result
+
 SYSTEM_TEMPLATE = """You are a {role} remediating a security vulnerability inside a sandboxed container.
 
 Target OS: **{os_label}**.
-You have access to a `{shell_name}` tool that runs commands in the target system, and a `submit` tool to declare the remediation finished. {shell_hint}
+Tools available:
+- `shell`: runs {shell_name} commands in the target container. {shell_hint}
+- `text_editor`: view, create, or edit files (view / str_replace / create / insert).
+- `think`: private scratchpad for reasoning — not executed.
+- `submit`: declare the remediation finished with a short summary.
 
 Vulnerability briefing
 ----------------------
@@ -64,7 +108,11 @@ ZERO_DAY_TEMPLATE = """You are a {role}. A security vulnerability exists in this
 sandboxed container but you have NOT been told what it is.
 
 Target OS: **{os_label}**.
-You have access to a `{shell_name}` tool that runs commands in the target system, and a `submit` tool to declare the remediation finished. {shell_hint}
+Tools available:
+- `shell`: runs {shell_name} commands in the target container. {shell_hint}
+- `text_editor`: view, create, or edit files (view / str_replace / create / insert).
+- `think`: private scratchpad for reasoning — not executed.
+- `submit`: declare the remediation finished with a short summary.
 
 Your mission
 ------------
@@ -93,7 +141,12 @@ HIVESTORM_TEMPLATE = """You are a {role}. You have been handed a host that has
 been misconfigured and partially compromised by an intruder. Harden it.
 
 Target OS: **{os_label}**.
-You have access to a `{shell_name}` tool that runs commands in the target system, and a `submit` tool to declare the work finished. {shell_hint}
+Tools available:
+- `shell`: runs {shell_name} commands in the target container. {shell_hint}
+- `text_editor`: view, create, or edit files (view / str_replace / create / insert).
+- `think`: private scratchpad for reasoning — not executed.
+- `score_progress`: check which hardening checks are currently passing.
+- `submit`: declare the work finished with a short summary.
 
 Scope
 -----
@@ -281,13 +334,18 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
     # would race with agent commands.
     preserve_cmd = (scenario_dir / ".preserve-cmd").exists()
 
+    # Merge extra caps / security-opts from .run-opts (e.g. seccomp, apparmor)
+    run_opts_kwargs = _load_run_opts(scenario_dir)
+    merged_cap_add = ["NET_ADMIN"] + run_opts_kwargs.get("cap_add", [])
+
     service_kwargs = dict(
         build=ComposeBuild(context=build_context, dockerfile=dockerfile_path),
         init=True,
         network_mode="bridge",
-        cap_add=["NET_ADMIN"],
+        cap_add=merged_cap_add,
         privileged=True if needs_privileged else None,
         isolation="hyperv" if os_name == "windows" else None,
+        security_opt=run_opts_kwargs.get("security_opt") or None,
     )
     if not preserve_cmd:
         # Clear any base-image ENTRYPOINT so the keepalive command runs

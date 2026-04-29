@@ -90,6 +90,7 @@ def discover_scenarios(
                 "dockerfile_path": dockerfile_path,
                 "privileged": needs_privileged(child),
                 "preserve_cmd": (child / ".preserve-cmd").exists(),
+                "run_opts": load_run_opts(child),
             })
 
     scenarios.sort(key=lambda s: (s["bench"], int(s["name"].split("-")[1])))
@@ -97,8 +98,44 @@ def discover_scenarios(
 
 
 def needs_privileged(scenario_path: Path) -> bool:
-    """Return True if the scenario requires --privileged (has .needs-privileged marker)."""
-    return (scenario_path / ".needs-privileged").exists()
+    """Return True if the scenario requires --privileged.
+
+    Mirrors the harness heuristics:
+      1. Explicit .needs-privileged marker file.
+      2. Dockerfile FROM line contains -dind (docker-in-docker needs outer
+         --privileged to create namespaces / mount overlayfs).
+      3. k3s anywhere in the Dockerfile (cannot create namespaces otherwise).
+    """
+    if (scenario_path / ".needs-privileged").exists():
+        return True
+    df = scenario_path / "Dockerfile"
+    if df.exists():
+        text = df.read_text(encoding="utf-8", errors="ignore").lower()
+        first_from = next(
+            (ln for ln in text.splitlines() if ln.strip().startswith("from ")), ""
+        )
+        if "-dind" in first_from or "k3s" in text:
+            return True
+    return False
+
+
+def load_run_opts(scenario_path: Path) -> list[str]:
+    """Return extra docker run arguments from .run-opts if present.
+
+    Each line in .run-opts is a separate argument token or a space-separated
+    pair (e.g. "--security-opt seccomp=unconfined").  Lines are shell-split so
+    multi-token entries like "--cap-add SYS_PTRACE" expand correctly.
+    """
+    import shlex
+    opts_file = scenario_path / ".run-opts"
+    if not opts_file.exists():
+        return []
+    args: list[str] = []
+    for line in opts_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            args.extend(shlex.split(line))
+    return args
 
 
 def make_image_tag(bench: str, name: str) -> str:
@@ -163,6 +200,7 @@ def run_container(
     image_tag: str,
     privileged: bool,
     preserve_cmd: bool = False,
+    run_opts: list[str] | None = None,
 ) -> tuple[str | None, str]:
     """Start a detached container. Returns (container_name, error_msg).
 
@@ -170,11 +208,14 @@ def run_container(
     - Always adds NET_ADMIN (required for iptables scenarios).
     - Unless .preserve-cmd is set, overrides CMD with `sleep infinity` so
       single-service containers don't race with exec commands.
+    - run_opts are extra docker run arguments from .run-opts (e.g. security-opt).
     """
     name = f"sysrepair-validate-{uuid.uuid4().hex[:8]}"
     cmd = ["docker", "run", "-d", "--name", name, "--cap-add", "NET_ADMIN"]
     if privileged:
         cmd.append("--privileged")
+    if run_opts:
+        cmd.extend(run_opts)
     if not preserve_cmd:
         # Clear any ENTRYPOINT so sleep infinity runs directly
         cmd += ["--entrypoint", ""]
@@ -271,6 +312,7 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     path = scenario["path"]
     privileged = scenario["privileged"]
     preserve_cmd = scenario.get("preserve_cmd", False)
+    run_opts = scenario.get("run_opts") or []
     build_context = scenario.get("build_context", path)
     dockerfile_path = scenario.get("dockerfile_path", "Dockerfile")
     tag = make_image_tag(bench, name)
@@ -289,7 +331,7 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         }
 
     log(f"  [  RUN  ] {label}")
-    container_name, run_err = run_container(tag, privileged, preserve_cmd)
+    container_name, run_err = run_container(tag, privileged, preserve_cmd, run_opts)
     if container_name is None:
         log(f"  [ERROR ] {label} — container start failed")
         return {
@@ -300,6 +342,10 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
+        # Give preserve-cmd containers time to boot their services before probing.
+        if preserve_cmd:
+            time.sleep(15)
+
         # Inject verify.sh — Dockerfiles no longer COPY it (prevents test leakage)
         verify_src = (path / "verify.sh").read_text(encoding="utf-8")
         ok, inject_err = inject_verify_sh(container_name, verify_src)
@@ -314,6 +360,17 @@ def validate_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
 
         log(f"  [VERIFY ] {label}")
         exit_code, verify_out = exec_verify(container_name)
+
+        # Retry for preserve-cmd containers whose services take longer to start
+        # (e.g. MySQL on Ubuntu 14.04, k3s cluster initialisation).  We only
+        # retry while exit_code != 1 because exit 1 already means "vulnerable".
+        if preserve_cmd and exit_code != 1:
+            for wait_s in (20, 40):
+                log(f"  [RETRY  ] {label} — service not ready (exit {exit_code}), waiting {wait_s}s")
+                time.sleep(wait_s)
+                exit_code, verify_out = exec_verify(container_name)
+                if exit_code == 1:
+                    break
     finally:
         cleanup_container(container_name)
 

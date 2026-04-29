@@ -15,7 +15,7 @@ RUN mkdir -p /etc/docker && \
 
 ENV DOCKER_TLS_CERTDIR=""
 
-RUN apk add --no-cache bash
+RUN apk add --no-cache bash curl
 
 
 EXPOSE 2375 2376

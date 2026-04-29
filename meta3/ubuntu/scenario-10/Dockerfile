@@ -133,6 +133,10 @@ RUN service mysql start && \
     " && \
     service mysql stop
 
+# Allow passwordless `mysql -u root` inside the container so verify.sh can
+# query the payroll DB without embedding the password in the script.
+RUN printf '[client]\npassword=sploitme\n' > /root/.my.cnf && chmod 600 /root/.my.cnf
+
 # ---------- Entrypoint & verify ----------
 COPY scenario-10/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
