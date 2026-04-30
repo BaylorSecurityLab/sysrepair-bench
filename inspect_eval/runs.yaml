@@ -21,7 +21,6 @@ presets:
     time_limit: 1800
 
   # Linux containers across all benches except hivestorm.
-  # Excludes meta4 scenarios that require a kernel-vm host (run via `kernel_vm`).
   linux_all:
     model: openai/qwen3.5-9b
     solvers: ["react"]
@@ -41,6 +40,7 @@ presets:
   windows_all:
     model: openai/qwen3.5-9b
     solvers: ["react"]
+    max_connections: 2
     modes: ["day1", "zero_day"]
     benchmarks: ["meta3/windows"]
     message_limit: 0
@@ -48,26 +48,12 @@ presets:
     time_limit: 3600
     request_limit: 0
 
-  # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host
-  # (see meta4/kernel-vm/Vagrantfile). Compensating-control fixes also accepted.
-  kernel_vm:
-    model: openai/MODEL_NAME
-    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
-    modes: ["day1", "zero_day"]
-    scenarios:
-      - "meta4/scenario-19"
-      - "meta4/scenario-21"
-      - "meta4/scenario-22"
-    message_limit: 0
-    token_limit: 0
-    time_limit: 3600
-    request_limit: 0
-
-  # Hivestorm Linux + FreeBSD — zero-day only (free-roam hardening).
+  # Hivestorm Linux (free-roam hardening).
   hivestorm_linux:
     model: openai/qwen3.5-9b
     solvers: ["react"]
     mode: zero_day
+    max_connections: 10
     scenarios:
       - "hivestorm/scenario-01-debian9"
       - "hivestorm/scenario-02-ubuntu1604"
@@ -83,10 +69,26 @@ presets:
     time_limit: 3600
     request_limit: 0
 
+  # Hivestorm Windows — zero-day only (free-roam hardening).
+  hivestorm_windows:
+    model: openai/qwen3.5-9b
+    max_connections: 1
+    solvers: ["react"]
+    mode: zero_day
+    scenarios:
+      - "hivestorm/scenario-03-win10"
+      - "hivestorm/scenario-04-win2019"
+      - "hivestorm/scenario-05-win2016"
+      - "hivestorm/scenario-08-win-iis"
+      - "hivestorm/scenario-11-win-dc-dns"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
   # Hivestorm FreeBSD — must run inside a live FreeBSD 13 Vagrant VM
-  # (see hivestorm/scenario-14-freebsd13/Vagrantfile). Zero-day only.
   freebsd_vm:
-    model: openai/MODEL_NAME
+    model: openai/qwen3.5-9b
     solvers: ["react"]
     mode: zero_day
     scenarios:
@@ -96,17 +98,28 @@ presets:
     time_limit: 3600
     request_limit: 0
 
-  # Hivestorm Windows — zero-day only (free-roam hardening).
-  hivestorm_windows:
+
+  # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host
+  kernel_vm:
     model: openai/MODEL_NAME
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    modes: ["day1", "zero_day"]
+    scenarios:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  # Hivestorm Windows AD DC — must run inside a live Windows Server 2019 Vagrant VM
+  # (see hivestorm/scenario-13-ad-dc-win2019/Vagrantfile). Zero-day only.
+  win_vm:
+    model: openai/MODEL_NAME
+    solvers: ["react"]
     mode: zero_day
     scenarios:
-      - "hivestorm/scenario-03-win10"
-      - "hivestorm/scenario-04-win2019"
-      - "hivestorm/scenario-05-win2016"
-      - "hivestorm/scenario-08-win-iis"
-      - "hivestorm/scenario-11-win-dc-dns"
       - "hivestorm/scenario-13-ad-dc-win2019"
     message_limit: 0
     token_limit: 0

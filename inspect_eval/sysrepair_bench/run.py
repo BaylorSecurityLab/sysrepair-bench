@@ -1,7 +1,7 @@
-"""Run a named preset from runs.yaml.
+"""Run one or more named presets from runs.yaml.
 
 Usage:
-    uv run python -m sysrepair_bench.run <preset>
+    uv run python -m sysrepair_bench.run <preset> [<preset> ...]
     uv run python -m sysrepair_bench.run <preset> --runs path/to/runs.yaml
 """
 
@@ -93,22 +93,16 @@ def _load(runs_path: Path, preset_name: str) -> dict:
     return merged
 
 
-def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("preset", help="Preset name in runs.yaml")
-    p.add_argument("--runs", default=str(DEFAULT_RUNS), help="Path to runs.yaml")
-    args = p.parse_args(argv)
-
-    cfg = _load(Path(args.runs), args.preset)
+def _run_preset(runs_path: Path, preset_name: str) -> None:
+    cfg = _load(runs_path, preset_name)
     _ensure_base_images(cfg)
 
     models = cfg.get("models") or ([cfg["model"]] if cfg.get("model") else [])
     solvers = cfg.get("solvers") or ([cfg.get("solver", "react")])
     if not models:
-        raise SystemExit("Preset must define `model` or `models`.")
+        raise SystemExit(f"Preset '{preset_name}' must define `model` or `models`.")
 
     modes = cfg.get("modes") or ([cfg.get("mode", "day1")])
-    # Remove mode/modes from common — we iterate over it separately
     common = {
         k: cfg[k]
         for k in (
@@ -144,6 +138,17 @@ def main(argv: list[str] | None = None) -> None:
                     model=model,
                     **eval_kwargs,
                 )
+
+
+def main(argv: list[str] | None = None) -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("presets", nargs="+", help="One or more preset names from runs.yaml")
+    p.add_argument("--runs", default=str(DEFAULT_RUNS), help="Path to runs.yaml")
+    args = p.parse_args(argv)
+
+    runs_path = Path(args.runs)
+    for preset_name in args.presets:
+        _run_preset(runs_path, preset_name)
 
 
 if __name__ == "__main__":
