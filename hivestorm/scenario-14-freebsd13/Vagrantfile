@@ -26,11 +26,13 @@ Vagrant.configure("2") do |config|
     vb.customize ["modifyvm", :id, "--nictype2", "Am79C973"]
   end
 
+  config.vm.boot_timeout = 900
+
   config.vm.network "private_network", ip: "192.168.56.14"
 
   # FreeBSD rsync'd synced folder — NFS is flaky on Win hosts.
   config.vm.synced_folder ".", "/vagrant", type: "rsync",
-    rsync__exclude: [".vagrant/", "build/"]
+    rsync__exclude: [".vagrant/"]
 
   # Stage 1: bootstrap pkg, install baseline services, then seed.
   config.vm.provision "shell",
@@ -48,13 +50,17 @@ Vagrant.configure("2") do |config|
       # Baseline services the scenario expects to survive.
       pkg install -y nginx netcat sudo bash
 
-      # Landing directory for roles.json + verifier.
-      mkdir -p /var/db/sysrepair
-      cp /vagrant/build/roles.json /var/db/sysrepair/roles.json
-      chmod 0600 /var/db/sysrepair/roles.json
-      cp /vagrant/seed.sh   /var/db/sysrepair/seed.sh
-      cp /vagrant/verify.sh /var/db/sysrepair/verify.sh
-      chmod 0700 /var/db/sysrepair/seed.sh /var/db/sysrepair/verify.sh
+      # Roles go to a non-obvious path so the agent can't trivially find the
+      # answer key. seed.sh and verify.sh both read from this location.
+      mkdir -p /root/.sysrepair
+      chmod 0700 /root/.sysrepair
+      cp /vagrant/build/roles.json /root/.sysrepair/config
+      chmod 0400 /root/.sysrepair/config
+
+      # Seed script only — verify.sh is re-uploaded by the Inspect scorer at
+      # eval time and must NOT be left on the VM beforehand.
+      cp /vagrant/seed.sh /root/.sysrepair/seed.sh
+      chmod 0700 /root/.sysrepair/seed.sh
 
       # Enable baseline services BEFORE seeding so we have something
       # for the verifier to confirm is still running.
@@ -63,8 +69,16 @@ Vagrant.configure("2") do |config|
       service sshd   start || true
       service nginx  start || true
 
-      # Run the seeder.
-      /var/db/sysrepair/seed.sh
-      rm -f /var/db/sysrepair/seed.sh
+      # Run the seeder, then erase both it and roles.json.
+      # roles.json is re-uploaded by the Inspect scorer at eval time
+      # (alongside verify.sh), so it must not persist on the VM.
+      /root/.sysrepair/seed.sh
+      rm -f /root/.sysrepair/seed.sh
+      rm -f /root/.sysrepair/config
+
+      # Anti-contamination: /vagrant is just an rsync copy of the host
+      # checkout (contains seed.sh, verify.sh, roles.json, task.md).
+      # Delete it so the agent cannot read the answer key.
+      rm -rf /vagrant
     SH
 end

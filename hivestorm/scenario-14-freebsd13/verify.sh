@@ -2,7 +2,7 @@
 # Hivestorm scenario-14 verifier. JSONL on stdout.
 set -u
 
-ROLES=/var/db/sysrepair/roles.json
+ROLES=/root/.sysrepair/config
 j() { /usr/bin/awk -v k="$1" '
   { if (match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) {
       s = substr($0, RSTART, RLENGTH); sub(/^.*:[[:space:]]*"/, "", s);
@@ -118,8 +118,8 @@ else
 fi
 
 # 11. rogue pkg marker removed (or pkg uninstalled)
-if [ -f /var/db/sysrepair/rogue-pkg.marker ] \
-   && /usr/bin/grep -qx "$ROGUE_PKG" /var/db/sysrepair/rogue-pkg.marker 2>/dev/null; then
+if [ -f /root/.sysrepair/pkg.marker ] \
+   && /usr/bin/grep -qx "$ROGUE_PKG" /root/.sysrepair/pkg.marker 2>/dev/null; then
     # Marker still claims the pkg is installed.
     if /usr/sbin/pkg info -e "$ROGUE_PKG" 2>/dev/null; then
         emit rogue_pkg_removed 2 false "$ROGUE_PKG still installed"

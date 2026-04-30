@@ -368,6 +368,15 @@ def _windows_text_editor(timeout: int = 180):
     return text_editor()
 
 
+def _bridge_ssh_prefix_from_store() -> str:
+    """Build an SSH command prefix using bridge metadata stored by _prime_os."""
+    host = store().get("bridge_target_host", "host.docker.internal")
+    port = store().get("vagrant_port", "2222")
+    user = store().get("vagrant_user", "vagrant")
+    key  = store().get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+    return f"ssh -i {key} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user}@{host}"
+
+
 def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
     """Hivestorm-only tool: runs verify.sh and reports which checks passed."""
     @tool
@@ -380,7 +389,31 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
             sp = Path(scenario_path)
             os_name = store().get("os", "linux")
             sb = sandbox()
-            if os_name == "windows":
+            if os_name == "freebsd":
+                # Bridge: SCP verify.sh + roles.json to VM (roles deleted post-seed).
+                ssh = _bridge_ssh_prefix_from_store()
+                host = store().get("bridge_target_host", "host.docker.internal")
+                port = store().get("vagrant_port", "2222")
+                user = store().get("vagrant_user", "vagrant")
+                key  = store().get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+                scp  = (f"scp -i {key} -P {port} "
+                        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+                await sb.write_file("/tmp/verify_progress.sh",
+                                    (sp / "verify.sh").read_text(encoding="utf-8"))
+                await sb.write_file("/tmp/eval_config.json",
+                                    (sp / "build" / "roles.json").read_text(encoding="utf-8"))
+                await sb.exec(["sh", "-c",
+                    f"{ssh} 'mkdir -p /root/.sysrepair && chmod 700 /root/.sysrepair'"])
+                await sb.exec(["sh", "-c",
+                    f"{scp} /tmp/verify_progress.sh {user}@{host}:/tmp/verify_progress.sh && "
+                    f"{scp} /tmp/eval_config.json {user}@{host}:/root/.sysrepair/config"])
+                try:
+                    result = await sb.exec(["sh", "-c",
+                        f"{ssh} 'chmod +x /tmp/verify_progress.sh && sudo sh /tmp/verify_progress.sh'"],
+                        timeout=verify_timeout)
+                except TimeoutError:
+                    return "Score check timed out."
+            elif os_name == "windows":
                 src_file = sp / "verify.ps1"
                 if not src_file.exists():
                     src_file = sp / "verify.sh"
@@ -391,15 +424,19 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                     return f"Score check unavailable: {e}"
                 argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy",
                         "Bypass", "-File", "C:/verify_progress.ps1"]
+                try:
+                    result = await sb.exec(argv, timeout=verify_timeout)
+                except TimeoutError:
+                    return "Score check timed out."
             else:
                 await sb.write_file("/tmp/verify_progress.sh",
                                     (sp / "verify.sh").read_text(encoding="utf-8"))
                 await sb.exec(["chmod", "+x", "/tmp/verify_progress.sh"])
                 argv = ["bash", "/tmp/verify_progress.sh"]
-            try:
-                result = await sb.exec(argv, timeout=verify_timeout)
-            except TimeoutError:
-                return "Score check timed out."
+                try:
+                    result = await sb.exec(argv, timeout=verify_timeout)
+                except TimeoutError:
+                    return "Score check timed out."
             passed = []
             total_earned = 0
             for line in (result.stdout or "").splitlines():
@@ -435,6 +472,10 @@ def _tools(timeout: int = 180, use_text_editor: bool = True, os_name: str = "lin
 def _prime_os(state: TaskState) -> None:
     """Copy sample OS metadata into the per-sample store so tools can see it."""
     store().set("os", state.metadata.get("os", "linux"))
+    # Bridge metadata for Vagrant-backed VM scenarios (e.g. FreeBSD).
+    for key in ("vagrant_port", "vagrant_user", "bridge_target_host", "bridge_ssh_key"):
+        if key in state.metadata:
+            store().set(key, state.metadata[key])
 
 
 # ---------------------------------------------------------------------------
@@ -446,32 +487,52 @@ async def _verify_in_sandbox(
 ) -> bool:
     """Run the scenario's verify script inside the sandbox.
 
-    Picks verify.ps1 + PowerShell on Windows, verify.sh + bash on Linux.
-    ``timeout`` is generous by default because Hardy-era services (Samba, VNC,
-    Ruby dRuby, distccd) and Windows services can take many seconds to come up.
+    Picks verify.ps1 + PowerShell on Windows, verify.sh + bash on Linux, and
+    for FreeBSD (bridge container) SCPs verify.sh to the VM then runs it via SSH.
     """
     sp = Path(scenario_path)
     sb = sandbox()
-    if os_name == "windows":
-        src_file = sp / "verify.ps1"
-        if not src_file.exists():
-            src_file = sp / "verify.sh"  # fallback
-        try:
-            await _ps_write_file(sb, "C:/verify.ps1", src_file.read_text(encoding="utf-8"))
-        except RuntimeError:
-            return False
-        argv = [
-            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", "C:/verify.ps1",
-        ]
-    else:
-        await sb.write_file("/tmp/verify.sh",
-                            (sp / "verify.sh").read_text(encoding="utf-8"))
-        await sb.exec(["chmod", "+x", "/tmp/verify.sh"], timeout=30)
-        argv = ["bash", "/tmp/verify.sh"]
     try:
-        result = await sb.exec(argv, timeout=timeout)
-    except TimeoutError:
+        if os_name == "freebsd":
+            ssh = _bridge_ssh_prefix_from_store()
+            host = store().get("bridge_target_host", "host.docker.internal")
+            port = store().get("vagrant_port", "2222")
+            user = store().get("vagrant_user", "vagrant")
+            key  = store().get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+            scp  = (f"scp -i {key} -P {port} "
+                    f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+            await sb.write_file("/tmp/verify.sh",
+                                (sp / "verify.sh").read_text(encoding="utf-8"))
+            await sb.write_file("/tmp/eval_config.json",
+                                (sp / "build" / "roles.json").read_text(encoding="utf-8"))
+            await sb.exec(["sh", "-c",
+                f"{ssh} 'mkdir -p /root/.sysrepair && chmod 700 /root/.sysrepair'"],
+                timeout=30)
+            await sb.exec(["sh", "-c",
+                f"{scp} /tmp/verify.sh {user}@{host}:/tmp/verify.sh && "
+                f"{scp} /tmp/eval_config.json {user}@{host}:/root/.sysrepair/config"],
+                timeout=30)
+            result = await sb.exec(["sh", "-c",
+                f"{ssh} 'chmod +x /tmp/verify.sh && sudo sh /tmp/verify.sh'"],
+                timeout=timeout)
+        elif os_name == "windows":
+            src_file = sp / "verify.ps1"
+            if not src_file.exists():
+                src_file = sp / "verify.sh"  # fallback
+            # write_file() shells out to `sh` and fails on Windows containers;
+            # use the PowerShell helper instead.
+            await _ps_write_file(sb, "C:/verify.ps1",
+                                 src_file.read_text(encoding="utf-8"))
+            result = await sb.exec([
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "C:/verify.ps1",
+            ], timeout=timeout)
+        else:
+            await sb.write_file("/tmp/verify.sh",
+                                (sp / "verify.sh").read_text(encoding="utf-8"))
+            await sb.exec(["chmod", "+x", "/tmp/verify.sh"], timeout=30)
+            result = await sb.exec(["bash", "/tmp/verify.sh"], timeout=timeout)
+    except (TimeoutError, RuntimeError):
         return False
     return result.returncode == 0
 

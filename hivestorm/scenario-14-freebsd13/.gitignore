@@ -1,3 +1,5 @@
 build/
 .vagrant/
 *.log
+# extracted by pipeline — never commit private keys
+build/vagrant_key

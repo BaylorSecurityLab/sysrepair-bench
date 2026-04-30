@@ -4,7 +4,7 @@
 set -u
 export ASSUME_ALWAYS_YES=yes
 
-ROLES=/var/db/sysrepair/roles.json
+ROLES=/root/.sysrepair/config
 j() { /usr/bin/awk -v k="$1" '
   { if (match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) {
       s = substr($0, RSTART, RLENGTH); sub(/^.*:[[:space:]]*"/, "", s);
@@ -116,8 +116,7 @@ fi
 # ---- rogue package entry (marker — we don't actually fetch a real CVE pkg) --
 # Create a decoy installed-pkg record so `pkg info` and the verifier can spot
 # it, without depending on the live vulnxml feed.
-mkdir -p /var/db/sysrepair
-echo "$ROGUE_PKG" > /var/db/sysrepair/rogue-pkg.marker
+echo "$ROGUE_PKG" > /root/.sysrepair/pkg.marker
 # Also append to a periodic security report override so `pkg audit` output
 # would flag it in a real environment.
 cat > /usr/local/etc/periodic/security/410.pkg-audit <<EOF
@@ -157,8 +156,6 @@ chmod 0755 /usr/local/etc/rc.d/hs14_listener
 # ---- kick inetd so telnet/rexec/ftp are actually listening ------------------
 /usr/sbin/service inetd restart 2>/dev/null || /usr/sbin/service inetd start 2>/dev/null || true
 
-# Lock down roles.json so the in-box agent cannot read it as a non-admin.
-chmod 0600 /var/db/sysrepair/roles.json
-chown root:wheel /var/db/sysrepair/roles.json
+chmod 0400 /root/.sysrepair/pkg.marker
 
 exit 0

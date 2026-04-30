@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,12 +27,16 @@ class _SysRepairService(ComposeService):
     """ComposeService extended with cap_add, privileged, isolation, and
     security_opt so scenarios that need firewall state (iptables/nftables),
     full kernel access (k3s), Hyper-V isolation (Windows), or specific Docker
-    security profiles (seccomp/AppArmor) work."""
+    security profiles (seccomp/AppArmor) work.
+
+    extra_hosts is used by the FreeBSD bridge container to resolve
+    host.docker.internal → the Docker host, where Vagrant forwards port 2222."""
 
     cap_add: list[str] | None = None
     privileged: bool | None = None
     isolation: str | None = None
     security_opt: list[str] | None = None
+    extra_hosts: list[str] | None = None
 
 
 class _SysRepairComposeConfig(ComposeConfig):
@@ -179,6 +184,172 @@ Constraints
 """
 
 
+BSD_BRIDGE_TEMPLATE = """You are a {role}. You have been handed a FreeBSD host that has been \
+misconfigured and partially compromised by an intruder. Harden it.
+
+Target OS: **{os_label}**
+Environment: You are inside a **bridge container** on the evaluation host. \
+The FreeBSD target VM is reachable over SSH from this container.
+
+Tools available:
+- `shell`: runs bash commands inside this bridge container. Use SSH to reach the FreeBSD target.
+- `text_editor`: view or edit files on the bridge container's local filesystem.
+- `think`: private scratchpad for reasoning — not executed.
+- `score_progress`: check which hardening checks are currently passing on the target VM.
+- `submit`: declare the work finished with a short summary.
+
+## Connecting to the target VM
+
+Each `shell` tool call is a **fresh process** in the bridge container — there is no \
+persistent SSH session between calls. Connect to the FreeBSD VM explicitly every time:
+
+    # Run a single command as root:
+    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} 'sudo your-command'
+
+    # Chain multiple commands in one call:
+    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} '
+      sudo cat /etc/rc.conf
+      sudo sockstat -l
+    '
+
+**Important:**
+- Calling `exit` or ending an SSH session does NOT cut you off permanently. \
+  The next `shell` call opens a brand-new connection automatically.
+- `sudo` requires no password from the `vagrant` account.
+- Do NOT disable or block `sshd` on port 22. If you must restart it, verify it recovers:
+  `ssh ... 'sudo service sshd restart' && ssh ... echo ok`
+
+## Scope
+{task_body}
+
+## Workflow
+1. Enumerate the target VM with read-only SSH commands.
+2. Remediate what you find. Do not break sshd (:22) or nginx (:80).
+3. After each batch of changes, call `score_progress()` to see earned points.
+4. When the host is hardened and services still respond, call `submit` with a summary.
+"""
+
+
+def _is_vagrant_scenario(scenario_dir: Path) -> bool:
+    """A scenario is Vagrant-backed if it has a Vagrantfile.
+
+    It may ALSO ship a Dockerfile (the bridge container that the agent runs in
+    while SSHing to the VM) — that doesn't make it a regular Docker scenario.
+    """
+    return (scenario_dir / "Vagrantfile").exists()
+
+
+def _detect_vagrant_os(scenario_dir: Path) -> str:
+    vf = (scenario_dir / "Vagrantfile").read_text(encoding="utf-8", errors="ignore").lower()
+    if "freebsd" in vf:
+        return "freebsd"
+    if "windows" in vf:
+        return "windows"
+    return "linux"
+
+
+def _parse_vagrant_ssh_config(output: str) -> dict[str, str]:
+    cfg: dict[str, str] = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("host "):
+            continue
+        key, _, val = line.partition(" ")
+        if key:
+            cfg[key] = val.strip()
+    return cfg
+
+
+def _prepare_vagrant_bridge(scenario_dir: Path) -> dict[str, str]:
+    """Ensure the Vagrant VM is running and the bridge SSH key is extracted.
+
+    Returns a metadata dict stored on the Sample (vagrant_port, vagrant_user,
+    bridge_target_host, bridge_ssh_key) so the scorer and solver can reach the VM.
+    """
+    status = subprocess.run(
+        ["vagrant", "status", "--machine-readable"],
+        cwd=scenario_dir, capture_output=True, text=True,
+    )
+    if ",running" not in status.stdout:
+        print(f"[vagrant] Starting VM in {scenario_dir.name} — this may take several minutes…")
+        subprocess.run(["vagrant", "up"], cwd=scenario_dir, check=True)
+
+    raw = subprocess.run(
+        ["vagrant", "ssh-config"],
+        cwd=scenario_dir, capture_output=True, text=True, check=True,
+    )
+    cfg = _parse_vagrant_ssh_config(raw.stdout)
+
+    port = cfg.get("Port", "2222")
+    user = cfg.get("User", "vagrant")
+    key_src = Path(cfg["IdentityFile"].strip('"'))
+
+    build_dir = scenario_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    (build_dir / "vagrant_key").write_bytes(key_src.read_bytes())
+
+    return {
+        "vagrant_port": port,
+        "vagrant_user": user,
+        "bridge_target_host": "host.docker.internal",
+        "bridge_ssh_key": "/root/.ssh/vagrant_key",
+    }
+
+
+def _build_vagrant_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
+    sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
+    os_name = _detect_vagrant_os(scenario_dir)
+    bridge_meta = _prepare_vagrant_bridge(scenario_dir)
+
+    if not (scenario_dir / "task.md").exists():
+        _hivestorm_prepare(scenario_dir)
+    task_md = (scenario_dir / "task.md").read_text(encoding="utf-8")
+
+    if os_name == "freebsd":
+        role = "FreeBSD system administrator"
+        os_label = "FreeBSD 13 (sh/tcsh)"
+    else:
+        role = "system administrator"
+        os_label = os_name.capitalize()
+
+    prompt = BSD_BRIDGE_TEMPLATE.format(
+        role=role,
+        os_label=os_label,
+        target_port=bridge_meta["vagrant_port"],
+        target_host=bridge_meta["bridge_target_host"],
+        task_body=task_md,
+    )
+
+    compose_cfg = _SysRepairComposeConfig(
+        services={"default": _SysRepairService(
+            build=ComposeBuild(
+                context=str(scenario_dir.resolve()),
+                dockerfile="Dockerfile",
+            ),
+            init=True,
+            extra_hosts=["host.docker.internal:host-gateway"],
+            entrypoint=[""],
+            command="sleep infinity",
+        )}
+    )
+
+    return Sample(
+        id=sid,
+        input=prompt,
+        target="remediated",
+        metadata={
+            "scenario_path": str(scenario_dir),
+            "benchmark": scenario_dir.parent.name,
+            "scenario": scenario_dir.name,
+            "os": os_name,
+            "verify_script": "verify.sh",
+            "scorer": "hivestorm_weighted",
+            **bridge_meta,
+        },
+        sandbox=SandboxEnvironmentSpec(type="docker", config=compose_cfg),
+    )
+
+
 WINDOWS_FROM_HINTS = (
     "windows",
     "servercore",
@@ -223,9 +394,9 @@ def _discover_scenarios(
             p = (REPO_ROOT / s).resolve() if not Path(s).is_absolute() else Path(s)
             if not p.exists():
                 raise FileNotFoundError(f"Scenario not found: {p}")
-            if not (p / "Dockerfile").exists():
+            if not (p / "Dockerfile").exists() and not (p / "Vagrantfile").exists():
                 raise ValueError(
-                    f"'{s}' is not a valid scenario (no Dockerfile at {p}). "
+                    f"'{s}' is not a valid scenario (no Dockerfile or Vagrantfile at {p}). "
                     f"If you meant to run every scenario under it, use "
                     f"`benchmarks: [\"{s}\"]` instead of `scenarios:`."
                 )
@@ -243,7 +414,8 @@ def _discover_scenarios(
             for entry in sorted(bm_dir.iterdir()):
                 if entry.is_dir() and entry.name.startswith("scenario-"):
                     has_verify = (entry / "verify.sh").exists() or (entry / "verify.ps1").exists()
-                    if (entry / "Dockerfile").exists() and has_verify:
+                    has_runner = (entry / "Dockerfile").exists() or (entry / "Vagrantfile").exists()
+                    if has_runner and has_verify:
                         selected.append(entry)
 
     if exclude:
@@ -277,6 +449,9 @@ def _hivestorm_prepare(scenario_dir: Path) -> None:
 
 
 def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
+    if _is_vagrant_scenario(scenario_dir):
+        return _build_vagrant_sample(scenario_dir, mode)
+
     dockerfile = scenario_dir / "Dockerfile"
     sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
     os_name = _detect_os(scenario_dir)

@@ -31,6 +31,14 @@ from inspect_ai.util import sandbox
 from .solvers import _ps_write_file
 
 
+def _bridge_ssh_prefix(state: TaskState) -> str:
+    host = state.metadata.get("bridge_target_host", "host.docker.internal")
+    port = state.metadata.get("vagrant_port", "2222")
+    user = state.metadata.get("vagrant_user", "vagrant")
+    key  = state.metadata.get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+    return f"ssh -i {key} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user}@{host}"
+
+
 async def _run_verify(state: TaskState):
     scenario_path = Path(state.metadata["scenario_path"])
     os_name = state.metadata.get("os", "linux")
@@ -40,7 +48,29 @@ async def _run_verify(state: TaskState):
     verify_src = (scenario_path / verify_name).read_text(encoding="utf-8")
 
     sb = sandbox()
-    if os_name == "windows":
+    if os_name == "freebsd":
+        # Bridge container: SCP verify.sh + roles.json to the VM, run verify there.
+        # roles.json is erased from the VM after seeding and re-uploaded here so
+        # the agent never has access to it during the eval session.
+        ssh = _bridge_ssh_prefix(state)
+        host = state.metadata.get("bridge_target_host", "host.docker.internal")
+        port = state.metadata.get("vagrant_port", "2222")
+        user = state.metadata.get("vagrant_user", "vagrant")
+        key  = state.metadata.get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+        scp  = (f"scp -i {key} -P {port} "
+                f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+        roles_src = (scenario_path / "build" / "roles.json").read_text(encoding="utf-8")
+        await sb.write_file("/tmp/verify.sh", verify_src)
+        await sb.write_file("/tmp/eval_config.json", roles_src)
+        await sb.exec(["sh", "-c",
+            f"{ssh} 'mkdir -p /root/.sysrepair && chmod 700 /root/.sysrepair'"])
+        await sb.exec(["sh", "-c",
+            f"{scp} /tmp/verify.sh {user}@{host}:/tmp/verify.sh && "
+            f"{scp} /tmp/eval_config.json {user}@{host}:/root/.sysrepair/config"])
+        result = await sb.exec(["sh", "-c",
+            f"{ssh} 'chmod +x /tmp/verify.sh && sudo sh /tmp/verify.sh'"],
+            timeout=360)
+    elif os_name == "windows":
         remote = "C:/verify.ps1"
         # sb.write_file() shells out to `sh` and fails on Windows containers;
         # use the PowerShell helper instead.
