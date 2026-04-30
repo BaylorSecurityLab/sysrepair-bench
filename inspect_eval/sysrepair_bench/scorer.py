@@ -28,6 +28,8 @@ from inspect_ai.scorer import (
 from inspect_ai.solver import TaskState
 from inspect_ai.util import sandbox
 
+from .solvers import _ps_write_file
+
 
 async def _run_verify(state: TaskState):
     scenario_path = Path(state.metadata["scenario_path"])
@@ -40,7 +42,9 @@ async def _run_verify(state: TaskState):
     sb = sandbox()
     if os_name == "windows":
         remote = "C:/verify.ps1"
-        await sb.write_file(remote, verify_src)
+        # sb.write_file() shells out to `sh` and fails on Windows containers;
+        # use the PowerShell helper instead.
+        await _ps_write_file(sb, remote, verify_src)
         result = await sb.exec([
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", remote,
@@ -54,7 +58,16 @@ async def _run_verify(state: TaskState):
 
 
 async def _score_binary(state: TaskState) -> Score:
-    result, os_name = await _run_verify(state)
+    try:
+        result, os_name = await _run_verify(state)
+    except RuntimeError as e:
+        return Score(
+            value=INCORRECT,
+            answer=state.output.completion if state.output else "",
+            explanation=f"verify could not run: {e}",
+            metadata={"verify_error": str(e),
+                      "os": state.metadata.get("os", "linux")},
+        )
     passed = result.returncode == 0
     return Score(
         value=CORRECT if passed else INCORRECT,
@@ -65,7 +78,16 @@ async def _score_binary(state: TaskState) -> Score:
 
 
 async def _score_hivestorm(state: TaskState) -> Score:
-    result, os_name = await _run_verify(state)
+    try:
+        result, os_name = await _run_verify(state)
+    except RuntimeError as e:
+        return Score(
+            value=0.0,
+            answer=state.output.completion if state.output else "",
+            explanation=f"verify could not run: {e}",
+            metadata={"verify_error": str(e),
+                      "os": state.metadata.get("os", "linux")},
+        )
     checks: list[dict] = []
     for line in (result.stdout or "").splitlines():
         line = line.strip()

@@ -7,6 +7,7 @@ falls back on `message_limit` to cap forced halts.
 
 from __future__ import annotations
 
+import base64 as _base64
 import json
 import math
 import uuid
@@ -66,6 +67,14 @@ def _shell_tool(timeout: int = 180):
                 r = await sandbox().exec(argv, timeout=timeout)
             except TimeoutError:
                 return f"[timeout after {timeout}s]"
+            # Docker Compose returns this when the container has exited.
+            # Surface it loudly so the model stops retrying rather than burning tokens.
+            stderr_text = r.stderr or ""
+            if "is not running" in stderr_text and r.returncode != 0:
+                return (
+                    "[FATAL: sandbox container is not running — "
+                    "all further commands will fail. Stop and call submit().]"
+                )
             return (
                 f"exit_code: {r.returncode}\n"
                 f"stdout:\n{(r.stdout or '')[:4000]}\n"
@@ -183,6 +192,182 @@ def _hardy_text_editor(timeout: int = 180):
     return text_editor()
 
 
+async def _ps_write_file(sb, path: str, content: str, timeout: int = 60) -> None:
+    """Write a UTF-8 text file into a Windows sandbox container.
+
+    Pipes base64-encoded content through stdin to avoid command-line length
+    limits and quoting issues. Bypasses inspect_ai's built-in write_file(),
+    which shells out to 'sh' and fails on Windows containers.
+    """
+    b64 = _base64.b64encode(content.encode("utf-8")).decode("ascii")
+    ps_cmd = (
+        "$b = [Console]::In.ReadToEnd().Trim(); "
+        f"[IO.File]::WriteAllBytes('{path}', [Convert]::FromBase64String($b))"
+    )
+    r = await sb.exec(
+        ["powershell.exe", "-NoProfile", "-Command", ps_cmd],
+        input=b64,
+        timeout=timeout,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ps_write_file({path!r}): {r.stderr}")
+
+
+def _windows_text_editor(timeout: int = 180):
+    """text_editor equivalent for Windows containers.
+
+    Provides the same view / create / str_replace / insert / undo_edit
+    interface as inspect_ai's built-in text_editor(), but implemented
+    entirely via PowerShell exec calls so it works on Hyper-V Windows
+    containers where sandbox injection and write_file() (both Linux-only)
+    would fail.
+    """
+
+    @tool
+    def text_editor():
+        async def execute(
+            command: str,
+            path: str,
+            file_text: str | None = None,
+            insert_line: int | None = None,
+            new_str: str | None = None,
+            old_str: str | None = None,
+            view_range: list[int] | None = None,
+        ) -> str:
+            """View, create, or edit files.
+
+            Args:
+                command: One of: view, create, str_replace, insert, undo_edit.
+                path: Absolute Windows path to the file (e.g. C:\\Windows\\System32\\drivers\\etc\\hosts).
+                file_text: Full file content for 'create'.
+                insert_line: Line number after which to insert new_str (for 'insert').
+                new_str: Replacement text (for 'str_replace') or inserted text (for 'insert').
+                old_str: Exact text to replace (for 'str_replace'). Must appear exactly once.
+                view_range: Optional [start, end] line numbers for 'view' (-1 = to end of file).
+            """
+            sb = sandbox()
+
+            if command == "view":
+                if view_range and len(view_range) == 2:
+                    start, end = view_range
+                    select_part = f"Select-Object -Skip {start - 1}" + (
+                        "" if end == -1 else f" -First {end - start + 1}"
+                    )
+                    ps_cmd = (
+                        f"$i={start}; Get-Content '{path}' | {select_part} | "
+                        "ForEach-Object { $i.ToString().PadLeft(6) + \"`t\" + $_; $i++ }"
+                    )
+                else:
+                    ps_cmd = (
+                        f"$i=1; Get-Content '{path}' | "
+                        "ForEach-Object { $i.ToString().PadLeft(6) + \"`t\" + $_; $i++ }"
+                    )
+                try:
+                    r = await sb.exec(
+                        ["powershell.exe", "-NoProfile", "-Command", ps_cmd],
+                        timeout=timeout,
+                    )
+                except TimeoutError:
+                    return f"[timeout viewing {path}]"
+                if r.returncode != 0:
+                    return f"Error: {r.stderr or r.stdout}"
+                return (r.stdout or "")[:8000]
+
+            elif command == "create":
+                if file_text is None:
+                    return "Error: file_text required for create."
+                try:
+                    await _ps_write_file(sb, path, file_text, timeout)
+                except RuntimeError as e:
+                    return f"Error creating {path}: {e}"
+                return f"File created: {path}"
+
+            elif command == "str_replace":
+                if old_str is None:
+                    return "Error: old_str required for str_replace."
+                try:
+                    r = await sb.exec(
+                        ["powershell.exe", "-NoProfile", "-Command",
+                         f"Get-Content '{path}' -Raw"],
+                        timeout=timeout,
+                    )
+                except TimeoutError:
+                    return f"[timeout reading {path}]"
+                if r.returncode != 0:
+                    return f"Error reading {path}: {r.stderr}"
+                content = r.stdout or ""
+                if old_str not in content:
+                    return f"Error: old_str not found in {path}."
+                if content.count(old_str) > 1:
+                    return (
+                        f"Error: old_str appears {content.count(old_str)} times "
+                        f"in {path}; make it more specific."
+                    )
+                await sb.exec(
+                    ["powershell.exe", "-NoProfile", "-Command",
+                     f"Copy-Item '{path}' '{path}.bak' -Force"],
+                    timeout=30,
+                )
+                new_content = content.replace(old_str, new_str or "", 1)
+                try:
+                    await _ps_write_file(sb, path, new_content, timeout)
+                except RuntimeError as e:
+                    return f"Error writing {path}: {e}"
+                return f"Replaced in {path}."
+
+            elif command == "insert":
+                if insert_line is None or new_str is None:
+                    return "Error: insert_line and new_str required."
+                try:
+                    r = await sb.exec(
+                        ["powershell.exe", "-NoProfile", "-Command",
+                         f"Get-Content '{path}' -Raw"],
+                        timeout=timeout,
+                    )
+                except TimeoutError:
+                    return f"[timeout reading {path}]"
+                content = r.stdout or ""
+                lines = content.splitlines(keepends=True)
+                await sb.exec(
+                    ["powershell.exe", "-NoProfile", "-Command",
+                     f"Copy-Item '{path}' '{path}.bak' -Force"],
+                    timeout=30,
+                )
+                new_lines = [
+                    l if l.endswith("\n") else l + "\n"
+                    for l in new_str.splitlines()
+                ]
+                lines[insert_line:insert_line] = new_lines
+                try:
+                    await _ps_write_file(sb, path, "".join(lines), timeout)
+                except RuntimeError as e:
+                    return f"Error writing {path}: {e}"
+                return f"Inserted at line {insert_line} in {path}."
+
+            elif command == "undo_edit":
+                try:
+                    r = await sb.exec(
+                        ["powershell.exe", "-NoProfile", "-Command",
+                         f"Copy-Item '{path}.bak' '{path}' -Force"],
+                        timeout=30,
+                    )
+                except TimeoutError:
+                    return "[timeout on undo]"
+                if r.returncode != 0:
+                    return f"No backup found for {path}."
+                return f"Reverted {path} to previous version."
+
+            else:
+                return (
+                    f"Unknown command: {command}. "
+                    "Use: view, create, str_replace, insert, undo_edit."
+                )
+
+        return execute
+
+    return text_editor()
+
+
 def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
     """Hivestorm-only tool: runs verify.sh and reports which checks passed."""
     @tool
@@ -199,8 +384,11 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                 src_file = sp / "verify.ps1"
                 if not src_file.exists():
                     src_file = sp / "verify.sh"
-                await sb.write_file("C:/verify_progress.ps1",
-                                    src_file.read_text(encoding="utf-8"))
+                try:
+                    await _ps_write_file(sb, "C:/verify_progress.ps1",
+                                         src_file.read_text(encoding="utf-8"))
+                except RuntimeError as e:
+                    return f"Score check unavailable: {e}"
                 argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy",
                         "Bypass", "-File", "C:/verify_progress.ps1"]
             else:
@@ -234,10 +422,13 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
     return score_progress()
 
 
-def _tools(timeout: int = 180, use_text_editor: bool = True):
+def _tools(timeout: int = 180, use_text_editor: bool = True, os_name: str = "linux"):
     tools = [_shell_tool(timeout), think()]
     if use_text_editor:
-        tools.append(text_editor())
+        if os_name == "windows":
+            tools.append(_windows_text_editor(timeout))
+        else:
+            tools.append(text_editor())
     return tools
 
 
@@ -265,7 +456,10 @@ async def _verify_in_sandbox(
         src_file = sp / "verify.ps1"
         if not src_file.exists():
             src_file = sp / "verify.sh"  # fallback
-        await sb.write_file("C:/verify.ps1", src_file.read_text(encoding="utf-8"))
+        try:
+            await _ps_write_file(sb, "C:/verify.ps1", src_file.read_text(encoding="utf-8"))
+        except RuntimeError:
+            return False
         argv = [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", "C:/verify.ps1",
@@ -301,8 +495,9 @@ def _react_solver(
     def _wrapped() -> Solver:
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             _prime_os(state)
+            os_name = state.metadata.get("os", "linux")
             is_hardy = state.metadata.get("benchmark") == "meta2"
-            tools = _tools(bash_timeout, use_text_editor=not is_hardy)
+            tools = _tools(bash_timeout, use_text_editor=not is_hardy, os_name=os_name)
             if is_hardy:
                 tools.append(_hardy_text_editor(bash_timeout))
             if state.metadata.get("scorer") == "hivestorm_weighted":
@@ -338,7 +533,8 @@ def _react_solver(
 def basic_solver(message_limit: int = 40, bash_timeout: int = 180) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         _prime_os(state)
-        state.tools = _tools(bash_timeout)
+        os_name = state.metadata.get("os", "linux")
+        state.tools = _tools(bash_timeout, os_name=os_name)
         for _ in range(message_limit):
             state = await _rate_limited_generate(generate, state)
             last = state.messages[-1] if state.messages else None
@@ -378,7 +574,7 @@ def reflexion_solver(
                 sys_prompt += f"\n\n## Lessons from previous attempt\n{correction}"
 
             inner = react(
-                tools=_tools(bash_timeout),
+                tools=_tools(bash_timeout, os_name=os_name),
                 attempts=1,
                 on_continue="Continue, or call submit() if remediation is complete.",
             )

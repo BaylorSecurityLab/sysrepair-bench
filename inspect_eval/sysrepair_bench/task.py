@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 from pathlib import Path
 
 from inspect_ai import Task, task
@@ -252,6 +255,27 @@ def _discover_scenarios(
     return selected
 
 
+def _hivestorm_prepare(scenario_dir: Path) -> None:
+    """Generate build/roles.json and task.md from task.md.tmpl when missing."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from hivestorm.common import roles as _roles  # noqa: PLC0415
+
+    sid = scenario_dir.name.split("-")[1]  # "03" from "scenario-03-win10"
+    seed = int.from_bytes(os.urandom(4), "big")
+    role_map = _roles.build(sid, seed)
+
+    build_dir = scenario_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    (build_dir / "roles.json").write_text(
+        json.dumps(role_map, indent=2) + "\n", encoding="utf-8"
+    )
+
+    tmpl = scenario_dir / "task.md.tmpl"
+    rendered = _roles.render_task(tmpl, role_map)
+    (scenario_dir / "task.md").write_text(rendered, encoding="utf-8")
+
+
 def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
     dockerfile = scenario_dir / "Dockerfile"
     sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
@@ -272,6 +296,8 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
         verify_name = "verify.sh"
 
     if benchmark == "hivestorm":
+        if not (scenario_dir / "task.md").exists():
+            _hivestorm_prepare(scenario_dir)
         task_md = (scenario_dir / "task.md").read_text(encoding="utf-8")
         prompt = HIVESTORM_TEMPLATE.format(
             role=role,
@@ -336,12 +362,20 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
 
     # Merge extra caps / security-opts from .run-opts (e.g. seccomp, apparmor)
     run_opts_kwargs = _load_run_opts(scenario_dir)
-    merged_cap_add = ["NET_ADMIN"] + run_opts_kwargs.get("cap_add", [])
+    # Windows containers (Hyper-V isolation) don't support Linux capabilities.
+    merged_cap_add = (
+        None
+        if os_name == "windows"
+        else ["NET_ADMIN"] + run_opts_kwargs.get("cap_add", [])
+    )
 
     service_kwargs = dict(
         build=ComposeBuild(context=build_context, dockerfile=dockerfile_path),
-        init=True,
-        network_mode="bridge",
+        # init=True injects docker-init (a Linux binary) as PID 1; this crashes
+        # Windows/Hyper-V containers immediately. Leave it None (omitted from YAML)
+        # for Windows so the PowerShell keepalive runs directly as PID 1.
+        init=None if os_name == "windows" else True,
+        network_mode="nat" if os_name == "windows" else "bridge",
         cap_add=merged_cap_add,
         privileged=True if needs_privileged else None,
         isolation="hyperv" if os_name == "windows" else None,
@@ -350,8 +384,18 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
     if not preserve_cmd:
         # Clear any base-image ENTRYPOINT so the keepalive command runs
         # directly (otherwise ENTRYPOINT + command = crash).
-        service_kwargs["entrypoint"] = [""]
-        service_kwargs["command"] = "sleep infinity"
+        if os_name == "windows":
+            # Windows containers have no `sleep` binary; use PowerShell.
+            # Note: docker-compose performs $VAR substitution on YAML values, so
+            # `$true` becomes "" (undefined var) and the loop predicate vanishes,
+            # crashing the container. Escape with `$$` so compose emits `$true`.
+            service_kwargs["command"] = [
+                "powershell", "-NoProfile", "-Command",
+                "while ($$true) { Start-Sleep 3600 }"
+            ]
+        else:
+            service_kwargs["entrypoint"] = [""]
+            service_kwargs["command"] = "sleep infinity"
 
     compose_cfg = _SysRepairComposeConfig(
         services={"default": _SysRepairService(**service_kwargs)}
