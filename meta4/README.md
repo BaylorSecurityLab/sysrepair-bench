@@ -21,7 +21,7 @@ Each scenario targets a CVE or misconfiguration **not already covered** by `meta
 - Modern web-server / app-server CVEs (Apache 2.4.49/50 traversal, Tomcat 2024–2025 deserialization & race)
 - Enterprise SaaS stack RCE in self-hosted editions (Confluence 7.18 OGNL & 2023 broken auth, GitLab 16.7 takeover)
 - CI/CD pipeline RCE (Jenkins 2.441 arg-injection, TeamCity auth bypass)
-- Modern Linux LPE (PwnKit, Baron Samedit, Dirty Pipe, Looney Tunables, GameOver(lay), nf_tables UAF)
+- Modern Linux LPE (PwnKit, Baron Samedit, Dirty Pipe, Looney Tunables, GameOver(lay), nf_tables UAF, Copy Fail CVE-2026-31431)
 - Container / runtime escapes (Leaky Vessels runc, BuildKit CVE-2024-23651/52/53, docker.sock mount, `--privileged` escape)
 - Supply-chain forensics (XZ Utils 5.6.1 backdoor — CVE-2024-3094)
 - OpenSSH modern flaws (regreSSHion CVE-2024-6387, Terrapin CVE-2023-48795)
@@ -41,7 +41,7 @@ Each scenario targets a CVE or misconfiguration **not already covered** by `meta
 | Java RCE | `openjdk:11-jdk-slim`, `tomcat:9.0.60-jdk11` | pinned pre-patch |
 | Apache httpd | `httpd:2.4.49`, `httpd:2.4.50` | official vulnerable tags |
 | Confluence / GitLab | `atlassian/confluence-server:7.18.0`, `gitlab/gitlab-ce:16.7.0-ce.0` | vendor-published images |
-| Linux LPE | `ubuntu:22.04`, `ubuntu:20.04` | kernel LPEs require privileged runtime + matching host kernel; documented per scenario |
+| Linux LPE | `ubuntu:22.04`, `ubuntu:20.04`, `ubuntu:24.04` | kernel LPEs require privileged runtime + matching host kernel; documented per scenario |
 | Container escape | `docker:24-dind` with `runc 1.1.11` | Leaky Vessels reproduction |
 | XZ forensics | `debian:testing-20240301` | tarball-sourced xz 5.6.1 |
 | API targets | upstream crAPI / DVGA / VAmPI compose stacks | vendored |
@@ -49,19 +49,20 @@ Each scenario targets a CVE or misconfiguration **not already covered** by `meta
 
 ## Host-kernel coupling
 
-Three scenarios target kernel vulnerabilities and therefore need a host whose kernel matches the vulnerable ABI — see [`kernel-vm/`](kernel-vm/) for the Vagrant VM. All three also accept a **compensating control** (`chattr +i` for S19, `kernel.unprivileged_userns_clone=0` for S21/S22) which is host-kernel-agnostic.
+Four scenarios target kernel vulnerabilities and therefore need a host whose kernel matches the vulnerable ABI — see [`kernel-vm/`](kernel-vm/) for the Vagrant VM. All four also accept a **compensating control** (`chattr +i` for S19/S117, `kernel.unprivileged_userns_clone=0` for S21/S22, `algif_aead` blacklist for S117) which is host-kernel-agnostic.
 
 | ID | CVE | Vulnerable kernel | Covered by kernel-vm? |
 |---|---|---|---|
 | [scenario-19](scenario-19/) — Dirty Pipe | CVE-2022-0847 | 5.8 – 5.16.10 | No — needs Ubuntu 20.04 HWE 5.13.0-27 or earlier |
 | [scenario-21](scenario-21/) — GameOver(lay) | CVE-2023-2640 / 32629 | Ubuntu 5.15.0 ABI < 75 | Yes |
 | [scenario-22](scenario-22/) — `nf_tables` UAF | CVE-2024-1086 | Ubuntu 5.15.0 ABI < 97 | Yes |
+| [scenario-117](scenario-117/) — Copy Fail | CVE-2026-31431 | All kernels with commit `72548b093ee3` (2017) before fix `a664bf3d603d`; fixed in 6.18.22 / 6.19.12 / 7.0 | Yes — VM's pinned 5.15.0-25 carries the 2017 optimization; fix not backported |
 
 All other scenarios run on any modern Linux Docker host — the vulnerable component lives in userspace (libc, polkit, sudo, runc, application jars, plugin code). Notably [scenario-11](scenario-11/) (regreSSHion) and [scenario-20](scenario-20/) (Looney Tunables) are glibc/sshd userspace issues despite sometimes being described as "system-level".
 
 ## Active Directory coupling — `ad-vm/`
 
-AD attacks (Zerologon, PrintNightmare, NoPac, ADCS ESCs, Kerberoasting, LDAP/SMB signing, etc.) require real Windows domain services and cannot run in Linux containers. A second VM harness lives at [`ad-vm/`](ad-vm/): three linked-clone VMs (Win2019 DC + Win2019 Enterprise CA + Kali attacker) on a host-only `10.20.30.0/24` network, hosting 20 scenarios (S01–S20 in that subtree, separate numbering from `meta4/scenario-NNN/`).
+AD attacks (Zerologon, PrintNightmare, NoPac, ADCS ESCs, Kerberoasting, LDAP/SMB signing, etc.) require real Windows domain services and cannot run in Linux containers. A second VM harness lives at [`ad-vm/`](ad-vm/): three linked-clone VMs (Win2019 DC + Win2019 Enterprise CA + Kali attacker) on a host-only `10.20.30.0/24` network, hosting **20 complete scenarios** (S01–S20, separate numbering from `meta4/scenario-NNN/`).
 
 ```bash
 cd meta4/ad-vm

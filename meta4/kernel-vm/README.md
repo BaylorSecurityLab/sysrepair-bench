@@ -1,6 +1,6 @@
 # Kernel-LPE Vagrant VM
 
-VirtualBox VM with a **pinned vulnerable Ubuntu 22.04 kernel** and Docker pre-installed. The three kernel-level LPE scenarios run as containers inside this VM so they share its vulnerable kernel.
+VirtualBox VM with a **pinned vulnerable Ubuntu 22.04 kernel** and Docker pre-installed. The four kernel-level LPE scenarios run as containers inside this VM so they share its vulnerable kernel.
 
 Host prerequisites: see the [root README §3d](../../README.md). On Linux hosts running KVM/libvirt, VirtualBox fights for `/dev/kvm` — stop `libvirtd` or wire up a `:libvirt` provider.
 
@@ -18,7 +18,7 @@ docker run --rm --privileged s21 bash /verify.sh    # FAIL before remediation
 
 ## Running via Inspect AI (`kernel_vm` preset)
 
-The `kernel_vm` preset in [`inspect_eval/runs.yaml`](../../inspect_eval/runs.yaml) selects scenarios 19/21/22. To make Inspect's docker sandbox build them on the **VM's vulnerable kernel** instead of your laptop's patched one, route docker calls into the VM over SSH:
+The `kernel_vm` preset in [`inspect_eval/runs.yaml`](../../inspect_eval/runs.yaml) selects scenarios 19/21/22/117. To make Inspect's docker sandbox build them on the **VM's vulnerable kernel** instead of your laptop's patched one, route docker calls into the VM over SSH:
 
 ```bash
 # 1. Bring the VM up (one-time per session).
@@ -93,6 +93,7 @@ The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vag
 | S19 Dirty Pipe | CVE-2022-0847 | 5.15.0-25.25 (pre-GA) | No — 22.04 GA already patched |
 | S21 GameOverlay | CVE-2023-2640/32629 | 5.15.0-75 | Yes — VM pins ABI < 75 |
 | S22 nf_tables UAF | CVE-2024-1086 | 5.15.0-97 | Yes — VM pins ABI < 97 |
+| S117 Copy Fail | CVE-2026-31431 | 6.18.22 / 6.19.12 / 7.0 | Yes — fix not backported to 5.15.x; VM's pinned kernel is vulnerable |
 
 ### S19 reproduction
 

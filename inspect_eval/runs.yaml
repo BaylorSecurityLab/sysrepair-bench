@@ -31,6 +31,7 @@ presets:
       - "meta4/scenario-19"
       - "meta4/scenario-21"
       - "meta4/scenario-22"
+      - "meta4/scenario-117"
     message_limit: 0
     token_limit: 0
     time_limit: 3600
@@ -108,6 +109,7 @@ presets:
       - "meta4/scenario-19"
       - "meta4/scenario-21"
       - "meta4/scenario-22"
+      - "meta4/scenario-117"
     message_limit: 0
     token_limit: 0
     time_limit: 3600
