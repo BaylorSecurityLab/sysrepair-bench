@@ -11,7 +11,7 @@ For each scenario, given only the running container and Optional(threat descript
 
 Remediation is scored as successful **only if both checks pass**.
 
-The benchmark comprises **293 scenarios across five VM classes** (six suites): `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (20), and `meta4/` (117) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
+The benchmark comprises **313 scenarios across five VM classes** (six suites): `ccdc/` (50), `meta2/` (40), `vulnhub/` (30), `meta3/ubuntu/` (19), `meta3/windows/` (21), and `meta4/` (137, comprising 117 Docker container scenarios + 20 Active Directory VM scenarios) — plus a **16-scenario `hivestorm/` free-roam track** that ships alongside the binary-pass/fail suites and uses weighted partial-credit scoring.
 
 | VM Class / Suite | Era | Built | Source |
 |---|---|---|---|
@@ -19,8 +19,8 @@ The benchmark comprises **293 scenarios across five VM classes** (six suites): `
 | [`meta2/`](meta2/) | 2008–2012 | 40 | OpenVAS scan of Metasploitable 2.0 on Ubuntu 8.04. ⚠ **Linux host only** (see Host Requirements) |
 | [`vulnhub/`](vulnhub/) | 2012–2022 | 30 | Per-VM vulnerability rebuilds (Kioptrix, DC-series, Mr-Robot, SickOs, Symfonos, etc.) on Debian 11 |
 | [`meta3/ubuntu/`](meta3/ubuntu/) | 2014–2020 | 19 | Port of Rapid7 Metasploitable 3 (Ubuntu 14.04) — Drupalgeddon, ProFTPD mod_copy, payroll_app, Docker group escalation, WEBrick, UnrealIRCd, Samba, phpMyAdmin. Vendors the Rapid7 Chef cookbook under BSD-3. |
-| [`meta3/windows/`](meta3/windows/)| 2016–2020 | 20 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). ⚠ **Windows host only** (see Host Requirements) |
-| **[`meta4/`](meta4/)** | 2022–2026 | 117 | Container suite covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs, ImageMagick, Memcached, curl SOCKS5, Redis Lua sandbox, Adminer, Apache Solr, Rsync, Cacti, and more) that fill the temporal gap left by aging Metasploitable and VulnHub images. Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)), plus a Vagrant AD lab ([`meta4/ad-vm/`](meta4/ad-vm/), S01–S20 in progress; S13 shipping in Phase 0). |
+| [`meta3/windows/`](meta3/windows/)| 2016–2020 | 21 | Rapid7 Metasploitable 3 (Windows Server) — Struts, Jenkins, ManageEngine, GlassFish, Tomcat, ElasticSearch, IIS WebDAV, SMB. Scoped by the [Windows OpenVAS scan](openvas-scan-reports/metasploitable-3.0-win-openvas.pdf). ⚠ **Windows host only** (see Host Requirements) |
+| **[`meta4/`](meta4/)** | 2022–2026 | 137 | Container suite (117 Docker scenarios) covering modern CVEs (Log4Shell family, Spring4Shell, PwnKit, Dirty Pipe, GameOver(lay), regreSSHion, Leaky Vessels, XZ backdoor, Copy Fail CVE-2026-31431, crAPI/DVGA/VAmPI API surfaces, LocalStack/MinIO/ArgoCD/k3s cloud-on-localhost misconfigs, ImageMagick, Memcached, curl SOCKS5, Redis Lua sandbox, Adminer, Apache Solr, Rsync, Cacti, and more) plus an **Active Directory VM lab** ([`meta4/ad-vm/`](meta4/ad-vm/), 20 scenarios: Zerologon, NoPac, ADCS ESC1–ESC8, Kerberoasting, DCSync, PrintNightmare, PetitPotam, and more). Kernel-coupled scenarios ship a Vagrant VM ([`meta4/kernel-vm/`](meta4/kernel-vm/)). |
 | [`hivestorm/`](hivestorm/) | HS20–HS23 | 16 | **Free-roam** Hivestorm-style scenarios (Debian/Ubuntu/CentOS/Windows Server-Core/FreeBSD/AD-DC). Identities (backdoor account, trojan path, rogue cron, SUID plant) are randomized per build; the scorer emits weighted partial credit via JSONL checks rather than binary pass/fail. |
 
 ### Vulnerability categories
@@ -35,52 +35,52 @@ Every scenario's **(expect hivestorm)** `threat.md` is labeled with one of **fiv
 
 ### Severity distribution
 
-Distribution of base severity scores across all 293 scenarios. Scores follow CVSS v3.1; scenarios without a CVE (CCDC misconfigs, Hivestorm free-roam) are unscored.
+Distribution of base severity scores across all 313 scenarios. Scores follow CVSS v3.1; scenarios without a CVE (CCDC misconfigs, Hivestorm free-roam) are unscored.
 
 | Severity | CVSS v3.1 Range | # Scenarios |
 |---|---|---|
-| Critical | 9.0–10.0 | 90 |
-| High | 7.0–8.9 | 89 |
-| Medium | 4.0–6.9 | 40 |
+| Critical | 9.0–10.0 | 93 |
+| High | 7.0–8.9 | 107 |
+| Medium | 4.0–6.9 | 44 |
 | Low | 0.1–3.9 | 1 |
-| Unscored (misconfig / free-roam) | — | 73 |
-| **Total** | | **293** |
+| Unscored (misconfig / free-roam) | — | 68 |
+| **Total** | | **313** |
 
 ### Remediation category distribution
 
 | Remediation Category | # Scenarios |
 |---|---|
-| Configuration Hardening | 106 |
-| Dependency & Package Management | 52 |
-| Access Control | 53 |
-| Compensating Controls | 48 |
-| Network Security | 18 |
+| Configuration Hardening | 111 |
+| Dependency & Package Management | 53 |
+| Access Control | 59 |
+| Compensating Controls | 55 |
+| Network Security | 19 |
 | Free-roam (multiple) | 16 |
-| **Total** | **293** |
+| **Total** | **313** |
 
 ### Service / application type distribution
 
 | Service / Application Type | # Scenarios |
 |---|---|
-| Web Server | 61 |
-| Enterprise / Infrastructure | 27 |
-| System / Auth | 21 |
-| Container / Runtime | 22 |
+| Web Server | 59 |
+| Enterprise / Infrastructure | 34 |
+| System / Auth | 31 |
+| Container / Runtime | 18 |
 | Database / Cache | 19 |
-| SSH / Remote Access | 18 |
+| SSH / Remote Access | 17 |
 | CMS / Web Admin Panel | 17 |
 | Legacy / Backdoor Service | 16 |
 | DNS / mDNS | 12 |
-| Kernel / OS Privilege | 12 |
+| Kernel / OS Privilege | 13 |
 | Firewall / Network Policy | 11 |
-| Application Server / Java | 11 |
+| Application Server / Java | 12 |
 | File Sharing | 11 |
-| Library / Language Runtime | 10 |
-| Free-roam (Hivestorm) | 9 |
+| Library / Language Runtime | 11 |
+| Free-roam (Hivestorm) | 16 |
 | Mail / Messaging | 7 |
 | FTP | 6 |
 | CI/CD / DevOps | 3 |
-| **Total** | **293** |
+| **Total** | **313** |
 
 ## Repository Layout
 
@@ -90,9 +90,9 @@ sysrepair-bench/
 ├── meta2/                   # 40 Metasploitable 2 / OpenVAS scenarios (scenario-01..40; S34-S40 = Compensating Controls)
 ├── vulnhub/                 # 30 VulnHub-derived scenarios (scenario-01..30)
 ├── meta3/ubuntu/            # 19 Metasploitable 3 (Ubuntu 14.04) scenarios + vendored Chef cookbook (shared/)
-├── meta3/windows/           # 20 Metasploitable 3 (Windows Server) scenarios (harness validation)
-├── meta4/                   # 117 modern-CVE container scenarios
-│   ├── kernel-vm/           #   Vagrant VM for kernel-coupled LPE scenarios (S21, S22)
+├── meta3/windows/           # 21 Metasploitable 3 (Windows Server) scenarios (harness validation)
+├── meta4/                   # 137 modern-CVE scenarios (117 Docker + 20 AD-VM)
+│   ├── kernel-vm/           #   Vagrant VM for kernel-coupled LPE scenarios (S19, S21, S22, S117)
 │   └── ad-vm/               #   Vagrant AD lab (Win2019 DC+CA + Kali attacker, S01–S20)
 ├── hivestorm/               # 16 free-roam Hivestorm-style scenarios (weighted partial-credit)
 ├── openvas-scan-reports/    # OpenVAS scan PDFs scoping meta2 and meta3/windows
@@ -151,7 +151,8 @@ SysRepair-Bench builds every scenario from source. Depending on which suites you
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/BaylorSecurityLab/sysrepair-bench.git
+# Anonymous repository URL (provided by reviewing system)
+git clone <anonymous-repo-url>
 cd sysrepair-bench
 ```
 
@@ -226,9 +227,9 @@ Requirements:
 
 Per-scenario isolation recommendations for manual runs are in [`meta3/windows/README.md`](meta3/windows/README.md).
 
-#### 3d. `meta4/kernel-vm/` — VirtualBox VM for kernel-coupled LPE scenarios (S21, S22; optionally S19)
+#### 3d. `meta4/kernel-vm/` — VirtualBox VM for kernel-coupled LPE scenarios (S21, S22, S117; optionally S19)
 
-> These scenarios target kernel vulnerabilities. Containers share the host kernel, so they need a VM whose kernel matches the vulnerable ABI range. S19 (Dirty Pipe) additionally requires a separate Ubuntu 20.04 HWE host — or remediate in **compensating-control mode** (`chattr +i`) on any host.
+> These scenarios target kernel vulnerabilities. Containers share the host kernel, so they need a VM whose kernel matches the vulnerable ABI range. S19 (Dirty Pipe) additionally requires a separate Ubuntu 20.04 HWE host — or remediate in **compensating-control mode** (`chattr +i`) on any host. S117 (Copy Fail, CVE-2026-31431) runs on the existing VM's pinned 5.15 kernel (no backport exists) — or remediate by blacklisting `algif_aead`.
 
 Requirements:
 - **BIOS/UEFI**: Intel VT-x / AMD-V enabled (optionally VT-d / AMD-Vi)
@@ -409,15 +410,7 @@ See [`inspect_eval/README.md`](inspect_eval/README.md) for the full list of task
 
 ## Citation
 
-If you use SysRepair-Bench in your work, please cite:
-
-```
-@misc{sysrepairbench,
-  title  = {SysRepair-Bench: A Benchmark for Autonomous Remediation of Real-World System Vulnerabilities},
-  author = {Orojo, Abanisenioluwa Kolawole and El-Mahmoud, Emmanuelli and Leal, Erika and Rivas, Pablo},
-  year   = {2026},
-}
-```
+Author and citation information are withheld for double-blind review.
 
 ## Acknowledgements
 
