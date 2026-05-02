@@ -1,7 +1,7 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 #
-# Kernel-LPE VM for meta4 scenarios S19, S21, S22.
+# Kernel-LPE VM for meta4 scenarios S19, S21, S22, S117.
 #
 # Provisions an Ubuntu 22.04 VM with a pinned vulnerable kernel and Docker
 # pre-installed. The three kernel-level LPE scenarios (Dirty Pipe,
