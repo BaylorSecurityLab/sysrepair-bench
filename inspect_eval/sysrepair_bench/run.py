@@ -33,6 +33,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import dotenv
 import yaml
 from inspect_ai import eval as inspect_eval
 
@@ -101,6 +102,9 @@ def _ensure_base_images(cfg: dict) -> None:
 
 
 def _load(runs_path: Path, preset_name: str) -> dict:
+    # Load .env from the same directory as runs.yaml so ${VAR} placeholders expand.
+    dotenv.load_dotenv(runs_path.parent / ".env", override=False)
+
     cfg = yaml.safe_load(runs_path.read_text(encoding="utf-8")) or {}
     presets = cfg.get("presets", {})
     if preset_name not in presets:
