@@ -50,11 +50,11 @@ Distribution of base severity scores across all 313 scenarios. Scores follow CVS
 
 | Remediation Category | # Scenarios |
 |---|---|
-| Configuration Hardening | 111 |
-| Dependency & Package Management | 53 |
-| Access Control | 59 |
-| Compensating Controls | 55 |
-| Network Security | 19 |
+| Configuration Hardening | 113 |
+| Dependency & Package Management | 71 |
+| Access Control | 64 |
+| Compensating Controls | 39 |
+| Network Security | 10 |
 | Free-roam (multiple) | 16 |
 | **Total** | **313** |
 
