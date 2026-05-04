@@ -95,6 +95,25 @@ presets:
     request_limit: 15000
     request_window: 18000
 
+  # Re-run MiniMax meta2 only — previous run errored on all meta2 scenarios.
+  # seeds: [1, 5] → two separate runs (success@1 then success@5).
+  # epochs: 5 → 5 independent reruns for SE estimation.
+  minimax_meta2:
+    model: anthropic/MiniMax-M2.7
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    solvers: ["react"]
+    seeds: [1, 5]
+    epochs: 5
+    max_connections: 10
+    mode: day1
+    benchmarks: ["meta2"]
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 15000
+    request_window: 18000
+
   hivestorm_linux_minimax:
     model: anthropic/MiniMax-M2.7
     base_url: https://api.minimax.io/anthropic
