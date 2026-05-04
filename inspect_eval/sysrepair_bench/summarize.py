@@ -1,12 +1,14 @@
 """Summarize a directory of Inspect .eval logs into a model x solver table.
 
 Usage:
-    uv run python -m sysrepair_bench.summarize ./logs/full_matrix
-    uv run python -m sysrepair_bench.summarize ./logs/full_matrix --heatmap out.png
-    uv run python -m sysrepair_bench.summarize ./logs/full_matrix --by benchmark
+    uv run python -m sysrepair_bench.summarize ./logs
+    uv run python -m sysrepair_bench.summarize ./logs --by benchmark
+    uv run python -m sysrepair_bench.summarize ./logs --heatmap out.png
 
-Each cell shows accuracy (CORRECT / total) across all samples scored in that
-(model, solver) eval. Use --by benchmark to break out per-benchmark columns.
+When the log directory contains runs with different ``max_attempts`` values
+(produced by ``seeds: [1, 5]`` in runs.yaml), the table automatically shows
+one success@K column per unique K value found, e.g. success@1 and success@5.
+Otherwise it shows raw accuracy.
 """
 
 from __future__ import annotations
@@ -19,40 +21,60 @@ from inspect_ai.log import list_eval_logs, read_eval_log
 from tabulate import tabulate
 
 
-def _collect(log_dir: Path, by: str) -> tuple[dict, list[str], list[str]]:
-    """Return (cells, row_keys, col_keys).
+def _is_pass(score_value) -> bool:
+    return str(score_value).upper() in ("C", "CORRECT", "1", "1.0", "TRUE")
 
-    cells[(row, col)] = (correct, total)
+
+def _score_value(sample) -> float | None:
+    """Return numeric pass (1.0) / fail (0.0) for a sample, or None if unscored."""
+    score = sample.scores.get("verify_sh_scorer") if sample.scores else None
+    if score is None and sample.scores:
+        score = next(iter(sample.scores.values()))
+    if score is None:
+        return None
+    return 1.0 if _is_pass(score.value) else 0.0
+
+
+def _collect(log_dir: Path, by: str):
+    """Read all logs and return a structured data dict.
+
+    Returns
+    -------
+    data : dict
+        {(model, col, seeds_k): (correct, total)}
+        where seeds_k = max_attempts from task_args (int).
+    seeds_ks : sorted list of unique seeds_k values found.
+    rows : sorted list of model names.
+    cols : sorted list of column labels.
     """
-    cells: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+    # (model, col, seeds_k) → [correct, total]
+    cells: dict[tuple, list[int]] = defaultdict(lambda: [0, 0])
     rows: set[str] = set()
     cols: set[str] = set()
+    seeds_ks: set[int] = set()
 
     for info in list_eval_logs(str(log_dir)):
         log = read_eval_log(info.name, header_only=False)
         model = log.eval.model or "unknown-model"
-        solver = (log.eval.task_args or {}).get("solver", "unknown-solver")
+        task_args = log.eval.task_args or {}
+        solver = task_args.get("solver", "unknown-solver")
+        seeds_k = int(task_args.get("max_attempts", 1))
+
+        rows.add(model)
+        seeds_ks.add(seeds_k)
 
         for sample in log.samples or []:
             benchmark = (sample.metadata or {}).get("benchmark", "?")
-            if by == "benchmark":
-                row, col = model, f"{solver}/{benchmark}"
-            elif by == "solver":
-                row, col = model, solver
-            else:
-                row, col = model, solver
-            rows.add(row)
+            col = f"{solver}/{benchmark}" if by == "benchmark" else solver
             cols.add(col)
-            score = sample.scores.get("verify_sh_scorer") if sample.scores else None
-            if score is None and sample.scores:
-                score = next(iter(sample.scores.values()))
-            if score is None:
+            v = _score_value(sample)
+            if v is None:
                 continue
-            cells[(row, col)][1] += 1
-            if str(score.value).upper() in ("C", "CORRECT", "1", "1.0", "TRUE"):
-                cells[(row, col)][0] += 1
+            cells[(model, col, seeds_k)][1] += 1
+            if v == 1.0:
+                cells[(model, col, seeds_k)][0] += 1
 
-    return cells, sorted(rows), sorted(cols)
+    return cells, sorted(seeds_ks), sorted(rows), sorted(cols)
 
 
 def _fmt(c: int, t: int) -> str:
@@ -74,29 +96,57 @@ def main() -> None:
     if not log_dir.exists():
         raise SystemExit(f"Log dir not found: {log_dir}")
 
-    cells, rows, cols = _collect(log_dir, args.by)
+    cells, seeds_ks, rows, cols = _collect(log_dir, args.by)
     if not cells:
         raise SystemExit("No scored samples found.")
 
-    # ---- text table ----
-    table = [[r] + [_fmt(*cells[(r, c)]) for c in cols] for r in rows]
-    print(tabulate(table, headers=["model"] + cols, tablefmt="github"))
+    multi_seed = len(seeds_ks) > 1 or (seeds_ks and seeds_ks[0] != 1)
 
-    # ---- aggregate row ----
-    totals = []
-    for c in cols:
-        tot_c = sum(cells[(r, c)][0] for r in rows)
-        tot_t = sum(cells[(r, c)][1] for r in rows)
-        totals.append(_fmt(tot_c, tot_t))
-    print("\n" + tabulate([["ALL"] + totals], headers=["model"] + cols, tablefmt="github"))
+    if multi_seed:
+        # ---- multi-seed mode: one table per K value (success@K columns) ----
+        # Build wide table: rows=model, cols=solver[/bench] × seeds_k
+        wide_cols = [f"{c} success@{k}" for k in seeds_ks for c in cols]
+        table = []
+        for r in rows:
+            row_vals = [_fmt(*cells[(r, c, k)]) for k in seeds_ks for c in cols]
+            table.append([r] + row_vals)
+        print(tabulate(table, headers=["model"] + wide_cols, tablefmt="github"))
 
-    # ---- heatmap ----
+        # Aggregate totals
+        totals = []
+        for k in seeds_ks:
+            for c in cols:
+                tot_c = sum(cells[(r, c, k)][0] for r in rows)
+                tot_t = sum(cells[(r, c, k)][1] for r in rows)
+                totals.append(_fmt(tot_c, tot_t))
+        print("\n" + tabulate(
+            [["ALL"] + totals],
+            headers=["model"] + wide_cols,
+            tablefmt="github",
+        ))
+    else:
+        # ---- single-seed mode: raw accuracy ----
+        k = seeds_ks[0] if seeds_ks else 1
+        table = [[r] + [_fmt(*cells[(r, c, k)]) for c in cols] for r in rows]
+        print(tabulate(table, headers=["model"] + cols, tablefmt="github"))
+
+        totals = []
+        for c in cols:
+            tot_c = sum(cells[(r, c, k)][0] for r in rows)
+            tot_t = sum(cells[(r, c, k)][1] for r in rows)
+            totals.append(_fmt(tot_c, tot_t))
+        print("\n" + tabulate([["ALL"] + totals], headers=["model"] + cols,
+                               tablefmt="github"))
+
+    # ---- heatmap (single-seed only) ----
     if args.heatmap:
         import numpy as np
         import matplotlib.pyplot as plt
 
+        k = seeds_ks[0] if seeds_ks else 1
         data = np.array([
-            [(cells[(r, c)][0] / cells[(r, c)][1]) if cells[(r, c)][1] else float("nan")
+            [(cells[(r, c, k)][0] / cells[(r, c, k)][1])
+             if cells[(r, c, k)][1] else float("nan")
              for c in cols]
             for r in rows
         ])
@@ -111,7 +161,8 @@ def main() -> None:
                     ax.text(j, i, f"{v:.0%}", ha="center", va="center",
                             color="black", fontsize=8)
         plt.colorbar(im, ax=ax, label="accuracy")
-        ax.set_title(f"SysRepair-Bench accuracy ({log_dir.name})")
+        seed_label = f"success@{k}" if multi_seed else "accuracy"
+        ax.set_title(f"SysRepair-Bench {seed_label} ({log_dir.name})")
         fig.tight_layout()
         fig.savefig(args.heatmap, dpi=150)
         print(f"\nHeatmap written to {args.heatmap}")

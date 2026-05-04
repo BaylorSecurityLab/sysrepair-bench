@@ -534,6 +534,14 @@ async def _verify_in_sandbox(
             result = await sb.exec(["bash", "/tmp/verify.sh"], timeout=timeout)
     except (TimeoutError, RuntimeError):
         return False
+    finally:
+        if os_name == "windows":
+            await sb.exec(
+                ["powershell.exe", "-Command", "Remove-Item -Force 'C:/verify.ps1'"],
+                timeout=10,
+            )
+        elif os_name != "freebsd":
+            await sb.exec(["rm", "-f", "/tmp/verify.sh"], timeout=10)
     return result.returncode == 0
 
 
