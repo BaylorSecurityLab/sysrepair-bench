@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "tabulate>=0.9",
     "matplotlib>=3.8",
+    "anthropic>=0.97.0",
 ]
 
 [build-system]

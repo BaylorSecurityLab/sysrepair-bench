@@ -2,15 +2,24 @@
 #
 # Swap models by editing the `model:` line in the target preset before running.
 # 0 = unlimited for: message_limit, time_limit, token_limit, request_limit.
+#
+# seeds   — submit() chances per scenario (same container).
+#           Integer: seeds: 5  → one run, model gets 5 chances.
+#           Array:   seeds: [1, 5]  → two separate runs (success@1 then success@5).
+#           CLI override: --seeds 1 5
+# epochs  — independent re-runs of the whole experiment for variance estimation.
+#           CLI override: --epochs 3
 
 defaults:
-  max_attempts: 1
+  seeds: 1
+  epochs: 1
   max_connections: 2
   log_dir: ./logs
   bash_timeout: 240
   verify_timeout: 360
   fail_on_error: 0.25
   retry_on_error: 2
+  time_limit: 3600
 
 presets:
   smoke:
@@ -22,8 +31,12 @@ presets:
 
   # Linux containers across all benches except hivestorm.
   linux_all:
-    model: openai/qwen3.5-9b
+    model: openai/Qwen/Qwen3.5-9B
+    base_url: http://10.100.201.24:8000/v1
+    api_key: vllm
     solvers: ["react"]
+    seeds: [1, 5]
+    epochs: 5
     max_connections: 10
     modes: ["day1", "zero_day"]
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
@@ -36,6 +49,73 @@ presets:
     token_limit: 0
     time_limit: 3600
     request_limit: 0
+
+  # Qwen3-35B-A3B (MoE) on a dedicated vllm server.
+  # base_url / api_key are baked in — they never read from .env, so the server
+  # stays fixed even when the run cycles through day1 → zero_day modes.
+  linux_all_qwen35:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    base_url: http://localhost:8001/v1
+    api_key: vllm
+    solvers: ["react"]
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 15
+    modes: ["day1", "zero_day"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    exclude:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  # MiniMax-M2.7 via Anthropic-compatible API.
+  # Rate limit: 15,000 requests per 5-hour rolling window (150k/week).
+  # Set api_key to your MiniMax API key before running.
+  linux_all_minimax:
+    model: anthropic/MiniMax-M2.7
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    solvers: ["react"]
+    seeds: [1, 5]
+    epochs: 5
+    max_connections: 10
+    modes: ["day1", "zero_day"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    exclude:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 15000
+    request_window: 18000
+
+  hivestorm_linux_minimax:
+    model: anthropic/MiniMax-M2.7
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    solvers: ["react"]
+    mode: zero_day
+    scenarios:
+      - "hivestorm/scenario-01-debian9"
+      - "hivestorm/scenario-02-ubuntu1604"
+      - "hivestorm/scenario-06-debian9-postgres"
+      - "hivestorm/scenario-07-ubuntu1804-samba"
+      - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
+      - "hivestorm/scenario-10-ubuntu-faillock"
+      - "hivestorm/scenario-12-centos7-lamp"
+      - "hivestorm/scenario-15-docker-host"
+      - "hivestorm/scenario-16-nginx-phpfpm"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 15000
+    request_window: 18000
 
   # Windows containers across all benches except hivestorm.
   windows_all:
@@ -51,7 +131,31 @@ presets:
 
   # Hivestorm Linux (free-roam hardening).
   hivestorm_linux:
-    model: openai/qwen3.5-9b
+    model: openai/Qwen/Qwen3.5-9B
+    base_url: http://10.100.201.24:8000/v1
+    api_key: vllm
+    solvers: ["react"]
+    mode: zero_day
+    scenarios:
+      - "hivestorm/scenario-01-debian9"
+      - "hivestorm/scenario-02-ubuntu1604"
+      - "hivestorm/scenario-06-debian9-postgres"
+      - "hivestorm/scenario-07-ubuntu1804-samba"
+      - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
+      - "hivestorm/scenario-10-ubuntu-faillock"
+      - "hivestorm/scenario-12-centos7-lamp"
+      - "hivestorm/scenario-15-docker-host"
+      - "hivestorm/scenario-16-nginx-phpfpm"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  # Hivestorm Linux — Qwen3.5-35B-A3B MoE on dedicated vllm server.
+  hivestorm_linux_qwen35:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    base_url: http://localhost:8001/v1
+    api_key: vllm
     solvers: ["react"]
     mode: zero_day
     max_connections: 10
