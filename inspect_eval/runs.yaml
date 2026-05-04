@@ -36,7 +36,7 @@ presets:
     api_key: vllm
     solvers: ["react"]
     seeds: [1, 5]
-    epochs: 5
+    epochs: 2
     max_connections: 10
     modes: ["day1", "zero_day"]
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
@@ -81,7 +81,7 @@ presets:
     api_key: ${MINIMAX_API_KEY}
     solvers: ["react"]
     seeds: [1, 5]
-    epochs: 5
+    epochs: 2
     max_connections: 10
     modes: ["day1", "zero_day"]
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
@@ -202,7 +202,6 @@ presets:
     token_limit: 0
     time_limit: 3600
     request_limit: 0
-
 
   # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host
   kernel_vm:
