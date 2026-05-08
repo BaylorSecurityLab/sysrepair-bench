@@ -79,11 +79,73 @@ presets:
     model: openai/MiniMax-M2.7
     base_url: https://api.minimax.io/v1
     api_key: ${MINIMAX_API_KEY}
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    seeds: [1, 5]
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    exclude:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 15000
+    request_window: 18000
+
+  # Zero-day only runs — success@1 and success@5, 2 independent epochs.
+  # These mirror the day1 presets but lock mode=zero_day so the server URL
+  # never flips between modes.
+  zero_day_9b:
+    model: openai/Qwen/Qwen3.5-9B
+    base_url: http://10.100.201.24:8000/v1
+    api_key: vllm
     solvers: ["react"]
     seeds: [1, 5]
     epochs: 2
     max_connections: 10
-    modes: ["day1", "zero_day"]
+    mode: zero_day
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    exclude:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+      - "meta4/scenario-117"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  zero_day_qwen35:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    base_url: http://localhost:8001/v1
+    api_key: vllm
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    seeds: [1, 5]
+    epochs: 1
+    max_connections: 30
+    mode: zero_day
+    benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+    exclude:
+      - "meta4/scenario-19"
+      - "meta4/scenario-21"
+      - "meta4/scenario-22"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  zero_day_minimax:
+    model: openai/MiniMax-M2.7
+    base_url: https://api.minimax.io/v1
+    api_key: ${MINIMAX_API_KEY}
+    solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 10
+    mode: zero_day
     benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
     exclude:
       - "meta4/scenario-19"
@@ -104,7 +166,7 @@ presets:
     api_key: ${MINIMAX_API_KEY}
     solvers: ["react"]
     seeds: [1, 5]
-    epochs: 5
+    epochs: 2
     max_connections: 10
     mode: day1
     benchmarks: ["meta2"]
@@ -167,6 +229,20 @@ presets:
       - "hivestorm/scenario-12-centos7-lamp"
       - "hivestorm/scenario-15-docker-host"
       - "hivestorm/scenario-16-nginx-phpfpm"
+    message_limit: 0
+    token_limit: 0
+    time_limit: 3600
+    request_limit: 0
+
+  # Smoke test — scenario-15 Docker host hardening only, local vllm (port 8001).
+  qwen9b_scenario15:
+    model: openai/Qwen/Qwen3.5-9B
+    base_url: http://localhost:8001/v1
+    api_key: vllm
+    solver: react
+    scenarios: ["hivestorm/scenario-15-docker-host"]
+    mode: zero_day
+    max_connections: 1
     message_limit: 0
     token_limit: 0
     time_limit: 3600

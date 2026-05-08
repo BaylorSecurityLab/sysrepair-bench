@@ -32,7 +32,7 @@ done
 grp=false; exec_ok=false
 if getent passwd "$BACKDOOR" >/dev/null; then
     id -nG "$BACKDOOR" 2>/dev/null | tr ' ' '\n' | grep -qx docker && grp=true
-    su - "$BACKDOOR" -c 'docker ps' >/dev/null 2>&1 && exec_ok=true
+    su - "$BACKDOOR" -c 'timeout 5 docker ps' >/dev/null 2>&1 && exec_ok=true
 fi
 if $grp || $exec_ok; then
     emit backdoor_not_in_docker 3 false "grp=$grp docker_ps=$exec_ok"
@@ -59,7 +59,7 @@ fi
 cfg=false; api_ok=false
 grep -qE '"tcp://0\.0\.0\.0:' /etc/docker/daemon.json 2>/dev/null && cfg=true
 # docker client against tcp://127.0.0.1:$TCP_PORT — succeeds if daemon listens.
-docker -H "tcp://127.0.0.1:${TCP_PORT}" info >/dev/null 2>&1 && api_ok=true
+timeout 5 docker -H "tcp://127.0.0.1:${TCP_PORT}" info >/dev/null 2>&1 && api_ok=true
 if $cfg || $api_ok; then
     emit dockerd_no_public_tcp 3 false "cfg=$cfg api=$api_ok"
 else
@@ -115,7 +115,7 @@ if [ -S /var/run/docker.sock ]; then
 fi
 probe_u="_hs_sockprobe_$$"
 useradd -m -s /bin/bash "$probe_u" >/dev/null 2>&1
-su - "$probe_u" -c 'docker ps' >/dev/null 2>&1 && nogrp_ok=true
+su - "$probe_u" -c 'timeout 5 docker ps' >/dev/null 2>&1 && nogrp_ok=true
 userdel -r "$probe_u" >/dev/null 2>&1
 if $mode_bad || $nogrp_ok; then
     emit docker_sock_perms 2 false "mode=${mode:-absent} nongroup_access=$nogrp_ok"
@@ -139,7 +139,7 @@ if docker inspect "$BACKDOOR_NAME" >/dev/null 2>&1; then
     printf '%s' "$BINDS" | grep -Eq '^/:|:/host'   && any_priv=true
     printf '%s' "$BINDS" | grep -q  '/var/run/docker.sock' && any_priv=true
     printf '%s' "$CAPS"  | grep -qi SYS_ADMIN             && any_priv=true
-    docker exec "$BACKDOOR_NAME" sh -c 'test -r /host/etc/hostname' >/dev/null 2>&1 \
+    timeout 5 docker exec "$BACKDOOR_NAME" sh -c 'test -r /host/etc/hostname' >/dev/null 2>&1 \
         && escape_ok=true
 fi
 if $any_priv || $escape_ok; then

@@ -18,6 +18,7 @@ from inspect_ai.util._sandbox.compose import (
     ComposeService,
 )
 
+from .category_table import classify_threat
 from .rate_limiter import init_rate_limiter
 from .scorer import dispatch_scorer
 from .solvers import get_solver
@@ -690,6 +691,7 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
             "os": os_name,
             "verify_script": verify_name,
             "scorer": scorer_kind,
+            "category": classify_threat(scenario_dir / "threat.md"),
         },
         sandbox=SandboxEnvironmentSpec(type="docker", config=compose_cfg),
     )

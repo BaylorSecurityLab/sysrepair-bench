@@ -127,6 +127,13 @@ start_backdoor() {
     sleep 5
   done ) &
 
-wait
+# Keep the container alive and restart dockerd if the agent kills it while
+# applying daemon.json changes. Plain `wait` exits when the original dockerd
+# PID exits, even if a new dockerd was started — container then stops, which
+# breaks all subsequent tool calls.
+while true; do
+    pgrep -x dockerd >/dev/null 2>&1 || dockerd >>/var/log/dockerd.log 2>&1 &
+    sleep 10
+done
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh

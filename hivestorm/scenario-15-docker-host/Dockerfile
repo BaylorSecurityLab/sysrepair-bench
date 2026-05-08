@@ -32,4 +32,11 @@ RUN chmod 0600 /etc/sysrepair/roles.json \
 
 EXPOSE 22 2375 8080
 
+# Inspect AI uses `compose up --wait`, which blocks until this healthcheck
+# passes. Without a healthcheck the outer container is considered "running"
+# the instant its PID 1 starts — before the inner dockerd socket is ready —
+# causing compose exec to fail with "service not running" under load.
+HEALTHCHECK --interval=5s --timeout=10s --start-period=15s --retries=18 \
+  CMD DOCKER_HOST=unix:///var/run/docker.sock docker info >/dev/null 2>&1
+
 CMD ["/usr/local/sbin/hs-start.sh"]

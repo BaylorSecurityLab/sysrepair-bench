@@ -455,14 +455,19 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                 except TimeoutError:
                     return "Score check timed out."
             else:
-                await sb.write_file("/tmp/verify_progress.sh",
-                                    (sp / "verify.sh").read_text(encoding="utf-8"))
-                await sb.exec(["chmod", "+x", "/tmp/verify_progress.sh"])
+                try:
+                    await sb.write_file("/tmp/verify_progress.sh",
+                                        (sp / "verify.sh").read_text(encoding="utf-8"))
+                    await sb.exec(["chmod", "+x", "/tmp/verify_progress.sh"])
+                except RuntimeError as e:
+                    return f"Score check unavailable: {e}"
                 argv = ["bash", "/tmp/verify_progress.sh"]
                 try:
                     result = await sb.exec(argv, timeout=verify_timeout)
                 except TimeoutError:
                     return "Score check timed out."
+                except RuntimeError as e:
+                    return f"Score check unavailable: {e}"
             passed = []
             total_earned = 0
             for line in (result.stdout or "").splitlines():
