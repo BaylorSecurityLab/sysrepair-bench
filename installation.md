@@ -34,6 +34,19 @@ recommend three hosts.
 
 If you only have one machine, see [Single-host fallbacks](#single-host-fallbacks) below.
 
+### Recommended specs
+
+Sized for parallel evals plus headroom for Docker layer cache, Windows base images,
+and concurrent VMs (the meta4/ad-vm lab brings up DC + CA + Kali simultaneously, ~8 GB
+of guest RAM at peak). All storage figures assume **SSD/NVMe** — spinning disks make
+the Win2019 box's first-boot sysprep painfully slow.
+
+| Host | CPU | RAM | Storage | Notes |
+|---|---|---|---|---|
+| **Host A — Linux Docker** | 8 cores / 16 threads | 16 GB min, **32 GB recommended** | **200 GB SSD** | Docker layer cache + meta2 Hardy multi-stage build + ~250 container images grow fast under repeated runs. |
+| **Host B — Windows containers** | 8 cores / 16 threads | 16 GB min, **32 GB recommended** | **150 GB SSD** | Windows Server Core ltsc2019 base is ~5 GB. Hyper-V isolation utility-VM overhead is real — don't go below 16 GB. |
+| **Host C — Vagrant VMs** | 6 cores min, 8 recommended | 16 GB min, **32 GB recommended** | **250 GB SSD** | meta4/ad-vm peaks at ~8 GB guest RAM (3 concurrent VMs). Win2019 + FreeBSD + Ubuntu Vagrant boxes total ~40 GB before snapshots. |
+
 ### Suite → host mapping
 
 | Suite | Host A (Linux+Docker) | Host B (Win+Hyper-V) | Host C (Vagrant) |

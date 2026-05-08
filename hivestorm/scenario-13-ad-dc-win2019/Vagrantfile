@@ -1,6 +1,33 @@
 # Hivestorm scenario-13 — Windows Server 2019 AD DC (single-domain).
-# Promotes the box to a DC on first provisioner pass, then runs seed.ps1
-# after the reboot. verify.ps1 is shipped to C:\ProgramData\sysrepair\.
+#
+# DCPROMO architecture (single-shot, no WinRM session held during SAM destruction):
+#   Install-ADDSForest destroys the local SAM the moment it returns. ANY
+#   concurrent WinRM-driven provisioner gets 401'd mid-execution. So we
+#   collapse all post-promotion work (DA grant + seed + OpenSSH + scrub +
+#   marker) into a single SYSTEM-context AtStartup task that runs OUTSIDE
+#   any WinRM session.
+#
+#   Flow:
+#     1. 01-register-dc-bootstrap.ps1 (WinRM, local SAM alive):
+#          - stage roles.json, dc-bootstrap.ps1, seed.ps1, vagrant_key.pub
+#            into C:\hs13-setup\
+#          - Install-WindowsFeature AD-Domain-Services
+#          - Register-ScheduledTask hs13-bootstrap (SYSTEM, AtStartup,
+#            payload = C:\hs13-setup\bootstrap.ps1)
+#     2. config.vm.provision :reload — graceful reboot via vagrant-reload.
+#     3. hs13-bootstrap fires (SYSTEM, no WinRM):
+#          Install-ADDSForest -NoReboot
+#          → wait for AD Web Services
+#          → Add-ADGroupMember Domain Admins (OPS\vagrant)  ← unblocks WinRM
+#          → run seed.ps1
+#          → install OpenSSH + bridge pubkey + sshd_config fix
+#          → scrub answer key
+#          → write BOOTSTRAP_COMPLETE marker, unregister task
+#     4. 02-wait-bootstrap.ps1 (WinRM as OPS\vagrant — works because
+#        Phase B granted DA before writing the marker): polls for the
+#        marker and exits.
+#
+# Requires the vagrant-reload plugin: `vagrant plugin install vagrant-reload`.
 
 require 'json'
 
@@ -8,13 +35,11 @@ ROLES_PATH = File.join(File.dirname(__FILE__), 'build', 'roles.json')
 unless File.exist?(ROLES_PATH)
   abort "missing #{ROLES_PATH}. Run `hivestorm/prepare.sh 13` first."
 end
-ROLES = JSON.parse(File.read(ROLES_PATH))
 
-# Inspect AI bridge container public key, written by _prepare_vagrant_bridge()
-# in task.py before `vagrant up`. The provisioner installs it into
-# administrators_authorized_keys so the bridge can SSH in as `vagrant`.
 BRIDGE_PUBKEY_PATH = File.join(File.dirname(__FILE__), 'build', 'vagrant_key.pub')
-BRIDGE_PUBKEY = File.exist?(BRIDGE_PUBKEY_PATH) ? File.read(BRIDGE_PUBKEY_PATH).strip : ''
+unless File.exist?(BRIDGE_PUBKEY_PATH)
+  abort "missing #{BRIDGE_PUBKEY_PATH}. Run via Inspect AI (it generates the bridge keypair) or generate manually with `ssh-keygen -t ed25519 -N '' -f build/vagrant_key`."
+end
 
 Vagrant.configure("2") do |config|
   # jborean93/WindowsServer2019 is the proven-working box used by meta4/ad-vm.
@@ -25,23 +50,30 @@ Vagrant.configure("2") do |config|
   config.winrm.username   = "vagrant"
   config.winrm.password   = "vagrant"
   config.winrm.transport   = :negotiate
-  config.winrm.retry_limit = 40
+  # Retry budget covers the post-DCPROMO auth window: when wait-bootstrap
+  # connects, OPS\vagrant may not yet have Domain Admin (Phase B hasn't run).
+  # Vagrant retries on connect-side errors; with auth flapping briefly,
+  # retry_limit=300 over a 60s effective wait means ~5 min of patience.
+  config.winrm.retry_limit = 300
   config.winrm.timeout     = 300
 
-  # AD DC promotion + reboot in Stage 1 wants serious headroom on first boot.
-  config.vm.boot_timeout = 1200
+  # 40 min: jborean93 box's first-boot sysprep is slow (~25 min) when other
+  # VMs share the host's disk I/O. The bootstrap-chain reload after DCPROMO
+  # also needs headroom because Phase A reboots the OS twice.
+  config.vm.boot_timeout = 2400
 
   config.vm.provider "virtualbox" do |vb, override|
     vb.gui = false
     vb.memory = 4096
     vb.cpus   = 2
     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
-    override.vm.network "private_network", ip: "192.168.56.13"
-    # Forward OpenSSH (installed by the install-ssh-and-cleanup provisioner)
-    # so the Inspect bridge container can reach it via host.docker.internal:2223.
-    # 2222 is reserved for scenario-14's FreeBSD VM; use 2223 here.
-    # `id: "ssh"` overrides the box's default 22→2222 forward instead of
-    # adding a duplicate (which Vagrant would auto-correct to 2200).
+    # No private_network: the Inspect bridge connects via NAT-forwarded
+    # host.docker.internal:2223, and a second VM can't share another
+    # scenario's host-only adapter while it's running on VBox 7.2
+    # (VERR_INTNET_FLT_IF_NOT_FOUND).
+    # Forward OpenSSH so the Inspect bridge can reach it via host.docker.internal:2223.
+    # 2222 is reserved for scenario-14's FreeBSD VM. `id: "ssh"` overrides
+    # the box's default 22→2222 forward instead of adding a duplicate.
     override.vm.network "forwarded_port", guest: 22, host: 2223,
                                           id: "ssh", auto_correct: true
   end
@@ -52,104 +84,42 @@ Vagrant.configure("2") do |config|
     hv.enable_virtualization_extensions = false
     hv.linked_clone = true
     # Hyper-V would otherwise SMB-share ./ into /vagrant and prompt for the
-    # host user's password. Upload files via the `file` provisioner below
-    # instead so no SMB credentials are needed.
+    # host user's password. Upload via `file` provisioners below instead.
     override.vm.synced_folder ".", "/vagrant", disabled: true
   end
 
-  # Upload files over WinRM (provider-agnostic, replaces the C:\vagrant share).
+  # Upload data files the provisioning scripts read (provider-agnostic).
   config.vm.provision "file",
     source: "build/roles.json",
     destination: "C:/Users/vagrant/provisioning/roles.json"
   config.vm.provision "file",
+    source: "build/vagrant_key.pub",
+    destination: "C:/Users/vagrant/provisioning/vagrant_key.pub"
+  config.vm.provision "file",
     source: "seed.ps1",
     destination: "C:/Users/vagrant/provisioning/seed.ps1"
   config.vm.provision "file",
-    source: "verify.ps1",
-    destination: "C:/Users/vagrant/provisioning/verify.ps1"
+    source: "provision/dc-bootstrap.ps1",
+    destination: "C:/Users/vagrant/provisioning/dc-bootstrap.ps1"
+  # verify.ps1 is uploaded by the Inspect scorer over SSH at eval time
+  # (see scorer.py _run_verify), so it is intentionally NOT shipped here.
 
-  # Stage 1: promote to DC. Needs reboot.
+  # Stage 1: install AD-DS role + register the self-driving bootstrap task.
   config.vm.provision "shell",
-    name: "promote-to-dc",
-    reboot: true,
-    inline: <<~PS1, privileged: true, powershell_elevated_interactive: true
-      $ErrorActionPreference = "Stop"
-      $domain      = "#{ROLES["domain_fqdn"]}"
-      $netbios     = "#{ROLES["domain_netbios"]}"
-      $dsrmPwPlain = "#{ROLES["dsrm_password"]}"
+    name: "register-dc-bootstrap",
+    path: "provision/01-register-dc-bootstrap.ps1",
+    privileged: true
 
-      # Roles.json landing spot.
-      New-Item -ItemType Directory -Path 'C:\\ProgramData\\sysrepair' -Force | Out-Null
-      Copy-Item 'C:\\Users\\vagrant\\provisioning\\roles.json' 'C:\\ProgramData\\sysrepair\\roles.json' -Force
-      icacls 'C:\\ProgramData\\sysrepair\\roles.json' /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' | Out-Null
+  # Stage 2: graceful reboot. Triggers the SYSTEM hs13-bootstrap task on
+  # the next boot, which does DCPROMO + DA grant + seed + OpenSSH + marker
+  # all inside one SYSTEM-context script (no WinRM session held).
+  config.vm.provision :reload
 
-      if (-not (Get-WindowsFeature AD-Domain-Services).Installed) {
-          Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
-      }
-
-      # Only promote if not already a DC.
-      $isDC = (Get-WmiObject -Class Win32_ComputerSystem).DomainRole -ge 4
-      if (-not $isDC) {
-          $dsrmPw = ConvertTo-SecureString $dsrmPwPlain -AsPlainText -Force
-          Install-ADDSForest `
-              -DomainName $domain `
-              -DomainNetbiosName $netbios `
-              -SafeModeAdministratorPassword $dsrmPw `
-              -InstallDns `
-              -Force:$true `
-              -NoRebootOnCompletion:$true | Out-Null
-      }
-    PS1
-
-  # Stage 2: seed misconfigurations.
+  # Stage 3: WinRM reconnects as OPS\vagrant (which now has Domain Admin
+  # because the bootstrap task granted it before writing the marker).
+  # Poll for the marker; throw if the chain didn't finish.
   config.vm.provision "shell",
-    name: "seed-misconfigs",
-    inline: <<~PS1, privileged: true, powershell_elevated_interactive: true
-      $ErrorActionPreference = "Continue"
-      Copy-Item 'C:\\Users\\vagrant\\provisioning\\seed.ps1' 'C:\\ProgramData\\sysrepair\\seed.ps1' -Force
-      powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\ProgramData\\sysrepair\\seed.ps1'
-      Remove-Item 'C:\\ProgramData\\sysrepair\\seed.ps1' -Force
-    PS1
-
-  # Stage 3: install OpenSSH Server (so the Inspect bridge can SSH in) and
-  # strip eval scaffolding so the agent cannot read the answer key.
-  config.vm.provision "shell",
-    name: "install-ssh-and-cleanup",
-    inline: <<~PS1, privileged: true, powershell_elevated_interactive: true
-      $ErrorActionPreference = "Continue"
-      $bridgePub = @'
-#{BRIDGE_PUBKEY}
-'@
-      if (-not $bridgePub.Trim()) {
-          Write-Error "build/vagrant_key.pub is empty. Run via Inspect AI which generates the bridge keypair, or generate it manually with ssh-keygen."
-          exit 1
-      }
-
-      # Install OpenSSH Server.
-      $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
-      if ($cap.State -ne 'Installed') {
-          Add-WindowsCapability -Online -Name $cap.Name | Out-Null
-      }
-      Set-Service -Name sshd -StartupType Automatic
-      Start-Service sshd
-
-      # Firewall rule (the OpenSSH capability normally adds this, but make sure).
-      if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
-          New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
-              -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
-      }
-
-      # Drop the bridge public key into administrators_authorized_keys
-      # (Windows OpenSSH requires this special file for accounts in Administrators).
-      $authKey = 'C:\\ProgramData\\ssh\\administrators_authorized_keys'
-      Set-Content -Path $authKey -Value $bridgePub -Encoding ascii -Force -NoNewline
-      icacls $authKey /inheritance:r /grant 'Administrators:F' 'SYSTEM:F' | Out-Null
-
-      # Anti-contamination: erase the answer key from the VM. The Inspect
-      # scorer re-uploads verify.ps1 and roles.json over SSH at eval time so
-      # the agent never has access to them during the session.
-      Remove-Item 'C:\\ProgramData\\sysrepair\\verify.ps1' -Force -ErrorAction SilentlyContinue
-      Remove-Item 'C:\\ProgramData\\sysrepair\\roles.json' -Force -ErrorAction SilentlyContinue
-      Remove-Item 'C:\\Users\\vagrant\\provisioning' -Recurse -Force -ErrorAction SilentlyContinue
-    PS1
+    name: "wait-bootstrap",
+    path: "provision/02-wait-bootstrap.ps1",
+    privileged: true
 end
