@@ -62,3 +62,4 @@ inspect_eval/logs/
 *.logs
 *.log
 *.json
+inspect_eval/baseline_report.json
