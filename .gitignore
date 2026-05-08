@@ -64,7 +64,6 @@ inspect_eval/logs/
 *.json
 inspect_eval/baseline_report.json
 inspect_eval/app_categories.tex
-inspect_eval/sysrepair_bench/category_table.py
 inspect_eval/results_table.tex
 inspect_eval/fig_variants.tex
 inspect_eval/baseline_report.json
