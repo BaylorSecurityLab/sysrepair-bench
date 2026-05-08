@@ -413,6 +413,32 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                         timeout=verify_timeout)
                 except TimeoutError:
                     return "Score check timed out."
+            elif os_name == "windows" and store().get("bridge_target_host"):
+                # Bridge → Windows VM via SSH + powershell.exe.
+                ssh = _bridge_ssh_prefix_from_store()
+                host = store().get("bridge_target_host", "host.docker.internal")
+                port = store().get("vagrant_port", "2223")
+                user = store().get("vagrant_user", "vagrant")
+                key  = store().get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+                scp  = (f"scp -i {key} -P {port} "
+                        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+                await sb.write_file("/tmp/verify_progress.ps1",
+                                    (sp / "verify.ps1").read_text(encoding="utf-8"))
+                await sb.write_file("/tmp/eval_config.json",
+                                    (sp / "build" / "roles.json").read_text(encoding="utf-8"))
+                await sb.exec(["sh", "-c",
+                    f"{ssh} 'powershell.exe -NoProfile -Command "
+                    f"\"New-Item -ItemType Directory -Path C:\\ProgramData\\sysrepair -Force | Out-Null\"'"])
+                await sb.exec(["sh", "-c",
+                    f"{scp} /tmp/verify_progress.ps1 {user}@{host}:C:/ProgramData/sysrepair/verify.ps1 && "
+                    f"{scp} /tmp/eval_config.json {user}@{host}:C:/ProgramData/sysrepair/roles.json"])
+                try:
+                    result = await sb.exec(["sh", "-c",
+                        f"{ssh} 'powershell.exe -NoProfile -ExecutionPolicy Bypass "
+                        f"-File C:\\ProgramData\\sysrepair\\verify.ps1'"],
+                        timeout=verify_timeout)
+                except TimeoutError:
+                    return "Score check timed out."
             elif os_name == "windows":
                 src_file = sp / "verify.ps1"
                 if not src_file.exists():
@@ -514,6 +540,30 @@ async def _verify_in_sandbox(
                 timeout=30)
             result = await sb.exec(["sh", "-c",
                 f"{ssh} 'chmod +x /tmp/verify.sh && sudo sh /tmp/verify.sh'"],
+                timeout=timeout)
+        elif os_name == "windows" and store().get("bridge_target_host"):
+            ssh = _bridge_ssh_prefix_from_store()
+            host = store().get("bridge_target_host", "host.docker.internal")
+            port = store().get("vagrant_port", "2223")
+            user = store().get("vagrant_user", "vagrant")
+            key  = store().get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+            scp  = (f"scp -i {key} -P {port} "
+                    f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+            await sb.write_file("/tmp/verify.ps1",
+                                (sp / "verify.ps1").read_text(encoding="utf-8"))
+            await sb.write_file("/tmp/eval_config.json",
+                                (sp / "build" / "roles.json").read_text(encoding="utf-8"))
+            await sb.exec(["sh", "-c",
+                f"{ssh} 'powershell.exe -NoProfile -Command "
+                f"\"New-Item -ItemType Directory -Path C:\\ProgramData\\sysrepair -Force | Out-Null\"'"],
+                timeout=30)
+            await sb.exec(["sh", "-c",
+                f"{scp} /tmp/verify.ps1 {user}@{host}:C:/ProgramData/sysrepair/verify.ps1 && "
+                f"{scp} /tmp/eval_config.json {user}@{host}:C:/ProgramData/sysrepair/roles.json"],
+                timeout=30)
+            result = await sb.exec(["sh", "-c",
+                f"{ssh} 'powershell.exe -NoProfile -ExecutionPolicy Bypass "
+                f"-File C:\\ProgramData\\sysrepair\\verify.ps1'"],
                 timeout=timeout)
         elif os_name == "windows":
             src_file = sp / "verify.ps1"

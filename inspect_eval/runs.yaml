@@ -101,7 +101,7 @@ presets:
 
   # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host
   kernel_vm:
-    model: openai/MODEL_NAME
+    model: openai/qwen3.5-9b
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     modes: ["day1", "zero_day"]
     scenarios:
@@ -116,7 +116,7 @@ presets:
   # Hivestorm Windows AD DC — must run inside a live Windows Server 2019 Vagrant VM
   # (see hivestorm/scenario-13-ad-dc-win2019/Vagrantfile). Zero-day only.
   win_vm:
-    model: openai/MODEL_NAME
+    model: openai/qwen3.5-9b
     solvers: ["react"]
     mode: zero_day
     scenarios:

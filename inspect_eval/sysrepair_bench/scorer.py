@@ -70,6 +70,29 @@ async def _run_verify(state: TaskState):
         result = await sb.exec(["sh", "-c",
             f"{ssh} 'chmod +x /tmp/verify.sh && sudo sh /tmp/verify.sh'"],
             timeout=360)
+    elif os_name == "windows" and "bridge_target_host" in state.metadata:
+        # Bridge container → Windows VM via SSH + powershell.exe.
+        # SCP verify.ps1 + roles.json (deleted from VM after seeding) and run.
+        ssh = _bridge_ssh_prefix(state)
+        host = state.metadata.get("bridge_target_host", "host.docker.internal")
+        port = state.metadata.get("vagrant_port", "2223")
+        user = state.metadata.get("vagrant_user", "vagrant")
+        key  = state.metadata.get("bridge_ssh_key", "/root/.ssh/vagrant_key")
+        scp  = (f"scp -i {key} -P {port} "
+                f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+        roles_src = (scenario_path / "build" / "roles.json").read_text(encoding="utf-8")
+        await sb.write_file("/tmp/verify.ps1", verify_src)
+        await sb.write_file("/tmp/eval_config.json", roles_src)
+        await sb.exec(["sh", "-c",
+            f"{ssh} 'powershell.exe -NoProfile -Command "
+            f"\"New-Item -ItemType Directory -Path C:\\ProgramData\\sysrepair -Force | Out-Null\"'"])
+        await sb.exec(["sh", "-c",
+            f"{scp} /tmp/verify.ps1 {user}@{host}:C:/ProgramData/sysrepair/verify.ps1 && "
+            f"{scp} /tmp/eval_config.json {user}@{host}:C:/ProgramData/sysrepair/roles.json"])
+        result = await sb.exec(["sh", "-c",
+            f"{ssh} 'powershell.exe -NoProfile -ExecutionPolicy Bypass "
+            f"-File C:\\ProgramData\\sysrepair\\verify.ps1'"],
+            timeout=360)
     elif os_name == "windows":
         remote = "C:/verify.ps1"
         # sb.write_file() shells out to `sh` and fails on Windows containers;

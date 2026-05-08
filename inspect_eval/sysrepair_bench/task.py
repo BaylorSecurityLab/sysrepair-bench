@@ -230,6 +230,56 @@ persistent SSH session between calls. Connect to the FreeBSD VM explicitly every
 """
 
 
+WIN_BRIDGE_TEMPLATE = """You are a {role}. You have been handed a Windows Server 2019 \
+host that has been misconfigured and partially compromised by an intruder. Harden it.
+
+Target OS: **{os_label}**
+Environment: You are inside a **Linux bridge container** on the evaluation host. \
+The Windows target VM is reachable over SSH (OpenSSH Server) from this container.
+
+Tools available:
+- `shell`: runs bash commands inside this bridge container. Use SSH to reach the Windows VM.
+- `text_editor`: view or edit files on the bridge container's local filesystem.
+- `think`: private scratchpad for reasoning — not executed.
+- `score_progress`: check which hardening checks are currently passing on the target VM.
+- `submit`: declare the work finished with a short summary.
+
+## Connecting to the target VM
+
+Each `shell` tool call is a **fresh process** in the bridge container — there is no \
+persistent SSH session between calls. Connect to the Windows VM explicitly every time:
+
+    # Run a single PowerShell command on the VM (most common):
+    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} \\
+        'powershell.exe -NoProfile -Command "Get-ADUser -Filter *"'
+
+    # Chain multiple commands in one SSH call:
+    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} \\
+        'powershell.exe -NoProfile -Command "Get-ADGroupMember Domain\\ Admins; Get-ADComputer -Filter * | ?{{ $_.TrustedForDelegation }}"'
+
+    # cmd.exe shell for non-PowerShell commands (no -NoProfile flag needed):
+    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} 'whoami /priv'
+
+**Important:**
+- The `vagrant` account is a local Administrator and a Domain Admin on the AD forest.
+- Calling `exit` or ending an SSH session does NOT cut you off. The next `shell` call \
+  opens a brand-new connection automatically.
+- Do NOT disable or block sshd on port 22, or remove the bridge's public key from \
+  `C:\\ProgramData\\ssh\\administrators_authorized_keys` — that would lock you out.
+- Do NOT depromote / unjoin the domain controller. The host is the only DC.
+
+## Scope
+{task_body}
+
+## Workflow
+1. Enumerate the target VM with read-only PowerShell over SSH (Get-ADUser, \
+   Get-ADGroupMember, Get-ADComputer, Get-ScheduledTask, etc.).
+2. Remediate what you find. Do not break sshd or the AD DC role.
+3. After each batch of changes, call `score_progress()` to see earned points.
+4. When the host is hardened, call `submit` with a short summary of what you changed.
+"""
+
+
 def _is_vagrant_scenario(scenario_dir: Path) -> bool:
     """A scenario is Vagrant-backed if it has a Vagrantfile.
 
@@ -248,6 +298,18 @@ def _detect_vagrant_os(scenario_dir: Path) -> str:
     return "linux"
 
 
+def _vagrant_uses_winrm(scenario_dir: Path) -> bool:
+    """True if the Vagrantfile uses WinRM as the communicator (Windows boxes).
+
+    For these boxes Vagrant doesn't manage SSH at all — `vagrant ssh-config`
+    returns nothing useful — so the bridge pipeline generates its own keypair
+    and the Vagrantfile's provisioner installs the public key into the VM's
+    administrators_authorized_keys.
+    """
+    vf = (scenario_dir / "Vagrantfile").read_text(encoding="utf-8", errors="ignore")
+    return '"winrm"' in vf or "'winrm'" in vf
+
+
 def _parse_vagrant_ssh_config(output: str) -> dict[str, str]:
     cfg: dict[str, str] = {}
     for line in output.splitlines():
@@ -261,11 +323,34 @@ def _parse_vagrant_ssh_config(output: str) -> dict[str, str]:
 
 
 def _prepare_vagrant_bridge(scenario_dir: Path) -> dict[str, str]:
-    """Ensure the Vagrant VM is running and the bridge SSH key is extracted.
+    """Ensure the Vagrant VM is running and the bridge SSH key is in place.
 
-    Returns a metadata dict stored on the Sample (vagrant_port, vagrant_user,
-    bridge_target_host, bridge_ssh_key) so the scorer and solver can reach the VM.
+    Two flavours:
+    - SSH boxes (FreeBSD): Vagrant manages SSH; we copy its private key out.
+    - WinRM boxes (Windows): we generate our own keypair before `vagrant up`
+      and the Vagrantfile's provisioner installs the public key into the VM.
+
+    Returns metadata for the Sample (vagrant_port, vagrant_user,
+    bridge_target_host, bridge_ssh_key).
     """
+    build_dir = scenario_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    is_winrm = _vagrant_uses_winrm(scenario_dir)
+
+    if is_winrm:
+        # Generate the bridge keypair BEFORE vagrant up so the Vagrantfile can
+        # read build/vagrant_key.pub during provisioning.
+        priv = build_dir / "vagrant_key"
+        pub  = build_dir / "vagrant_key.pub"
+        if not priv.exists() or not pub.exists():
+            priv.unlink(missing_ok=True)
+            pub.unlink(missing_ok=True)
+            subprocess.run(
+                ["ssh-keygen", "-t", "ed25519", "-N", "",
+                 "-C", "sysrepair-bridge", "-f", str(priv)],
+                check=True,
+            )
+
     status = subprocess.run(
         ["vagrant", "status", "--machine-readable"],
         cwd=scenario_dir, capture_output=True, text=True,
@@ -274,18 +359,26 @@ def _prepare_vagrant_bridge(scenario_dir: Path) -> dict[str, str]:
         print(f"[vagrant] Starting VM in {scenario_dir.name} — this may take several minutes…")
         subprocess.run(["vagrant", "up"], cwd=scenario_dir, check=True)
 
+    if is_winrm:
+        # OpenSSH Server forwarded port — we hard-code 2223 in the Vagrantfile
+        # to avoid colliding with scenario-14's 2222. If you change one, change
+        # the other.
+        return {
+            "vagrant_port": "2223",
+            "vagrant_user": "vagrant",
+            "bridge_target_host": "host.docker.internal",
+            "bridge_ssh_key": "/root/.ssh/vagrant_key",
+        }
+
+    # SSH-managed flavour (FreeBSD): pull the key out of `vagrant ssh-config`.
     raw = subprocess.run(
         ["vagrant", "ssh-config"],
         cwd=scenario_dir, capture_output=True, text=True, check=True,
     )
     cfg = _parse_vagrant_ssh_config(raw.stdout)
-
     port = cfg.get("Port", "2222")
     user = cfg.get("User", "vagrant")
     key_src = Path(cfg["IdentityFile"].strip('"'))
-
-    build_dir = scenario_dir / "build"
-    build_dir.mkdir(exist_ok=True)
     (build_dir / "vagrant_key").write_bytes(key_src.read_bytes())
 
     return {
@@ -299,20 +392,30 @@ def _prepare_vagrant_bridge(scenario_dir: Path) -> dict[str, str]:
 def _build_vagrant_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
     sid = f"{scenario_dir.parent.name}/{scenario_dir.name}"
     os_name = _detect_vagrant_os(scenario_dir)
-    bridge_meta = _prepare_vagrant_bridge(scenario_dir)
 
-    if not (scenario_dir / "task.md").exists():
+    # roles.json + task.md must exist BEFORE `vagrant up` runs — the Vagrantfile
+    # reads roles.json during provisioning and aborts if it's missing.
+    roles_path = scenario_dir / "build" / "roles.json"
+    if not roles_path.exists() or not (scenario_dir / "task.md").exists():
         _hivestorm_prepare(scenario_dir)
     task_md = (scenario_dir / "task.md").read_text(encoding="utf-8")
+
+    bridge_meta = _prepare_vagrant_bridge(scenario_dir)
 
     if os_name == "freebsd":
         role = "FreeBSD system administrator"
         os_label = "FreeBSD 13 (sh/tcsh)"
+        template = BSD_BRIDGE_TEMPLATE
+    elif os_name == "windows":
+        role = "Windows / Active Directory administrator"
+        os_label = "Windows Server 2019 (PowerShell)"
+        template = WIN_BRIDGE_TEMPLATE
     else:
         role = "system administrator"
         os_label = os_name.capitalize()
+        template = BSD_BRIDGE_TEMPLATE
 
-    prompt = BSD_BRIDGE_TEMPLATE.format(
+    prompt = template.format(
         role=role,
         os_label=os_label,
         target_port=bridge_meta["vagrant_port"],
