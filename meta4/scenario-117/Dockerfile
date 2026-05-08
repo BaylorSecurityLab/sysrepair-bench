@@ -19,7 +19,8 @@ FROM --platform=linux/amd64 ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 kmod ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f /etc/modprobe.d/disable-algif_aead.conf
 
 # SUID marker whose page-cache entry a working Copy Fail PoC would corrupt.
 RUN printf '#!/bin/sh\necho original\n' > /opt/suid-marker && \

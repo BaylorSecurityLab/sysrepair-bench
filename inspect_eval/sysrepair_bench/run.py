@@ -101,6 +101,71 @@ def _ensure_base_images(cfg: dict) -> None:
             raise SystemExit(f"[pre-build] Failed to build {tag}.{hint}")
 
 
+_SSH_BLOCK_BEGIN = "# >>> sysrepair-bench {ctx} (managed) >>>"
+_SSH_BLOCK_END   = "# <<< sysrepair-bench {ctx} (managed) <<<"
+
+
+def _ensure_vagrant_docker_host(cfg: dict) -> None:
+    """For ``vagrant_vm:`` presets, bring the VM up and point docker at it."""
+    rel = cfg.get("vagrant_vm")
+    if not rel:
+        return
+    vm_dir = (REPO_ROOT / rel).resolve()
+    if not (vm_dir / "Vagrantfile").exists():
+        raise SystemExit(f"[vagrant_vm] No Vagrantfile at {vm_dir}")
+    ctx_name = cfg.get("vagrant_vm_context", f"{vm_dir.name}")
+
+    status = subprocess.run(
+        ["vagrant", "status", "--machine-readable"],
+        cwd=vm_dir, capture_output=True, text=True,
+    )
+    if ",running" not in status.stdout:
+        print(f"[vagrant_vm] {vm_dir.name} not running — `vagrant up` (this can take 10+ min on first run)…")
+        subprocess.run(["vagrant", "up"], cwd=vm_dir, check=True)
+
+    ssh_cfg = subprocess.run(
+        ["vagrant", "ssh-config"],
+        cwd=vm_dir, capture_output=True, text=True, check=True,
+    ).stdout
+    block_body = "\n".join(
+        line.replace("Host default", f"Host {ctx_name}", 1) if line.lstrip().startswith("Host default") else line
+        for line in ssh_cfg.splitlines()
+    ).strip()
+    begin = _SSH_BLOCK_BEGIN.format(ctx=ctx_name)
+    end   = _SSH_BLOCK_END.format(ctx=ctx_name)
+    managed = f"{begin}\n{block_body}\n{end}\n"
+
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = ssh_dir / "config"
+    existing = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
+    if begin in existing and end in existing:
+        head, _, rest = existing.partition(begin)
+        _, _, tail = rest.partition(end)
+        new = head + managed + tail.lstrip("\n")
+    else:
+        new = existing + ("\n" if existing and not existing.endswith("\n") else "") + ("\n" if existing else "") + managed
+    if new != existing:
+        cfg_path.write_text(new, encoding="utf-8")
+        print(f"[vagrant_vm] Updated {cfg_path} with managed Host {ctx_name} block.")
+
+    probe = subprocess.run(
+        ["docker", "context", "inspect", ctx_name],
+        capture_output=True, text=True,
+    )
+    if probe.returncode != 0:
+        print(f"[vagrant_vm] Creating docker context '{ctx_name}' → ssh://{ctx_name}")
+        subprocess.run(
+            ["docker", "context", "create", ctx_name,
+             "--docker", f"host=ssh://{ctx_name}",
+             "--description", f"sysrepair-bench {ctx_name} (managed)"],
+            check=True,
+        )
+
+    os.environ["DOCKER_CONTEXT"] = ctx_name
+    print(f"[vagrant_vm] DOCKER_CONTEXT={ctx_name}")
+
+
 def _load(runs_path: Path, preset_name: str) -> dict:
     # Load .env from the same directory as runs.yaml so ${VAR} placeholders expand.
     dotenv.load_dotenv(runs_path.parent / ".env", override=False)
@@ -131,6 +196,7 @@ def _run_preset(runs_path: Path, preset_name: str, *,
         cfg["epochs"] = epochs
     if seeds is not None:
         cfg["seeds"] = seeds
+    _ensure_vagrant_docker_host(cfg)
     _ensure_base_images(cfg)
 
     models = cfg.get("models") or ([cfg["model"]] if cfg.get("model") else [])

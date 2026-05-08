@@ -224,6 +224,7 @@ presets:
 
   # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host
   kernel_vm:
+    vagrant_vm: meta4/kernel-vm
     model: openai/qwen3.5-9b
     solvers: ["react", "basic", "reflexion", "plan_and_solve", "lats"]
     modes: ["day1", "zero_day"]

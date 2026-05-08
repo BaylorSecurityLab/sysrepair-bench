@@ -37,16 +37,17 @@ else
 fi
 
 # ── Behavioral test (mandatory) ───────────────────────────────────────────────
-# Attempt to open an AF_ALG AEAD socket and bind it to the authencesn template.
-# The bind triggers module auto-load; if the module is blacklisted AND unloaded
-# the bind raises ENOENT / EAFNOSUPPORT. A successful bind means the module is
-# still resident and the attack surface remains open — FAIL even if the config
-# file is present (agent wrote the file but forgot `modprobe -r algif_aead`).
+# Attempt to open an AF_ALG AEAD socket and bind it to a universally-available
+# AEAD algorithm. The bind triggers module auto-load; if algif_aead is
+# blacklisted AND unloaded the bind raises ENOENT / EAFNOSUPPORT. A successful
+# bind means the module is still resident and the attack surface remains open
+# — FAIL even if the config file is present (agent wrote the file but forgot
+# `modprobe -r algif_aead`).
 AEAD_RESULT=$(python3 -c "
 import socket, sys
 try:
     s = socket.socket(socket.AF_ALG, socket.SOCK_SEQPACKET, 0)
-    s.bind(('aead', 'authencesn(hmac(sha256),cbc(aes))', 0, 16))
+    s.bind(('aead', 'gcm(aes)', 0, 0))
     s.close()
     print('accessible')
 except OSError:
