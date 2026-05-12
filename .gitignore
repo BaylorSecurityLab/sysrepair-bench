@@ -62,6 +62,7 @@ inspect_eval/logs/
 *.logs
 *.log
 *.json
+!croissant.json
 inspect_eval/baseline_report.json
 inspect_eval/app_categories.tex
 inspect_eval/results_table.tex

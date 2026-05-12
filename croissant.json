@@ -1,0 +1,282 @@
+{
+  "@context": {
+    "@language": "en",
+    "@vocab": "https://schema.org/",
+    "citeAs": "cr:citeAs",
+    "column": "cr:column",
+    "conformsTo": "dct:conformsTo",
+    "cr": "http://mlcommons.org/croissant/",
+    "rai": "http://mlcommons.org/croissant/RAI/",
+    "data": {
+      "@id": "cr:data",
+      "@type": "@json"
+    },
+    "equivalentProperty": "cr:equivalentProperty",
+    "samplingRate": "cr:samplingRate",
+    "dataType": {
+      "@id": "cr:dataType",
+      "@type": "@vocab"
+    },
+    "dct": "http://purl.org/dc/terms/",
+    "examples": {
+      "@id": "cr:examples",
+      "@type": "@json"
+    },
+    "extract": "cr:extract",
+    "field": "cr:field",
+    "fileProperty": "cr:fileProperty",
+    "fileObject": "cr:fileObject",
+    "fileSet": "cr:fileSet",
+    "format": "cr:format",
+    "includes": "cr:includes",
+    "isLiveDataset": "cr:isLiveDataset",
+    "jsonPath": "cr:jsonPath",
+    "key": "cr:key",
+    "md5": "cr:md5",
+    "parentField": "cr:parentField",
+    "path": "cr:path",
+    "recordSet": "cr:recordSet",
+    "references": "cr:references",
+    "regex": "cr:regex",
+    "repeated": "cr:repeated",
+    "replace": "cr:replace",
+    "sc": "https://schema.org/",
+    "separator": "cr:separator",
+    "source": "cr:source",
+    "subField": "cr:subField",
+    "transform": "cr:transform"
+  },
+  "@type": "sc:Dataset",
+  "name": "SysRepair-Bench",
+  "description": "SysRepair-Bench is a reproducible benchmark of 313 Dockerized and virtual-machine scenarios for evaluating autonomous agents on real-world system-administration vulnerability remediation. Each scenario bundles (a) a launcher (Dockerfile or Vagrantfile) that boots a vulnerable target, (b) a natural-language threat description (threat.md or task.md.tmpl) covering severity, CVE/CWE references, affected service, and remediation hints, and (c) a verifier (verify.sh / verify.ps1 / verify-poc.sh / verify-service.ps1) that programmatically scores both vulnerability neutralization and service availability after the agent acts. The dataset is organized into suites (meta2, meta3-ubuntu, meta3-windows, meta4, meta4-ad-vm, ccdc, vulnhub, hivestorm) covering Linux containers, Windows containers, and Vagrant-managed Linux / Windows VMs.",
+  "conformsTo": "http://mlcommons.org/croissant/1.0",
+  "license": "https://creativecommons.org/licenses/by/4.0/",
+  "url": "https://anonymous.4open.science/r/sysrepair-bench-425F/",
+  "version": "1.0.0",
+  "datePublished": "2026-04-29",
+  "keywords": [
+    "autonomous agents",
+    "large language models",
+    "cybersecurity",
+    "security benchmarks",
+    "vulnerability remediation",
+    "system administration",
+    "CVE",
+    "containers",
+    "incident response"
+  ],
+  "creator": {
+    "@type": "sc:Organization",
+    "name": "Anonymous Authors"
+  },
+  "publisher": {
+    "@type": "sc:Organization",
+    "name": "Anonymous Authors"
+  },
+  "citeAs": "@inproceedings{sysrepairbench2026, title = {SysRepair-Bench: A Benchmark for AI Agents' Ability to Remediate Real-World System Vulnerabilities}, author = {Anonymous Authors}, booktitle = {NeurIPS 2026 Datasets and Benchmarks Track (under review)}, year = {2026}, url = {https://anonymous.4open.science/r/sysrepair-bench-425F/}, note = {Double-blind submission #789}}",
+  "isLiveDataset": false,
+  "distribution": [
+    {
+      "@type": "cr:FileObject",
+      "@id": "scenarios-manifest",
+      "name": "scenarios.jsonl",
+      "description": "Per-scenario manifest: one JSON object per scenario describing suite, path, kind (linux-container | windows-container | vagrant-vm), launcher file, verifier file, threat document, and extracted CVE/CWE/severity/CVSS metadata. Records are sorted by scenario_id for deterministic ordering.",
+      "contentUrl": "scenarios.jsonl",
+      "encodingFormat": "application/jsonlines",
+      "sha256": "16bc248e6af1548e57f3c3bf7d487aca548927394c866a654bae50eadc3b6c81"
+    },
+    {
+      "@type": "cr:FileSet",
+      "@id": "scenario-bundles",
+      "name": "scenario-bundles",
+      "description": "Per-scenario source bundles. Each scenario directory contains a launcher (Dockerfile or Vagrantfile), an English threat document (threat.md or task.md.tmpl), and a verifier script (verify.sh on Linux, verify.ps1 on Windows). Some scenarios include additional fixtures (entrypoints, seed scripts, sample exploit payloads).",
+      "encodingFormat": "inode/directory",
+      "includes": [
+        "ccdc/scenario-*/**",
+        "meta2/scenario-*/**",
+        "meta3/ubuntu/scenario-*/**",
+        "meta3/windows/scenario-*/**",
+        "meta4/scenario-*/**",
+        "meta4/ad-vm/scenario-*/**",
+        "vulnhub/scenario-*/**",
+        "hivestorm/scenario-*/**"
+      ]
+    },
+    {
+      "@type": "cr:FileSet",
+      "@id": "harness",
+      "name": "inspect-eval-harness",
+      "description": "Inspect AI-based evaluation harness, scorers, solvers, and run presets used to reproduce the paper's baselines (MiniMax-M2.7, Qwen3.5-35B-A3B, Qwen3.5-9B with ReAct and ablation solvers).",
+      "encodingFormat": "inode/directory",
+      "includes": [
+        "inspect_eval/**"
+      ]
+    },
+    {
+      "@type": "cr:FileSet",
+      "@id": "scan-reports",
+      "name": "openvas-scan-reports",
+      "description": "OpenVAS scan reports used to seed the report-informed evaluation variant. PDF artifacts covering Metasploitable 2 and Metasploitable 3 (Ubuntu and Windows).",
+      "encodingFormat": "application/pdf",
+      "includes": [
+        "openvas-scan-reports/*.pdf"
+      ]
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "readme",
+      "name": "README",
+      "description": "Top-level README with setup, suite descriptions, and reproduction instructions.",
+      "contentUrl": "README.md",
+      "encodingFormat": "text/markdown",
+      "sha256": "9de2cc4b0dd7fac2ef6f6cd0766b05dff779cc2cc229f99d9d7630c8b155a6c7"
+    }
+  ],
+  "recordSet": [
+    {
+      "@type": "cr:RecordSet",
+      "@id": "scenarios",
+      "name": "scenarios",
+      "description": "One record per scenario across all eight suite directories. Records are extracted by scripts/build_croissant_manifest.py and emitted to scenarios.jsonl. Coverage: 313 scenarios (meta2: 40, meta3-ubuntu: 19, meta3-windows: 21, meta4: 117, meta4-ad-vm: 20, ccdc: 50, vulnhub: 30, hivestorm: 16).",
+      "key": {
+        "@id": "scenarios/scenario_id"
+      },
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/scenario_id",
+          "name": "scenario_id",
+          "description": "Globally unique scenario identifier of the form '<suite>/<directory-name>', e.g. 'meta4/scenario-15' or 'hivestorm/scenario-13-ad-dc-win2019'.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.scenario_id"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/suite",
+          "name": "suite",
+          "description": "Scenario suite. One of: meta2, meta3-ubuntu, meta3-windows, meta4, meta4-ad-vm, ccdc, vulnhub, hivestorm.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.suite"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/path",
+          "name": "path",
+          "description": "Repository-relative path to the scenario directory (the FileSet entry containing the launcher, threat document, and verifier).",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.path"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/kind",
+          "name": "kind",
+          "description": "Execution environment for the scenario. One of: linux-container, windows-container, vagrant-vm, windows-vm.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.kind"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/launch_file",
+          "name": "launch_file",
+          "description": "Filename of the launcher inside the scenario directory. Typically 'Dockerfile' for container scenarios or 'Vagrantfile' for VM scenarios.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.launch_file"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/verify_file",
+          "name": "verify_file",
+          "description": "Filename of the verifier script that programmatically scores remediation. 'verify.sh' for Linux scenarios, 'verify.ps1' for Windows scenarios, or 'verify-poc.sh' / 'verify-service.ps1' for VM scenarios that split the two checks across host and guest.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.verify_file"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/threat_file",
+          "name": "threat_file",
+          "description": "Filename of the natural-language threat description shown to the agent (in the report-informed variant) and used as the ground-truth scope description. Typically 'threat.md' or 'task.md.tmpl'.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.threat_file"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/title",
+          "name": "title",
+          "description": "Title of the threat (first H1 heading in the threat document). May be null for free-roam hardening scenarios that do not have a single-vulnerability framing.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.title"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/severity",
+          "name": "severity",
+          "description": "Severity tier parsed from the threat document. One of: Critical, High, Medium, Low, Informational. Null for free-roam scenarios.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.severity"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/cvss",
+          "name": "cvss",
+          "description": "CVSS base score parsed from the threat document, if present.",
+          "dataType": "sc:Float",
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.cvss"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/cves",
+          "name": "cves",
+          "description": "List of CVE identifiers referenced in the threat document. Empty for scenarios tracking pure configuration weaknesses.",
+          "dataType": "sc:Text",
+          "repeated": true,
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.cves[*]"}
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "scenarios/cwes",
+          "name": "cwes",
+          "description": "List of CWE identifiers referenced in the threat document.",
+          "dataType": "sc:Text",
+          "repeated": true,
+          "source": {
+            "fileObject": {"@id": "scenarios-manifest"},
+            "extract": {"jsonPath": "$.cwes[*]"}
+          }
+        }
+      ]
+    }
+  ]
+}
