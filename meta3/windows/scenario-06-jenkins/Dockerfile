@@ -6,9 +6,9 @@ FROM sysrepair/meta3-win-base:ltsc2019
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
 # --- JRE 8 ---
-ARG TEMURIN_URL=https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jre_x64_windows_hotspot_8u402b06.zip
-RUN Invoke-WebRequest -Uri $env:TEMURIN_URL -OutFile 'C:\jre.zip' ; \
-    Expand-Archive 'C:\jre.zip' -DestinationPath 'C:\Java' ; \
+# Source URL: https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jre_x64_windows_hotspot_8u402b06.zip
+COPY shared/downloads/OpenJDK8U-jre_x64_windows_hotspot_8u402b06.zip C:/jre.zip
+RUN Expand-Archive 'C:\jre.zip' -DestinationPath 'C:\Java' ; \
     Remove-Item 'C:\jre.zip'
 ENV JAVA_HOME=C:\\Java\\jdk8u402-b06-jre
 # Do not use ${PATH} expansion in ENV here — Docker resolves it against earlier ENV directives
@@ -17,13 +17,13 @@ ENV JAVA_HOME=C:\\Java\\jdk8u402-b06-jre
 
 # --- Jenkins 2.32.1 WAR (vulnerable to CVE-2017-1000353 pre-auth CLI RCE) ---
 # archives.jenkins.io dropped the 2.32.x weekly WARs; the Artifactory mirror still serves them.
-ARG JENKINS_URL=https://repo.jenkins-ci.org/public/org/jenkins-ci/main/jenkins-war/2.32.1/jenkins-war-2.32.1.war
-RUN New-Item -ItemType Directory -Path 'C:\jenkins' -Force | Out-Null ; \
-    Invoke-WebRequest -Uri $env:JENKINS_URL -OutFile 'C:\jenkins\jenkins.war'
+# Source URL: https://repo.jenkins-ci.org/public/org/jenkins-ci/main/jenkins-war/2.32.1/jenkins-war-2.32.1.war
+RUN New-Item -ItemType Directory -Path 'C:\jenkins' -Force | Out-Null
+COPY shared/downloads/jenkins-war-2.32.1.war C:/jenkins/jenkins.war
 
 # --- Pre-seeded JENKINS_HOME with security disabled (useSecurity=false) ---
 ENV JENKINS_HOME=C:\\jenkins\\home
-COPY jenkins_home/ C:/jenkins/home/
+COPY scenario-06-jenkins/jenkins_home/ C:/jenkins/home/
 
 
 EXPOSE 8080 22 5985

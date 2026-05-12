@@ -27,7 +27,9 @@ function Invoke-Docker([string[]]$args) {
 }
 
 # --- Build the shared base image once ---
-Invoke-Docker @('build', '--isolation', $Isolation, '-t', $baseTag, (Join-Path $root 'base'))
+# Context is the windows/ dir (not base/) so the Dockerfile can COPY pre-staged
+# artifacts from shared/downloads/. The base/Dockerfile path is passed via -f.
+Invoke-Docker @('build', '--isolation', $Isolation, '-f', (Join-Path $root 'base/Dockerfile'), '-t', $baseTag, $root)
 if ($BuildBaseOnly) { return }
 
 # --- Discover scenarios ---
@@ -46,7 +48,8 @@ foreach ($s in $allScenarios) {
     $dir       = Join-Path $root "scenario-$s"
 
     Write-Host "`n=== [$s] build ===" -ForegroundColor Yellow
-    Invoke-Docker @('build', '--isolation', $Isolation, '-t', $tag, $dir)
+    # Widen build context to windows/ so the Dockerfile can COPY from shared/downloads/.
+    Invoke-Docker @('build', '--isolation', $Isolation, '-f', (Join-Path $dir 'Dockerfile'), '-t', $tag, $root)
 
     # Ensure nothing is holding the ports from a prior run
     & docker rm -f $container 2>$null | Out-Null

@@ -49,9 +49,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_IMAGES: dict[str, tuple[Path, list[str]]] = {
     "sysrepair/meta2-hardy:latest": (REPO_ROOT / "meta2" / "_base", []),
     # Windows Server Core base — requires Hyper-V isolation on Win 10/11 Home.
+    # Context is widened one dir up so the base Dockerfile can COPY pre-staged
+    # artifacts (currently the Win32-OpenSSH zip) from meta3/windows/shared/.
     "sysrepair/meta3-win-base:ltsc2019": (
-        REPO_ROOT / "meta3" / "windows" / "base",
-        ["--isolation=hyperv"],
+        REPO_ROOT / "meta3" / "windows",
+        ["--isolation=hyperv", "-f", str(REPO_ROOT / "meta3" / "windows" / "base" / "Dockerfile")],
     ),
 }
 

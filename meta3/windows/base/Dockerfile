@@ -33,10 +33,11 @@ RUN secedit /export /cfg C:\secpol.cfg /quiet ; \
 # --- OpenSSH Server (primary agent entry point, host maps 2222->22) ---
 # NOTE: Add-WindowsCapability doesn't work inside Server Core containers because
 # DISM's feature-store services aren't running at build time. We install the
-# PowerShell/Win32-OpenSSH release directly from GitHub instead — same sshd.exe
-# Microsoft ships via the capability, just delivered as a zip.
-RUN Invoke-WebRequest -Uri 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.5.0.0p1-Beta/OpenSSH-Win64.zip' -OutFile 'C:\ossh.zip' -UseBasicParsing ; \
-    Expand-Archive -Path 'C:\ossh.zip' -DestinationPath 'C:\Program Files\' -Force ; \
+# PowerShell/Win32-OpenSSH release directly — same sshd.exe Microsoft ships via
+# the capability, just delivered as a zip. The zip is pre-staged on the host
+# (see shared/downloads/) to avoid GitHub fetches every build.
+COPY shared/downloads/OpenSSH-Win64-v9.5.0.0p1-Beta.zip C:/ossh.zip
+RUN Expand-Archive -Path 'C:\ossh.zip' -DestinationPath 'C:\Program Files\' -Force ; \
     Rename-Item 'C:\Program Files\OpenSSH-Win64' 'C:\Program Files\OpenSSH' ; \
     Remove-Item 'C:\ossh.zip' ; \
     powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\Program Files\OpenSSH\install-sshd.ps1' ; \

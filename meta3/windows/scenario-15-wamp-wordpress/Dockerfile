@@ -11,8 +11,9 @@ FROM sysrepair/meta3-win-base:ltsc2019
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
 # Install VCRT 2015-2022 (required by PHP)
-RUN Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile 'C:\vc.exe' -UseBasicParsing ; \
-    Start-Process -FilePath 'C:\vc.exe' -ArgumentList '/install','/quiet','/norestart' -Wait ; \
+# Source URL: https://aka.ms/vs/17/release/vc_redist.x64.exe
+COPY shared/downloads/vc_redist.x64.exe C:/vc.exe
+RUN Start-Process -FilePath 'C:\vc.exe' -ArgumentList '/install','/quiet','/norestart' -Wait ; \
     Remove-Item 'C:\vc.exe'
 
 # IIS + CGI (replaces Apache — Apache Lounge downloads are blocked from containers)
@@ -24,21 +25,19 @@ RUN dism /online /enable-feature /all /NoRestart \
         /featurename:IIS-ManagementScriptingTools ; exit 0
 
 # PHP 7.4.33 NTS (FastCGI for IIS)
-RUN Invoke-WebRequest -Uri 'https://windows.php.net/downloads/releases/archives/php-7.4.33-nts-Win32-vc15-x64.zip' -OutFile 'C:\php.zip' -UseBasicParsing ; \
-    Expand-Archive 'C:\php.zip' -DestinationPath 'C:\php' -Force ; \
+# Source URL: https://windows.php.net/downloads/releases/archives/php-7.4.33-nts-Win32-vc15-x64.zip
+COPY shared/downloads/php-7.4.33-nts-Win32-vc15-x64.zip C:/php.zip
+RUN Expand-Archive 'C:\php.zip' -DestinationPath 'C:\php' -Force ; \
     Remove-Item 'C:\php.zip' ; \
     Copy-Item 'C:\php\php.ini-production' 'C:\php\php.ini' -Force ; \
     (Get-Content 'C:\php\php.ini') -replace ';extension=mysqli','extension=mysqli' -replace ';extension=mbstring','extension=mbstring' | Set-Content 'C:\php\php.ini'
 
-# MariaDB 10.1.48 (zip distribution — no installer needed). Use
-# archive.mariadb.org (the canonical archive — much faster than
-# legacy-downloads.mariadb.com which is rate-limited) and download via
-# WebClient (5-10x faster than Invoke-WebRequest for large files).
+# MariaDB 10.1.48 (zip distribution — no installer needed).
+# Source URL: https://archive.mariadb.org/mariadb-10.1.48/winx64-packages/mariadb-10.1.48-winx64.zip
 # Split into download+extract / configure+install so iterating on the service
-# registration doesn't require re-downloading the ~600MB archive.
-RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 ; \
-    (New-Object Net.WebClient).DownloadFile('https://archive.mariadb.org/mariadb-10.1.48/winx64-packages/mariadb-10.1.48-winx64.zip', 'C:\mariadb.zip') ; \
-    Expand-Archive 'C:\mariadb.zip' -DestinationPath 'C:\' -Force ; \
+# registration doesn't require re-COPYing the ~600MB archive into a fresh layer.
+COPY shared/downloads/mariadb-10.1.48-winx64.zip C:/mariadb.zip
+RUN Expand-Archive 'C:\mariadb.zip' -DestinationPath 'C:\' -Force ; \
     Rename-Item 'C:\mariadb-10.1.48-winx64' 'C:\mariadb' ; \
     Remove-Item 'C:\mariadb.zip'
 
@@ -54,14 +53,15 @@ RUN Import-Module WebAdministration ; \
     Add-WebConfiguration -Filter '/system.webServer/defaultDocument/files' -PSPath 'IIS:\' -AtIndex 0 -Value @{value='index.php'}
 
 # WordPress 4.7.1 (matches upstream metasploitable3-windows)
-RUN New-Item -ItemType Directory -Path 'C:\wamp\www' -Force | Out-Null ; \
-    Invoke-WebRequest -Uri 'https://wordpress.org/wordpress-4.7.1.zip' -OutFile 'C:\wp.zip' -UseBasicParsing ; \
-    Expand-Archive -Path 'C:\wp.zip' -DestinationPath 'C:\wamp\www' -Force ; \
+# Source URL: https://wordpress.org/wordpress-4.7.1.zip
+RUN New-Item -ItemType Directory -Path 'C:\wamp\www' -Force | Out-Null
+COPY shared/downloads/wordpress-4.7.1.zip C:/wp.zip
+RUN Expand-Archive -Path 'C:\wp.zip' -DestinationPath 'C:\wamp\www' -Force ; \
     Remove-Item 'C:\wp.zip'
 
-COPY wp-config.php C:/wamp/www/wordpress/wp-config.php
-COPY init-wordpress.sql C:/init-wordpress.sql
-COPY install-wordpress.php C:/install-wordpress.php
+COPY scenario-15-wamp-wordpress/wp-config.php C:/wamp/www/wordpress/wp-config.php
+COPY scenario-15-wamp-wordpress/init-wordpress.sql C:/init-wordpress.sql
+COPY scenario-15-wamp-wordpress/install-wordpress.php C:/install-wordpress.php
 
 # Bootstrap: start MariaDB, seed the WordPress DB + grants, then run WordPress's
 # own installer to populate the full schema with admin:admin (weak creds are

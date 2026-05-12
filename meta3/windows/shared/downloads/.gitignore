@@ -1,0 +1,5 @@
+# Binary artifacts are fetched on demand by download-all.ps1; do not commit them.
+*
+!.gitignore
+!README.md
+!manifest.json

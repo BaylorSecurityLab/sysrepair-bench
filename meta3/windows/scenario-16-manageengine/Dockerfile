@@ -22,15 +22,13 @@ FROM sysrepair/meta3-win-base:ltsc2019
 
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
-ARG DC9_URL=https://metasploitable-binaries.s3.amazonaws.com/metasploitable3/ManageEngine_DesktopCentral.exe
-
-# Download installer + setup.iss, run silent install, then relax the service
+# Install installer + setup.iss, run silent install, then relax the service
 # account to LOCAL SERVICE (exactly mirrors scripts/installs/install_manageengine.bat
 # from metasploitable3 master).
-COPY setup.iss C:/setup.iss
-RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 ; \
-    (New-Object System.Net.WebClient).DownloadFile($env:DC9_URL, 'C:\dc9.exe') ; \
-    $p = Start-Process -FilePath 'C:\dc9.exe' -ArgumentList '/w','/s','/f1C:\setup.iss' -PassThru ; \
+# Source URL: https://metasploitable-binaries.s3.amazonaws.com/metasploitable3/ManageEngine_DesktopCentral.exe
+COPY scenario-16-manageengine/setup.iss C:/setup.iss
+COPY shared/downloads/ManageEngine_DesktopCentral.exe C:/dc9.exe
+RUN $p = Start-Process -FilePath 'C:\dc9.exe' -ArgumentList '/w','/s','/f1C:\setup.iss' -PassThru ; \
     if (-not $p.WaitForExit(900000)) { throw 'dc9.exe did not exit within 15 minutes' } ; \
     Remove-Item 'C:\dc9.exe'
 
@@ -77,8 +75,8 @@ RUN Stop-Service 'DesktopCentralServer' -ErrorAction SilentlyContinue ; \
 # supported by ManageEngine. The only path that reliably delivers bytes to
 # the JVM's System.in is running the wrapper in console mode with
 # shell-level `<` stdin redirection — hence the .bat + newlines file.
-COPY dc-run.bat C:/dc-run.bat
-COPY dc-stdin.txt C:/dc-stdin.txt
+COPY scenario-16-manageengine/dc-run.bat C:/dc-run.bat
+COPY scenario-16-manageengine/dc-stdin.txt C:/dc-stdin.txt
 
 
 EXPOSE 8020 8040 8383 22 5985

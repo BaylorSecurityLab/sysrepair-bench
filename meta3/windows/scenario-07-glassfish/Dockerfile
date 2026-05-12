@@ -7,9 +7,9 @@ FROM sysrepair/meta3-win-base:ltsc2019
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
 # --- JDK 8 (GlassFish 4.0 was released for JDK7 but runs on 8 with warnings) ---
-ARG TEMURIN_URL=https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jdk_x64_windows_hotspot_8u402b06.zip
-RUN Invoke-WebRequest -Uri $env:TEMURIN_URL -OutFile 'C:\jdk.zip' ; \
-    Expand-Archive 'C:\jdk.zip' -DestinationPath 'C:\Java' ; \
+# Source URL: https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jdk_x64_windows_hotspot_8u402b06.zip
+COPY shared/downloads/OpenJDK8U-jdk_x64_windows_hotspot_8u402b06.zip C:/jdk.zip
+RUN Expand-Archive 'C:\jdk.zip' -DestinationPath 'C:\Java' ; \
     Remove-Item 'C:\jdk.zip'
 ENV JAVA_HOME=C:\\Java\\jdk8u402-b06
 ENV AS_JAVA=C:\\Java\\jdk8u402-b06
@@ -19,9 +19,9 @@ ENV AS_JAVA=C:\\Java\\jdk8u402-b06
 # java on PATH, so the CMD prepends it at runtime.
 
 # --- GlassFish 4.0 ---
-ARG GLASSFISH_URL=https://download.oracle.com/glassfish/4.0/release/glassfish-4.0.zip
-RUN Invoke-WebRequest -Uri $env:GLASSFISH_URL -OutFile 'C:\gf.zip' ; \
-    Expand-Archive 'C:\gf.zip' -DestinationPath 'C:\' ; \
+# Source URL: https://download.oracle.com/glassfish/4.0/release/glassfish-4.0.zip
+COPY shared/downloads/glassfish-4.0.zip C:/gf.zip
+RUN Expand-Archive 'C:\gf.zip' -DestinationPath 'C:\' ; \
     Remove-Item 'C:\gf.zip'
 ENV GLASSFISH_HOME=C:\\glassfish4\\glassfish
 

@@ -10,16 +10,16 @@ FROM sysrepair/meta3-win-base:ltsc2019
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
 # --- JRE 8 (8u312 is the last build before ES 1.x's Lucene JNI bits go sideways) ---
-ARG TEMURIN_URL=https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u312-b07/OpenJDK8U-jre_x64_windows_hotspot_8u312b07.zip
-RUN Invoke-WebRequest -Uri $env:TEMURIN_URL -OutFile 'C:\jre.zip' ; \
-    Expand-Archive 'C:\jre.zip' -DestinationPath 'C:\Java' ; \
+# Source URL: https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u312-b07/OpenJDK8U-jre_x64_windows_hotspot_8u312b07.zip
+COPY shared/downloads/OpenJDK8U-jre_x64_windows_hotspot_8u312b07.zip C:/jre.zip
+RUN Expand-Archive 'C:\jre.zip' -DestinationPath 'C:\Java' ; \
     Remove-Item 'C:\jre.zip'
 ENV JAVA_HOME=C:\\Java\\jdk8u312-b07-jre
 
 # --- Elasticsearch 1.6.0 ---
-ARG ES_URL=https://repo1.maven.org/maven2/org/elasticsearch/elasticsearch/1.6.0/elasticsearch-1.6.0.zip
-RUN Invoke-WebRequest -Uri $env:ES_URL -OutFile 'C:\es.zip' ; \
-    Expand-Archive 'C:\es.zip' -DestinationPath 'C:\' ; \
+# Source URL: https://repo1.maven.org/maven2/org/elasticsearch/elasticsearch/1.6.0/elasticsearch-1.6.0.zip
+COPY shared/downloads/elasticsearch-1.6.0.zip C:/es.zip
+RUN Expand-Archive 'C:\es.zip' -DestinationPath 'C:\' ; \
     Remove-Item 'C:\es.zip' ; \
     Remove-Item 'C:\elasticsearch-1.6.0\lib\sigar\sigar-amd64-winnt.dll' -Force ; \
     Remove-Item 'C:\elasticsearch-1.6.0\lib\sigar\sigar-x86-winnt.dll' -Force
@@ -31,7 +31,7 @@ ENV ES_HOME=C:\\elasticsearch-1.6.0
 
 # Bind to all interfaces; enable dynamic scripting and disable the Groovy sandbox
 # — both conditions reproduce the CVE-2015-1427 RCE surface.
-COPY elasticsearch.yml C:/elasticsearch-1.6.0/config/elasticsearch.yml
+COPY scenario-09-elasticsearch/elasticsearch.yml C:/elasticsearch-1.6.0/config/elasticsearch.yml
 
 
 EXPOSE 9200 9300 22 5985

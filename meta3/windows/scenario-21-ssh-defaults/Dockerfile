@@ -16,10 +16,10 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 # registered as a service. Stop the service, wipe the directory, drop in the legacy
 # 7.1.0.0-p1-beta release, and re-register sshd.
 # sc.exe returns non-zero when the service doesn't exist; use cmd /c to swallow it.
+COPY shared/downloads/OpenSSH-Win64-v7.7.2.0p1-Beta.zip C:/ossh.zip
 RUN Stop-Service sshd -ErrorAction SilentlyContinue ; \
     cmd /c 'sc.exe delete sshd & exit /b 0' ; \
     Remove-Item -Recurse -Force 'C:\Program Files\OpenSSH' -ErrorAction SilentlyContinue ; \
-    Invoke-WebRequest -Uri 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/v7.7.2.0p1-Beta/OpenSSH-Win64.zip' -OutFile 'C:\ossh.zip' -UseBasicParsing ; \
     Expand-Archive -Path 'C:\ossh.zip' -DestinationPath 'C:\Program Files\' -Force ; \
     Rename-Item 'C:\Program Files\OpenSSH-Win64' 'C:\Program Files\OpenSSH' ; \
     Remove-Item 'C:\ossh.zip' ; \

