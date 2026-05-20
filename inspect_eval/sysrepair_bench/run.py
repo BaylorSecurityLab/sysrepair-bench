@@ -1,9 +1,16 @@
-"""Run one or more named presets from runs.yaml.
+"""Run one or more named presets from a YAML config file.
 
 Usage:
     uv run python -m sysrepair_bench.run <preset> [<preset> ...]
-    uv run python -m sysrepair_bench.run <preset> --runs path/to/runs.yaml
+    uv run python -m sysrepair_bench.run <preset> --runs path/to/file.yaml
     uv run python -m sysrepair_bench.run <preset> --epochs 3
+
+Config-file resolution
+----------------------
+If ``--runs`` is not given, the launcher uses:
+  1. ``inspect_eval/runs.yaml`` (your personal config — gitignored), if present;
+  2. otherwise ``inspect_eval/example.runs.yaml`` (the tracked template).
+Pass ``--runs <path>`` to force a specific file.
 
 Seeds vs epochs
 ---------------
@@ -39,8 +46,15 @@ from inspect_ai import eval as inspect_eval
 
 from .task import sysrepair_bench
 
-DEFAULT_RUNS = Path(__file__).resolve().parents[1] / "runs.yaml"
+_INSPECT_EVAL_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_USER_RUNS    = _INSPECT_EVAL_DIR / "runs.yaml"
+DEFAULT_EXAMPLE_RUNS = _INSPECT_EVAL_DIR / "example.runs.yaml"
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _default_runs_path() -> Path:
+    """Personal `runs.yaml` if it exists locally, else the tracked example."""
+    return DEFAULT_USER_RUNS if DEFAULT_USER_RUNS.exists() else DEFAULT_EXAMPLE_RUNS
 
 # Shared base images that child scenario Dockerfiles reference by tag. If a run
 # touches any meta2 scenario, ensure the base is built locally — Inspect AI's
@@ -105,6 +119,63 @@ def _ensure_base_images(cfg: dict) -> None:
 
 _SSH_BLOCK_BEGIN = "# >>> sysrepair-bench {ctx} (managed) >>>"
 _SSH_BLOCK_END   = "# <<< sysrepair-bench {ctx} (managed) <<<"
+
+
+def _preflight_endpoint(cfg: dict) -> None:
+    """One tiny model call to verify the endpoint is reachable.
+
+    Aborts the preset before launch on failure. Without this, a dead endpoint
+    silently burns each sample's full ``time_limit`` on ``Connection error``
+    retries (Inspect's default backoff grows to ~25 min/attempt) — a 420-sample
+    matrix at ``max_connections: 2`` becomes a 200-hour no-op.
+
+    Skipped when ``preflight: false`` is set on the preset, or when the model
+    is not an ``openai/`` provider.
+    """
+    if cfg.get("preflight") is False:
+        return
+
+    model = cfg["model"]
+    if not model.startswith("openai/"):
+        print(f"[preflight] {model}: skipped (non-openai provider)")
+        return
+    short = model.split("/", 1)[1]
+    base_url = cfg.get("base_url") or os.environ.get("OPENAI_BASE_URL")
+    url_shown = base_url or "(env: OPENAI_BASE_URL)"
+    api_key = cfg.get("api_key") or os.environ.get("OPENAI_API_KEY")
+    if api_key and "$" in api_key:
+        raise SystemExit(
+            f"[preflight] api_key contains an unexpanded placeholder: {api_key!r}\n"
+            f"           Set the referenced env var in inspect_eval/.env, or set "
+            f"'preflight: false' to skip this check."
+        )
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        print(f"[preflight] {short}: openai SDK not installed — skipping check")
+        return
+
+    client = OpenAI(base_url=base_url, api_key=api_key or "x",
+                    timeout=15.0, max_retries=0)
+    try:
+        client.chat.completions.create(
+            model=short,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+        )
+    except Exception as e:
+        raise SystemExit(
+            f"[preflight] Model endpoint unreachable.\n"
+            f"           model:    {short}\n"
+            f"           base_url: {url_shown}\n"
+            f"           error:    {e.__class__.__name__}: {e}\n"
+            f"\n"
+            f"           Refusing to launch — a failing endpoint would burn the\n"
+            f"           full per-sample time_limit on connection-error retries.\n"
+            f"           Set 'preflight: false' on the preset to skip this check."
+        ) from e
+    print(f"[preflight] {short} @ {url_shown}: ok")
 
 
 def _ensure_vagrant_docker_host(cfg: dict) -> None:
@@ -200,6 +271,7 @@ def _run_preset(runs_path: Path, preset_name: str, *,
         cfg["seeds"] = seeds
     _ensure_vagrant_docker_host(cfg)
     _ensure_base_images(cfg)
+    _preflight_endpoint(cfg)
 
     models = cfg.get("models") or ([cfg["model"]] if cfg.get("model") else [])
     solvers = cfg.get("solvers") or ([cfg.get("solver", "react")])
@@ -240,6 +312,19 @@ def _run_preset(runs_path: Path, preset_name: str, *,
             "api_key": cfg["api_key"],
         }
 
+    # Fail-fast caps on model retry/timeout. Inspect's default backoff on a
+    # Connection error grows to ~25 min/attempt × ~10 attempts → an entire
+    # per-scenario hour spent waiting on a dead endpoint, with no useful work
+    # done. These caps ensure a failing endpoint kills the sample in minutes.
+    eval_kwargs.setdefault("max_retries", int(cfg.get("model_max_retries", 2)))
+    eval_kwargs.setdefault("timeout", int(cfg.get("model_timeout", 120)))
+    if "model_attempt_timeout" in cfg:
+        eval_kwargs.setdefault("attempt_timeout", int(cfg["model_attempt_timeout"]))
+    # Belt-and-suspenders: bound the underlying OpenAI httpx client too.
+    mod_args = dict(eval_kwargs.get("model_args") or {})
+    mod_args.setdefault("client_timeout", float(cfg.get("model_client_timeout", 60)))
+    eval_kwargs["model_args"] = mod_args
+
     total = len(models) * len(solvers) * len(modes) * len(seeds_list)
     i = 0
     for model in models:
@@ -267,16 +352,27 @@ def _run_preset(runs_path: Path, preset_name: str, *,
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("presets", nargs="+", help="One or more preset names from runs.yaml")
-    p.add_argument("--runs", default=str(DEFAULT_RUNS), help="Path to runs.yaml")
+    p.add_argument("presets", nargs="+",
+                   help="One or more preset names from the YAML config")
+    p.add_argument("--runs", default=None,
+                   help="Path to YAML run config (default: ./runs.yaml if "
+                        "present, else ./example.runs.yaml)")
     p.add_argument("--epochs", type=int, default=None,
-                   help="Independent re-runs of the experiment (overrides runs.yaml).")
+                   help="Independent re-runs of the experiment (overrides config).")
     p.add_argument("--seeds", type=int, nargs="+", default=None, metavar="K",
                    help="Submit-attempt counts to evaluate, e.g. --seeds 1 5 "
                         "(overrides runs.yaml seeds).")
     args = p.parse_args(argv)
 
-    runs_path = Path(args.runs)
+    runs_path = Path(args.runs) if args.runs else _default_runs_path()
+    if not runs_path.exists():
+        raise SystemExit(
+            f"Config file not found: {runs_path}\n"
+            f"  Pass --runs <path> or create one of:\n"
+            f"    {DEFAULT_USER_RUNS}    (personal, gitignored)\n"
+            f"    {DEFAULT_EXAMPLE_RUNS} (tracked template)"
+        )
+    print(f"[config] using {runs_path}")
     for preset_name in args.presets:
         _run_preset(runs_path, preset_name, epochs=args.epochs, seeds=args.seeds)
 

@@ -55,6 +55,8 @@ __pycache__/
 # Development
 .env
 inspect_eval/logs/
+# Personal run config (copy example.runs.yaml → runs.yaml and tweak).
+inspect_eval/runs.yaml
 
 # Worktrees
 .worktrees/
@@ -68,3 +70,4 @@ inspect_eval/app_categories.tex
 inspect_eval/results_table.tex
 inspect_eval/fig_variants.tex
 inspect_eval/baseline_report.json
+inspect_eval/sysrepair_bench/results_table.py

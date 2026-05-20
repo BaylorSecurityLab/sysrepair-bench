@@ -1,0 +1,274 @@
+# Named run presets. Invoke with:
+#   uv run python -m sysrepair_bench.run <preset>
+#   uv run python -m sysrepair_bench.run <preset> --runs path/to/file.yaml
+#
+# The launcher looks for `runs.yaml` next to this file first (gitignored,
+# your personal config); if not present, this `example.runs.yaml` is used.
+# Pass `--runs <file>` to force a specific config.
+#
+# 0 = unlimited for: message_limit, time_limit, token_limit, request_limit.
+#
+# seeds   — submit() chances per scenario (same container).
+#           Integer: seeds: 5  → one run, model gets 5 chances.
+#           Array:   seeds: [1, 5]  → two separate runs (success@1 then success@5).
+#           CLI override: --seeds 1 5
+# epochs  — independent re-runs of the whole experiment for variance estimation.
+#           CLI override: --epochs 3
+#
+# This file uses YAML anchors (`&name`) and merge keys (`<<: *name`) to keep
+# presets DRY. Anchor definitions live under `_anchors:` (the launcher only
+# reads `defaults` and `presets`; everything else is ignored).
+
+defaults:
+  seeds: 1
+  epochs: 1
+  max_connections: 2
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.25
+  retry_on_error: 2
+  time_limit: 3600
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  request_window: 18000
+  # Fail-fast on dead endpoints. Without these caps Inspect's connection-error
+  # backoff grows to ~25 min/attempt × ~10 attempts, so one unreachable URL
+  # silently burns each sample's full time_limit. `preflight: true` does one
+  # ping before launch; `model_*` caps bound per-call retry/timeout. Set
+  # `preflight: false` on a preset to skip the ping.
+  preflight: true
+  model_max_retries: 2        # Inspect-level retries on a failed model call
+  model_timeout: 120          # overall per-call cap (seconds)
+  model_client_timeout: 60    # underlying httpx client timeout (seconds)
+
+# ────────────────────────────────────────────────────────────────────────────
+# Reusable fragments. Top-level keys other than `defaults`/`presets` are
+# ignored by the loader; the YAML parser still resolves the anchors so they
+# can be referenced from any preset below.
+# ────────────────────────────────────────────────────────────────────────────
+_anchors:
+  servers:
+    # Linux vllm — Qwen3.5-9B on the shared 10.x box, port 8000.
+    vllm_9b: &srv_vllm_9b
+      model: openai/Qwen/Qwen3.5-9B
+      base_url: http://10.100.201.24:8000/v1
+      api_key: vllm
+    # MoE 35B on a dedicated local vllm, port 8001.
+    vllm_qwen35: &srv_vllm_qwen35
+      model: openai/Qwen/Qwen3.5-35B-A3B
+      base_url: http://localhost:8001/v1
+      api_key: vllm
+    # Windows-container vllm — different model id and port on the same box.
+    vllm_win_9b: &srv_vllm_win_9b
+      model: openai/qwen3.5-9b
+      base_url: http://10.100.201.24:8001/v1
+      api_key: vllm
+    # MiniMax-M2.7 via the public OpenAI-compatible endpoint.
+    # 15 000-req / 5h rolling rate-limit window (matches the Token Plan tier).
+    minimax: &srv_minimax
+      model: openai/MiniMax-M2.7
+      base_url: https://api.minimax.io/v1
+      api_key: ${MINIMAX_API_KEY}
+      request_limit: 15000
+
+  scope:
+    # Canonical Linux container suites. Kernel-coupled meta4 scenarios live
+    # in their own preset (see `kernel_vm`) and are excluded here.
+    linux_benchmarks: &scope_linux
+      benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+      exclude:
+        - "meta4/scenario-19"
+        - "meta4/scenario-21"
+        - "meta4/scenario-22"
+    # Same as `scope_linux` plus meta4/scenario-117 (chronically flaky for
+    # qwen-9b — drop on 9B runs only).
+    linux_benchmarks_9b: &scope_linux_9b
+      benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
+      exclude:
+        - "meta4/scenario-19"
+        - "meta4/scenario-21"
+        - "meta4/scenario-22"
+        - "meta4/scenario-117"
+    windows_benchmarks: &scope_windows
+      benchmarks: ["meta3/windows"]
+    hivestorm_linux: &scope_hivestorm_linux
+      scenarios:
+        - "hivestorm/scenario-01-debian9"
+        - "hivestorm/scenario-02-ubuntu1604"
+        - "hivestorm/scenario-06-debian9-postgres"
+        - "hivestorm/scenario-07-ubuntu1804-samba"
+        - "hivestorm/scenario-09-ubuntu-nginx-phpbb"
+        - "hivestorm/scenario-10-ubuntu-faillock"
+        - "hivestorm/scenario-12-centos7-lamp"
+        - "hivestorm/scenario-15-docker-host"
+        - "hivestorm/scenario-16-nginx-phpfpm"
+    hivestorm_windows: &scope_hivestorm_windows
+      scenarios:
+        - "hivestorm/scenario-03-win10"
+        - "hivestorm/scenario-04-win2019"
+        - "hivestorm/scenario-05-win2016"
+        - "hivestorm/scenario-08-win-iis"
+        - "hivestorm/scenario-11-win-dc-dns"
+    kernel_vm: &scope_kernel_vm
+      scenarios:
+        - "meta4/scenario-19"
+        - "meta4/scenario-21"
+        - "meta4/scenario-22"
+        - "meta4/scenario-117"
+
+  solvers:
+    react_only: &solvers_react ["react"]
+    all:        &solvers_all   ["react", "basic", "reflexion", "plan_and_solve", "lats"]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Presets
+# ────────────────────────────────────────────────────────────────────────────
+presets:
+
+  # Template / smoke test. Edit `model:` before running.
+  smoke:
+    model: openai/MODEL_NAME
+    solver: react
+    scenarios: ["meta2/scenario-01"]
+    message_limit: 20
+    time_limit: 1800
+
+  # ── Linux container suites (all benches except hivestorm) ────────────────
+  linux_all:
+    <<: [*srv_vllm_9b, *scope_linux_9b]
+    solvers: *solvers_react
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 10
+    modes: ["day1", "zero_day"]
+
+  linux_all_qwen35:
+    <<: [*srv_vllm_qwen35, *scope_linux]
+    solvers: *solvers_react
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 15
+    modes: ["day1", "zero_day"]
+
+  linux_all_minimax:
+    <<: [*srv_minimax, *scope_linux]
+    solvers: *solvers_all
+    seeds: [1, 5]
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  # Zero-day only — mirrors `linux_all*` with mode locked so the server URL
+  # never flips between modes mid-run.
+  zero_day_9b:
+    <<: [*srv_vllm_9b, *scope_linux_9b]
+    solvers: *solvers_react
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 10
+    mode: zero_day
+
+  zero_day_qwen35:
+    <<: [*srv_vllm_qwen35, *scope_linux]
+    solvers: *solvers_all
+    seeds: [1, 5]
+    epochs: 1
+    max_connections: 30
+    mode: zero_day
+
+  zero_day_minimax:
+    <<: [*srv_minimax, *scope_linux]
+    solvers: *solvers_all
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 10
+    mode: zero_day
+
+  # Targeted meta2-only re-run for variance estimation.
+  minimax_meta2:
+    <<: *srv_minimax
+    solvers: *solvers_react
+    seeds: [1, 5]
+    epochs: 2
+    max_connections: 10
+    mode: day1
+    benchmarks: ["meta2"]
+
+  # ── Windows container suites ─────────────────────────────────────────────
+  windows_all:
+    <<: [*srv_vllm_win_9b, *scope_windows]
+    solvers: *solvers_all
+    seeds: [1, 5]
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  windows_all_minimax:
+    <<: [*srv_minimax, *scope_windows]
+    solvers: *solvers_all
+    seeds: [1, 5]
+    epochs: 1
+    max_connections: 2
+    modes: ["day1", "zero_day"]
+
+  # ── Hivestorm (free-roam hardening, zero-day only) ───────────────────────
+  hivestorm_linux:
+    <<: [*srv_vllm_9b, *scope_hivestorm_linux]
+    solvers: *solvers_react
+    mode: zero_day
+    max_connections: 10
+
+  hivestorm_linux_qwen35:
+    <<: [*srv_vllm_qwen35, *scope_hivestorm_linux]
+    solvers: *solvers_react
+    mode: zero_day
+    max_connections: 10
+
+  hivestorm_linux_minimax:
+    <<: [*srv_minimax, *scope_hivestorm_linux]
+    solvers: *solvers_react
+    mode: zero_day
+    max_connections: 10
+
+  hivestorm_windows:
+    <<: [*srv_vllm_win_9b, *scope_hivestorm_windows]
+    solvers: *solvers_all
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  # Single-scenario smoke for the Docker-host hivestorm bench.
+  qwen9b_scenario15:
+    model: openai/Qwen/Qwen3.5-9B
+    base_url: http://localhost:8001/v1
+    api_key: vllm
+    solver: react
+    scenarios: ["hivestorm/scenario-15-docker-host"]
+    mode: zero_day
+    max_connections: 1
+
+  # ── Vagrant-VM presets (no fixed base_url — read from .env) ──────────────
+  # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host.
+  kernel_vm:
+    <<: *scope_kernel_vm
+    vagrant_vm: meta4/kernel-vm
+    model: openai/qwen3.5-9b
+    solvers: *solvers_all
+    modes: ["day1", "zero_day"]
+
+  # Hivestorm FreeBSD — must run inside a live FreeBSD 13 Vagrant VM.
+  freebsd_vm:
+    model: openai/qwen3.5-9b
+    solvers: *solvers_react
+    mode: zero_day
+    scenarios: ["hivestorm/scenario-14-freebsd13"]
+
+  # Hivestorm Windows AD DC — must run inside a live Windows Server 2019 VM
+  # (see hivestorm/scenario-13-ad-dc-win2019/Vagrantfile). Zero-day only.
+  win_vm:
+    model: openai/qwen3.5-9b
+    solvers: *solvers_react
+    mode: zero_day
+    scenarios: ["hivestorm/scenario-13-ad-dc-win2019"]
