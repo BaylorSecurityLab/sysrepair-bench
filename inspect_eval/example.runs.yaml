@@ -23,8 +23,7 @@ defaults:
   working_limit: 2400         # per-sample working-time cap (excludes retry waits)
   message_limit: 0
   token_limit: 0
-  request_limit: 0
-  request_window: 18000       # rate-limit window for request_limit (s)
+  request_limit: 0            # 0 = unlimited (MiniMax presets override)
   preflight: true
   model_max_retries: 10       # Inspect-level retries on a failed model call
   model_timeout: 240          # overall per-call cap (s)
@@ -42,11 +41,13 @@ _anchors:
       model: openai/Qwen/Qwen3.5-9B
       base_url: http://10.100.201.24:8000/v1
       api_key: vllm
+    # MiniMax Token Plan: 15 000 requests per 5h rolling window.
     minimax: &srv_minimax
       model: openai/MiniMax-M2.7
       base_url: https://api.minimax.io/v1
       api_key: ${MINIMAX_API_KEY}
       request_limit: 15000
+      request_window: 18000
 
   scope:
     linux_benchmarks: &scope_linux
