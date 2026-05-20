@@ -35,6 +35,8 @@ URL never changes when runs switch between day1 and zero_day:
 from __future__ import annotations
 
 import argparse
+import datetime
+import threading
 import os
 import subprocess
 import sys
@@ -115,6 +117,102 @@ def _ensure_base_images(cfg: dict) -> None:
                 "\"Switch to Windows containers...\" and retry."
             ) if is_windows_image else ""
             raise SystemExit(f"[pre-build] Failed to build {tag}.{hint}")
+
+
+# Inspect's docker sandbox names every container `inspect-<project>-<hash>-…`.
+# For sysrepair-bench that prefix is `inspect-sysrepair_be-`. We use the same
+# filter for the watchdog (kills stuck containers older than time_limit) and
+# the --cleanup CLI flag (manual recovery after a hung run).
+_SANDBOX_NAME_FILTER = "name=inspect-sysrepair_be-"
+
+
+def _cleanup_orphan_sandboxes() -> None:
+    """Force-remove all inspect-sysrepair_be-* containers, networks and volumes.
+
+    Use after a hung run (e.g. Ctrl+C didn't stop the harness, container left
+    behind by a stuck Docker exec). Safe to run any time — only matches our
+    sandbox prefix.
+    """
+    def _ids(*args: str) -> list[str]:
+        try:
+            return subprocess.check_output(
+                ["docker", *args, "--filter", _SANDBOX_NAME_FILTER],
+                text=True, timeout=30,
+            ).split()
+        except Exception as e:
+            print(f"[cleanup] docker {' '.join(args)} failed: {e}")
+            return []
+
+    cids = _ids("ps", "-aq")
+    nets = _ids("network", "ls", "-q")
+    vols = _ids("volume", "ls", "-q")
+    if cids:
+        subprocess.run(["docker", "rm", "-f", *cids], timeout=120)
+        print(f"[cleanup] removed {len(cids)} container(s)")
+    if nets:
+        subprocess.run(["docker", "network", "rm", *nets], timeout=60)
+        print(f"[cleanup] removed {len(nets)} network(s)")
+    if vols:
+        subprocess.run(["docker", "volume", "rm", *vols], timeout=60)
+        print(f"[cleanup] removed {len(vols)} volume(s)")
+    if not (cids or nets or vols):
+        print("[cleanup] nothing to clean")
+
+
+def _start_sandbox_watchdog(time_limit: int, grace: int = 180,
+                            interval: int = 60) -> threading.Event:
+    """Background daemon thread that force-removes sandbox containers older
+    than ``time_limit + grace`` seconds.
+
+    Inspect's per-sample time_limit fires inside an anyio cancel scope, but
+    when the sample is parked in a thread-pool ``subprocess.wait()`` (Docker
+    exec hung on Windows containers) Python can't preempt the worker thread.
+    The cancellation queues forever; the sample ticks past the deadline; the
+    eval log is never finalised. Killing the container makes the wait() return
+    so the coroutine can finalise. Returns an Event — set it to stop.
+    """
+    stop = threading.Event()
+    if not time_limit or time_limit <= 0:
+        return stop                # unlimited time_limit → no watchdog
+    deadline_s = time_limit + grace
+
+    def _scan() -> None:
+        while not stop.wait(interval):
+            try:
+                out = subprocess.check_output(
+                    ["docker", "ps",
+                     "--filter", _SANDBOX_NAME_FILTER,
+                     "--filter", "status=running",
+                     "--format", "{{.ID}}|{{.CreatedAt}}"],
+                    text=True, timeout=30,
+                )
+            except Exception:
+                continue
+            now = datetime.datetime.now(datetime.timezone.utc)
+            for line in out.strip().splitlines():
+                try:
+                    cid, created = line.split("|", 1)
+                    # CreatedAt: "2026-05-19 18:10:10 -0700 PDT" — strip the
+                    # trailing tz name before parsing the offset.
+                    created = created.rsplit(" ", 1)[0]
+                    dt = datetime.datetime.strptime(
+                        created, "%Y-%m-%d %H:%M:%S %z"
+                    )
+                except Exception:
+                    continue
+                age = (now - dt).total_seconds()
+                if age > deadline_s:
+                    print(f"[watchdog] killing {cid[:12]} "
+                          f"(age {int(age)}s > {deadline_s}s)", flush=True)
+                    try:
+                        subprocess.run(["docker", "rm", "-f", cid], timeout=30)
+                    except Exception as e:
+                        print(f"[watchdog] rm {cid[:12]} failed: {e}", flush=True)
+
+    threading.Thread(target=_scan, daemon=True, name="sandbox-watchdog").start()
+    print(f"[watchdog] sandbox watchdog active "
+          f"(kills containers older than {deadline_s}s)")
+    return stop
 
 
 _SSH_BLOCK_BEGIN = "# >>> sysrepair-bench {ctx} (managed) >>>"
@@ -336,9 +434,21 @@ def _run_preset(runs_path: Path, preset_name: str, *,
     mod_args.setdefault("client_timeout", float(cfg.get("model_client_timeout", 60)))
     eval_kwargs["model_args"] = mod_args
 
+    # Sandbox watchdog: kill containers that outlive time_limit + grace so a
+    # hung Docker subprocess.wait() can't park a sample indefinitely. Enabled
+    # whenever a positive time_limit is configured. `watchdog: false` disables.
+    watchdog_stop = threading.Event()
+    if cfg.get("watchdog", True):
+        watchdog_stop = _start_sandbox_watchdog(
+            time_limit=int(cfg.get("time_limit", 0) or 0),
+            grace=int(cfg.get("watchdog_grace", 180)),
+            interval=int(cfg.get("watchdog_interval", 60)),
+        )
+
     total = len(models) * len(solvers) * len(modes) * len(seeds_list)
     i = 0
-    for model in models:
+    try:
+      for model in models:
         for solver_name in solvers:
             for mode in modes:
                 for k in seeds_list:
@@ -359,12 +469,17 @@ def _run_preset(runs_path: Path, preset_name: str, *,
                         model=model,
                         **eval_kwargs,
                     )
+    finally:
+        watchdog_stop.set()
 
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("presets", nargs="+",
+    p.add_argument("presets", nargs="*",
                    help="One or more preset names from the YAML config")
+    p.add_argument("--cleanup", action="store_true",
+                   help="Force-remove all leaked inspect sandbox containers, "
+                        "networks and volumes, then exit. Use after a hung run.")
     p.add_argument("--runs", default=None,
                    help="Path to YAML run config (default: ./runs.yaml if "
                         "present, else ./example.runs.yaml)")
@@ -381,6 +496,13 @@ def main(argv: list[str] | None = None) -> None:
                         "waits). Stronger fix-fast lever than --time-limit "
                         "for stuck samples. 0 = unlimited.")
     args = p.parse_args(argv)
+
+    if args.cleanup:
+        _cleanup_orphan_sandboxes()
+        return
+    if not args.presets:
+        raise SystemExit("error: at least one preset name is required "
+                         "(or pass --cleanup to remove leaked sandboxes)")
 
     runs_path = Path(args.runs) if args.runs else _default_runs_path()
     if not runs_path.exists():
