@@ -263,12 +263,18 @@ def _load(runs_path: Path, preset_name: str) -> dict:
 
 def _run_preset(runs_path: Path, preset_name: str, *,
                 epochs: int | None = None,
-                seeds: list[int] | None = None) -> None:
+                seeds: list[int] | None = None,
+                time_limit: int | None = None,
+                working_limit: int | None = None) -> None:
     cfg = _load(runs_path, preset_name)
     if epochs is not None:
         cfg["epochs"] = epochs
     if seeds is not None:
         cfg["seeds"] = seeds
+    if time_limit is not None:
+        cfg["time_limit"] = time_limit
+    if working_limit is not None:
+        cfg["working_limit"] = working_limit
     _ensure_vagrant_docker_host(cfg)
     _ensure_base_images(cfg)
     _preflight_endpoint(cfg)
@@ -298,7 +304,7 @@ def _run_preset(runs_path: Path, preset_name: str, *,
 
     eval_kwargs: dict = {}
     for k in ("max_connections", "log_dir", "fail_on_error", "max_samples",
-              "max_tasks", "retry_on_error", "epochs"):
+              "max_tasks", "retry_on_error", "epochs", "working_limit"):
         if k in cfg:
             eval_kwargs[k] = cfg[k]
 
@@ -362,6 +368,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--seeds", type=int, nargs="+", default=None, metavar="K",
                    help="Submit-attempt counts to evaluate, e.g. --seeds 1 5 "
                         "(overrides runs.yaml seeds).")
+    p.add_argument("--time-limit", type=int, default=None, metavar="SECS",
+                   help="Per-sample wall-clock cap (overrides cfg time_limit). "
+                        "0 = unlimited.")
+    p.add_argument("--working-limit", type=int, default=None, metavar="SECS",
+                   help="Per-sample working-time cap (excludes retry/backoff "
+                        "waits). Stronger fix-fast lever than --time-limit "
+                        "for stuck samples. 0 = unlimited.")
     args = p.parse_args(argv)
 
     runs_path = Path(args.runs) if args.runs else _default_runs_path()
@@ -374,7 +387,10 @@ def main(argv: list[str] | None = None) -> None:
         )
     print(f"[config] using {runs_path}")
     for preset_name in args.presets:
-        _run_preset(runs_path, preset_name, epochs=args.epochs, seeds=args.seeds)
+        _run_preset(runs_path, preset_name,
+                    epochs=args.epochs, seeds=args.seeds,
+                    time_limit=args.time_limit,
+                    working_limit=args.working_limit)
 
 
 if __name__ == "__main__":

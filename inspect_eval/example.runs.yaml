@@ -19,14 +19,17 @@ defaults:
   verify_timeout: 360
   fail_on_error: 0.25
   retry_on_error: 2
-  time_limit: 3600
+  time_limit: 3600            # per-sample wall-clock cap (s); 0 = unlimited
+  working_limit: 2400         # per-sample working-time cap (excludes retry waits)
   message_limit: 0
   token_limit: 0
   request_limit: 0
+  request_window: 18000       # rate-limit window for request_limit (s)
   preflight: true
   model_max_retries: 10       # Inspect-level retries on a failed model call
-  model_timeout: 240          # overall per-call cap (seconds)
-  model_client_timeout: 240    # underlying httpx client timeout (seconds)
+  model_timeout: 240          # overall per-call cap (s)
+  model_attempt_timeout: 120  # per-HTTP-attempt cap inside the retry loop (s)
+  model_client_timeout: 240   # underlying httpx client timeout (s)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Reusable fragments. Top-level keys other than `defaults`/`presets` are
