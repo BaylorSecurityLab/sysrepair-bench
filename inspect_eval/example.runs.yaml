@@ -39,10 +39,6 @@ _anchors:
       model: openai/Qwen/Qwen3.5-9B
       base_url: http://10.100.201.24:8000/v1
       api_key: vllm
-    vllm_win_9b: &srv_vllm_win_9b
-      model: openai/qwen3.5-9b
-      base_url: http://10.100.201.24:8001/v1
-      api_key: vllm
     minimax: &srv_minimax
       model: openai/MiniMax-M2.7
       base_url: https://api.minimax.io/v1
@@ -124,7 +120,7 @@ presets:
 
   # ── Windows container suites ─────────────────────────────────────────────
   windows_all:
-    <<: [*srv_vllm_win_9b, *scope_windows]
+    <<: [*srv_vllm_9b, *scope_windows]
     solvers: *solvers_all
     seeds: [1, 5]
     epochs: 1
@@ -153,7 +149,7 @@ presets:
     max_connections: 10
 
   hivestorm_windows:
-    <<: [*srv_vllm_win_9b, *scope_hivestorm_windows]
+    <<: [*srv_vllm_9b, *scope_hivestorm_windows]
     solvers: *solvers_all
     epochs: 1
     max_connections: 5
