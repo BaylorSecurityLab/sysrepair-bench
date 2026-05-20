@@ -91,8 +91,13 @@ async def _patched_exec(
         )
 
     if timeout is not None:
+        # No +grace: a Windows exec that runs past `timeout` is hung, not slow.
+        # The previous +10s slop just delayed the failure without ever letting
+        # a real fix happen. We rely on the asyncio TimeoutError to abort the
+        # await and on compose_exec's own cancellation handling to kill the
+        # docker subprocess (see _inspect_compat.py fix #4 for the kill path).
         try:
-            return await asyncio.wait_for(_do_exec(), timeout=timeout + 10)
+            return await asyncio.wait_for(_do_exec(), timeout=timeout)
         except asyncio.TimeoutError:
             raise TimeoutError(f"Command timed out after {timeout} seconds")
     return await _do_exec()
