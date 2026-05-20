@@ -156,8 +156,13 @@ def _preflight_endpoint(cfg: dict) -> None:
         print(f"[preflight] {short}: openai SDK not installed — skipping check")
         return
 
+    # Tunable via cfg so a slow first-byte (TLS/DNS warm-up on remote APIs
+    # like MiniMax) doesn't trip the check. Defaults: 30 s with 1 retry —
+    # still aborts a truly-dead endpoint in ~60 s, vs the per-sample hour.
+    pf_timeout = float(cfg.get("preflight_timeout", 30))
+    pf_retries = int(cfg.get("preflight_max_retries", 1))
     client = OpenAI(base_url=base_url, api_key=api_key or "x",
-                    timeout=15.0, max_retries=0)
+                    timeout=pf_timeout, max_retries=pf_retries)
     try:
         client.chat.completions.create(
             model=short,
