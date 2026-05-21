@@ -36,10 +36,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import threading
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import dotenv
@@ -212,6 +213,57 @@ def _start_sandbox_watchdog(time_limit: int, grace: int = 180,
     threading.Thread(target=_scan, daemon=True, name="sandbox-watchdog").start()
     print(f"[watchdog] sandbox watchdog active "
           f"(kills containers older than {deadline_s}s)")
+    return stop
+
+
+def _start_hang_killer(log_dir: Path, threshold: int,
+                       interval: int = 60) -> threading.Event:
+    """Last-resort backstop: force-exit the process when the eval log stops
+    advancing for ``threshold`` seconds.
+
+    The container watchdog only kills *running* containers — it can't recover
+    a process parked in inspect_ai's post-container path (cleanup, scoring,
+    log write) after the container has already exited. Every multi-hour hang
+    we've observed is this shape: container exits, Python process hangs
+    indefinitely, ``.eval`` log mtime frozen. This monitors that mtime as a
+    liveness signal: while samples make progress the log is rewritten; once it
+    goes stale past ``threshold`` the run is wedged and we ``os._exit`` so the
+    user gets their shell back (then ``--cleanup`` clears any leftovers).
+
+    "Progress" = max(run start, newest .eval mtime), so the initial Windows
+    base-image build (which writes no log yet) doesn't trip it. Returns an
+    Event — set it to stop.
+    """
+    stop = threading.Event()
+    if not threshold or threshold <= 0:
+        return stop
+    run_start = time.monotonic()
+
+    def _newest_log_mono() -> float:
+        """Monotonic-clock estimate of the newest .eval write, or run_start."""
+        try:
+            files = list(log_dir.glob("*.eval"))
+            if not files:
+                return run_start
+            newest_wall = max(f.stat().st_mtime for f in files)
+            # Convert wall-clock mtime to monotonic basis via current offset.
+            return time.monotonic() - (time.time() - newest_wall)
+        except Exception:
+            return run_start
+
+    def _scan() -> None:
+        while not stop.wait(interval):
+            last_progress = max(run_start, _newest_log_mono())
+            stale = time.monotonic() - last_progress
+            if stale > threshold:
+                print(f"\n[hang-killer] no eval-log activity for {int(stale)}s "
+                      f"(> {threshold}s) — run is wedged. Force-exiting.\n"
+                      f"[hang-killer] run 'uv run python -m sysrepair_bench.run "
+                      f"--cleanup' to remove any leftover sandboxes.", flush=True)
+                os._exit(2)
+
+    threading.Thread(target=_scan, daemon=True, name="hang-killer").start()
+    print(f"[hang-killer] active (force-exit after {threshold}s of log inactivity)")
     return stop
 
 
@@ -438,12 +490,24 @@ def _run_preset(runs_path: Path, preset_name: str, *,
     # hung Docker subprocess.wait() can't park a sample indefinitely. Enabled
     # whenever a positive time_limit is configured. `watchdog: false` disables.
     watchdog_stop = threading.Event()
+    hang_stop = threading.Event()
+    _tl = int(cfg.get("time_limit", 0) or 0)
     if cfg.get("watchdog", True):
         watchdog_stop = _start_sandbox_watchdog(
-            time_limit=int(cfg.get("time_limit", 0) or 0),
+            time_limit=_tl,
             grace=int(cfg.get("watchdog_grace", 180)),
             interval=int(cfg.get("watchdog_interval", 60)),
         )
+        # Last-resort backstop for post-container hangs the watchdog can't see
+        # (process parked in cleanup/scoring after the container exited). Fires
+        # on eval-log inactivity. Default threshold = 2 × time_limit (min 30m).
+        hang_threshold = int(cfg.get("hang_kill_seconds", max(2 * _tl, 1800))) if _tl else int(cfg.get("hang_kill_seconds", 0) or 0)
+        if hang_threshold > 0:
+            hang_stop = _start_hang_killer(
+                log_dir=Path(cfg.get("log_dir", "./logs")),
+                threshold=hang_threshold,
+                interval=int(cfg.get("watchdog_interval", 60)),
+            )
 
     total = len(models) * len(solvers) * len(modes) * len(seeds_list)
     i = 0
@@ -471,6 +535,7 @@ def _run_preset(runs_path: Path, preset_name: str, *,
                     )
     finally:
         watchdog_stop.set()
+        hang_stop.set()
 
 
 def main(argv: list[str] | None = None) -> None:
