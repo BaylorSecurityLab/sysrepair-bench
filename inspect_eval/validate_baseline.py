@@ -245,22 +245,30 @@ def _detect_shell(container_name: str) -> str:
 
 
 def inject_verify_sh(container_name: str, verify_src: str) -> tuple[bool, str]:
-    """Write verify.sh content into the container at /tmp/verify.sh."""
+    """Write verify.sh content into the container at /tmp/verify.sh.
+
+    The payload is normalised to LF and written as BYTES. With text=True
+    Python writes stdin through a TextIOWrapper with newline=None, which
+    translates every "\\n" back into os.linesep - so on Windows the script
+    arrives CRLF and bash fails on line 1 with `$'\\r': command not found`
+    (exit 2, not the 1 this script is checking for). Passing bytes bypasses
+    that translation entirely.
+    """
     shell = _detect_shell(container_name)
     cmd = [
         "docker", "exec", "-i", container_name,
         shell, "-c", "cat > /tmp/verify.sh && chmod +x /tmp/verify.sh",
     ]
+    payload = verify_src.replace("\r\n", "\n").encode("utf-8")
     try:
         result = subprocess.run(
             cmd,
-            input=verify_src,
+            input=payload,
             capture_output=True,
-            text=True,
             timeout=30,
         )
         if result.returncode != 0:
-            return False, result.stderr.strip()
+            return False, result.stderr.decode("utf-8", "replace").strip()
         return True, ""
     except subprocess.TimeoutExpired:
         return False, "inject verify.sh timed out"

@@ -356,6 +356,57 @@ docker exec test-01 /bin/bash /verify.sh
 echo $?   # 0 = remediated and service still works, 1 = failed
 ```
 
+### Remediation contract (read this before writing a fix)
+
+Three properties of the runtime trip up otherwise-correct remediations. They
+are deliberate, not bugs, but they are not guessable from the scenario text.
+
+**1. Services are not running when you get the container.** Unless the
+scenario ships a `.preserve-cmd` marker, the harness replaces the image `CMD`
+with `sleep infinity` so a single-service container cannot race the exec
+channel ([task.py](inspect_eval/sysrepair_bench/task.py)). Most `verify.sh`
+regression tests assert a *live* daemon (`pgrep -x sshd`, an HTTP 200, a port
+check), so **starting the service is part of the fix**:
+
+```bash
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sshd -t && mkdir -p /run/sshd
+pgrep -x sshd >/dev/null || /usr/sbin/sshd     # <- without this, regression fails
+```
+
+**2. `verify.sh` may have already started the service — restart, don't start.**
+Several verify scripts start the daemon themselves if it is down (`apachectl
+start`, `/usr/sbin/sshd`). If verify ran before your fix, the daemon is
+already up **with the vulnerable config**, and a later `apachectl start` is a
+silent no-op. Edit the config, then force a restart:
+
+```bash
+apachectl configtest
+pkill -x apache2 2>/dev/null || true
+sleep 1
+apachectl start
+```
+
+**3. A passing config grep does not mean a passing scenario.** Most
+`verify.sh` files check the config *and* the runtime behaviour. A fix can
+satisfy the grep and still fail the behavioural half — usually because the
+service never reloaded. The classic instance:
+
+```apache
+Options -Indexes FollowSymLinks     # INVALID
+```
+
+Apache rejects a mixed list — `AH00526: Either all Options must start with +
+or -, or no Option may.` `configtest` fails, the restart never happens, and
+the running server keeps serving directory listings while
+`grep Indexes` looks clean. Drop the token instead: `Options FollowSymLinks`.
+
+Always confirm with the real check rather than the config file:
+
+```bash
+docker exec test-01 /bin/bash /verify.sh; echo $?
+```
+
 ## Prompt / Scenario Metadata
 
 Each `threat.md` is written as a self-contained prompt and provides:

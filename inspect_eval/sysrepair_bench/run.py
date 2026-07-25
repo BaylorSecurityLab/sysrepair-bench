@@ -81,6 +81,52 @@ _BENCHMARK_BASE: list[tuple[str, str]] = [
 ]
 
 
+def _ensure_hivestorm_roles(cfg: dict) -> None:
+    """Generate hivestorm build/roles.json for any selected hivestorm scenario.
+
+    Hivestorm randomises its backdoor account, trojan path, SUID plant, rogue
+    cron and legit-admin name per build; hivestorm/prepare.sh writes each
+    scenario's build/roles.json (gitignored, so never present in a fresh
+    clone). The Dockerfiles COPY that file, so without it every hivestorm
+    build dies with a build-context error that looks nothing like the real
+    cause:
+
+        failed to compute cache key: "/build/roles.json": not found
+
+    installation.md documents running prepare.sh by hand before each session;
+    doing it here means a fresh clone just works.
+    """
+    benchmarks = cfg.get("benchmarks") or []
+    scenarios = cfg.get("scenarios") or []
+    wants_hivestorm = any(
+        b == "hivestorm" or b.startswith("hivestorm/") for b in benchmarks
+    ) or any(s.startswith("hivestorm/") for s in scenarios)
+    if not wants_hivestorm:
+        return
+
+    hivestorm_dir = REPO_ROOT / "hivestorm"
+    prepare = hivestorm_dir / "prepare.sh"
+    if not prepare.is_file():
+        return
+
+    missing = [
+        d for d in sorted(hivestorm_dir.glob("scenario-*"))
+        if d.is_dir() and (d / "Dockerfile").exists()
+        and not (d / "build" / "roles.json").is_file()
+    ]
+    if not missing:
+        return
+
+    print(f"[pre-build] generating hivestorm roles.json ({len(missing)} missing) ...")
+    result = subprocess.run(["bash", str(prepare)], cwd=str(REPO_ROOT))
+    if result.returncode != 0:
+        print(
+            "[pre-build] WARNING: hivestorm/prepare.sh failed. Hivestorm builds "
+            "will fail with '\"/build/roles.json\": not found'. Run it manually:\n"
+            "    bash hivestorm/prepare.sh"
+        )
+
+
 def _ensure_base_images(cfg: dict) -> None:
     """Build any shared base images that the selected scenarios depend on."""
     benchmarks = cfg.get("benchmarks") or []
@@ -431,6 +477,7 @@ def _run_preset(runs_path: Path, preset_name: str, *,
     if working_limit is not None:
         cfg["working_limit"] = working_limit
     _ensure_vagrant_docker_host(cfg)
+    _ensure_hivestorm_roles(cfg)
     _ensure_base_images(cfg)
     _preflight_endpoint(cfg)
 
