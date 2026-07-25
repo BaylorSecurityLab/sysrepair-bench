@@ -34,4 +34,7 @@ RUN echo '# No restrictions -- vulnerable default' > /etc/hosts.allow && \
 
 EXPOSE 3306
 
-CMD ["bash", "-c", "service mysql start && tail -f /var/log/mysql/error.log 2>/dev/null || sleep infinity"]
+# Boot wrapper: start MySQL (with the vulnerable 0.0.0.0 bind), then hand PID 1
+# to `sleep infinity` (see .preserve-cmd) so an agent can restart mysqld without
+# killing the container -- making "edited my.cnf but never restarted" detectable.
+CMD ["bash", "-c", "service mysql start; exec sleep infinity"]

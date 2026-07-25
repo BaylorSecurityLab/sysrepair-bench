@@ -35,4 +35,14 @@ RUN mkdir -p /etc/cups/ssl && \
 
 EXPOSE 631
 
-CMD ["/usr/sbin/cupsd", "-f"]
+# Boot the vulnerable service, then hold the container open with `sleep infinity`.
+# Paired with the `.preserve-cmd` marker so the harness keeps this CMD instead of
+# replacing it with `sleep infinity`.
+#   1. cupsd must ALREADY BE RUNNING (with the vulnerable TLS config) when the
+#      agent is handed the box, so a config-only fix leaves the live daemon
+#      vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be cupsd. cupsd daemonizes by default (do NOT use `-f`,
+#      which stays foreground and would become PID 1); restarting it would then
+#      kill the container. `exec sleep infinity` keeps a stable PID 1 that
+#      survives cupsd churn, and daemonized cupsd reparents to init.
+CMD ["/bin/bash", "-c", "/usr/sbin/cupsd && exec sleep infinity"]

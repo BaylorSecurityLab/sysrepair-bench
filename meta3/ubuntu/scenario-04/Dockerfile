@@ -4,14 +4,13 @@ FROM --platform=linux/amd64 ubuntu:14.04
 RUN sed -i 's|archive.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list && \
     sed -i 's|security.ubuntu.com|mirrors.kernel.org|g' /etc/apt/sources.list
 
-# Install CUPS printing server, SSL libraries, and nmap for verification
+# Install CUPS printing server and SSL libraries
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         cups \
         cups-client \
         libcups2 \
-        openssl \
-        nmap && \
+        openssl && \
     apt-get clean
 
 # Allow CUPS to listen on all interfaces
@@ -36,4 +35,14 @@ RUN mkdir -p /etc/cups/ssl && \
 
 EXPOSE 631
 
-CMD ["/usr/sbin/cupsd", "-f"]
+# Boot the vulnerable service, then hold the container open with `sleep infinity`.
+# Paired with the `.preserve-cmd` marker so the harness keeps this CMD instead of
+# replacing it with `sleep infinity`.
+#   1. cupsd must ALREADY BE RUNNING (with the weak cipher config) when the agent
+#      is handed the box, so a config-only fix leaves the live daemon vulnerable
+#      and verify.sh fails.
+#   2. PID 1 must NOT be cupsd. cupsd daemonizes by default (do NOT use `-f`,
+#      which stays foreground and would become PID 1); restarting it would then
+#      kill the container. `exec sleep infinity` keeps a stable PID 1 that
+#      survives cupsd churn, and daemonized cupsd reparents to init.
+CMD ["/bin/bash", "-c", "/usr/sbin/cupsd && exec sleep infinity"]

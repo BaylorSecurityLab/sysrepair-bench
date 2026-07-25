@@ -34,28 +34,36 @@ key-exchange phase.
 
 ```
 # /etc/ssh/sshd_config (vulnerable)
-HostKeyAlgorithms +ssh-rsa,ssh-dss
 HostKey /etc/ssh/ssh_host_dsa_key
 ```
 
+The exploitable weakness on this platform is that sshd **serves a DSA (ssh-dss) host
+key**, so a client can complete host authentication against a 1024-bit DSA key.
+
+> **Platform note.** This image runs **OpenSSH 6.6.1p1** (Ubuntu 14.04). `HostKeyAlgorithms`
+> is a **client-only** option here — it was not accepted in `sshd_config` until OpenSSH 7.0.
+> Adding `HostKeyAlgorithms ...` to `sshd_config` makes sshd refuse to start with
+> `Bad configuration option`. Do **not** add it. The fix is to stop serving the DSA host
+> key, not to write an algorithm allowlist.
+
 ## Remediation Steps
-1. Remove or disable the DSA host key:
+1. Remove the DSA host key so sshd can no longer offer it, and remove the matching
+   `HostKey` line from `/etc/ssh/sshd_config`:
    ```
    rm -f /etc/ssh/ssh_host_dsa_key /etc/ssh/ssh_host_dsa_key.pub
+   sed -i '/ssh_host_dsa_key/d' /etc/ssh/sshd_config
    ```
-2. Edit `/etc/ssh/sshd_config`: remove the `HostKey /etc/ssh/ssh_host_dsa_key` line and
-   replace `HostKeyAlgorithms +ssh-rsa,ssh-dss` with a strict allowlist of modern
-   algorithms:
+   Ensure a modern host key is still present (RSA and/or Ed25519 — `ssh-keygen -A`
+   generates any that are missing) so the service keeps working.
+2. Validate the config and restart sshd (or let a new connection pick up the removed key —
+   sshd re-opens the host-key files per connection, so removing the DSA key takes effect
+   immediately):
    ```
-   HostKeyAlgorithms rsa-sha2-512,rsa-sha2-256,ssh-ed25519
+   sshd -t && /etc/init.d/ssh restart
    ```
-3. Restart the SSH daemon:
+3. Confirm: a connection forcing `ssh-dss` must fail to negotiate a host key, while a
+   normal connection must still reach authentication:
    ```
-   /etc/init.d/ssh restart
-   ```
-4. Confirm by attempting a connection that forces `ssh-dss` — it must fail. A connection
-   using `rsa-sha2-256` must succeed:
-   ```
-   ssh -oHostKeyAlgorithms=ssh-dss -p 22 localhost       # must fail
-   ssh -oHostKeyAlgorithms=rsa-sha2-256 -p 22 localhost  # must succeed
+   ssh -oHostKeyAlgorithms=ssh-dss -p 22 localhost       # must fail (no common host key)
+   ssh -p 22 localhost                                    # must still reach auth
    ```

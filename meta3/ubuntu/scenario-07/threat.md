@@ -44,18 +44,20 @@ by default once compiled in. No `LoadModule` directive is required; the module
 is statically linked.
 
 ## Remediation Steps
-1. Upgrade ProFTPD to version 1.3.5a or later (1.3.6+ preferred) which removes
-   unauthenticated `mod_copy` access:
-   ```
-   apt-get install -y proftpd
-   ```
-   Or compile from source with a patched version:
+> The running ProFTPD is a **source build under `/opt/proftpd`** (vulnerable 1.3.5), with
+> **no dpkg entry** — so `apt-get install proftpd` does not touch it (it would install a
+> separate, unused distro package while the vulnerable `/opt` daemon keeps serving). The fix
+> is to replace the source build with a patched version.
+
+1. Compile and install a patched ProFTPD (1.3.5a removes unauthenticated `mod_copy`;
+   1.3.6+ preferred) over the same prefix the daemon runs from:
    ```
    wget ftp://ftp.proftpd.org/distrib/source/proftpd-1.3.6.tar.gz
    tar xzf proftpd-1.3.6.tar.gz && cd proftpd-1.3.6
    ./configure --prefix=/opt/proftpd && make && make install
    ```
-2. Restart ProFTPD:
+2. Restart ProFTPD (the running daemon keeps the vulnerable in-memory binary until
+   restarted):
    ```
    kill $(cat /var/run/proftpd/proftpd.pid) && /opt/proftpd/sbin/proftpd
    ```

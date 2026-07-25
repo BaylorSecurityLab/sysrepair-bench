@@ -18,13 +18,16 @@ RUN echo 'root:toor' | chpasswd
 # Allow root login via SSH
 RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 
-# Generate a DSA host key (weak, deprecated algorithm)
+# Generate a DSA host key (weak, deprecated algorithm) and offer it. On
+# OpenSSH 6.6.1 the `HostKeyAlgorithms` keyword is a client-only option and is
+# rejected by sshd (added to sshd_config in 7.0) -- adding it here would make
+# sshd refuse to start. The real, exploitable weakness is that a DSA host key
+# exists and is served, so we only add the HostKey line.
 RUN rm -f /etc/ssh/ssh_host_dsa_key && ssh-keygen -t dsa -N '' -f /etc/ssh/ssh_host_dsa_key
-
-# Inject weak host key algorithms — advertises ssh-rsa (SHA-1 based) and ssh-dss (DSA)
-RUN echo 'HostKeyAlgorithms +ssh-rsa,ssh-dss' >> /etc/ssh/sshd_config
 RUN echo 'HostKey /etc/ssh/ssh_host_dsa_key' >> /etc/ssh/sshd_config
 
 EXPOSE 22
 
-CMD ["/usr/sbin/sshd", "-D"]
+# Boot sshd (already offering the weak DSA host key) then keep PID 1 as
+# `sleep infinity` so restarting sshd cannot kill the container. See .preserve-cmd.
+CMD ["/bin/bash", "-c", "mkdir -p /var/run/sshd && /usr/sbin/sshd && exec sleep infinity"]

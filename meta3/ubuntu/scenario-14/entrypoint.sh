@@ -1,6 +1,8 @@
 #!/bin/bash
-# Entrypoint for scenario-14: ProFTPD 1.3.5 -- compensating control (disable mod_copy)
-
+# Boot wrapper (kept via .preserve-cmd): start ProFTPD (which daemonizes/forks to
+# the background by default), then hand PID 1 to `sleep infinity` so an agent can
+# restart the daemon without killing the container -- making "added CopyEngine
+# off but never restarted" detectable.
 mkdir -p /var/run/proftpd
-
-exec /opt/proftpd/sbin/proftpd --nodaemon
+/opt/proftpd/sbin/proftpd
+exec sleep infinity

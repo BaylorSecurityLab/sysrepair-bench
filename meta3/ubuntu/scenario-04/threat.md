@@ -1,7 +1,22 @@
-# CUPS HTTPS Exposes Vulnerable Cipher Suites (SWEET32 3DES, RC4)
+# CUPS HTTPS Exposes Vulnerable Cipher Suites (SWEET32 3DES, RC4) (Compensating Control)
 
 ## Severity
 **High** (CVSS 7.5)
+
+## Category
+Compensating Control
+
+RC4 is config-toggleable on CUPS 1.7.2 (`SSLOptions AllowRC4`), but **3DES (DES-CBC3-SHA)
+cannot be disabled** — CUPS 1.7.2 / GnuTLS 2.12 offers no cipher-list control, and GnuTLS
+2.12 cannot even offer AES-GCM. So the service cannot be fully hardened in place. The
+intended solution is to **build or configure a TLS-terminating front-end proxy** that
+enforces a strong cipher suite (no RC4, no 3DES) while cupsd stays on loopback. Reconfiguring
+or upgrading cupsd itself cannot remove 3DES here; the compensating control is the expected
+answer.
+
+## Constraint
+**CUPS must remain at 1.7.2** (the platform-provided version; no upgrade path exists on
+trusty). The agent must eliminate the weak cipher exposure without changing the CUPS package.
 
 ## CVE / CWE
 - CWE-327: Use of a Broken or Risky Cryptographic Algorithm
@@ -40,23 +55,29 @@ SSLOptions AllowRC4 AllowDH
 ```
 
 ## Remediation Steps
-1. Edit `/etc/cups/cupsd.conf` and replace the `SSLOptions` line to explicitly deny
-   weak cipher categories, or set a restrictive cipher list:
-   ```
-   SSLOptions DenyRC4 DenyDH
-   ```
-   If the CUPS version supports `SSLCipherList`, also add:
-   ```
-   SSLCipherList HIGH:!aNULL:!MD5:!RC4:!3DES:!DES
-   ```
-2. Restart CUPS:
-   ```
-   /etc/init.d/cups restart
-   ```
-3. Verify by attempting a connection with RC4 or 3DES ciphers — they must fail — and
-   a connection with AES-GCM must still succeed:
-   ```
-   openssl s_client -connect localhost:631 -cipher RC4-SHA          # must fail
-   openssl s_client -connect localhost:631 -cipher DES-CBC3-SHA     # must fail
-   openssl s_client -connect localhost:631 -cipher AES256-GCM-SHA384 # must succeed
-   ```
+
+**Important — there is no complete native CUPS 1.7.2 fix.** RC4 is genuinely
+config-toggleable on this version (`SSLOptions AllowRC4` is a real Ubuntu POODLE-patch
+token), but **3DES is not**: CUPS 1.7.2 has no `SSLOptions` token to disable 3DES and
+no `SSLCipherList` directive (`DenyRC4`/`DenyDH` are rejected as `Unknown value`).
+Worse, the GnuTLS 2.12 cipher set that ships with this base predates AES-GCM, so cupsd
+itself cannot offer a modern AEAD suite even after every config tweak — a client
+offering `AES256-GCM-SHA384` to raw cupsd is refused. No config change can both reject
+3DES and serve a modern cipher.
+
+Because the service cannot be hardened in place, apply a **compensating control**: interpose
+something that enforces a strong cipher suite in front of cupsd, without changing the CUPS
+package.
+
+Required end state (how you achieve it is yours to design):
+
+- A client connecting to the printing service on **port 631** over TLS must have
+  **RC4 and 3DES (DES-CBC3-SHA) refused at the handshake**, while a **modern AEAD suite
+  (e.g. AES-GCM) succeeds**.
+- The **real CUPS service must remain reachable** through whatever control you add — a
+  successful modern-cipher client must reach cupsd itself, not a stand-in.
+- CUPS stays at 1.7.2 (no upgrade, no package change).
+
+`python3` and `openssl` are already present on this base, so no new packages are needed.
+(Note: cupsd's own GnuTLS 2.12 cannot offer AES-GCM at all, so the modern suite must come
+from whatever you place in front of it.)

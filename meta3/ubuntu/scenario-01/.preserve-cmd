@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots sshd (with the vulnerable configuration) and then
+# execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "fixed the config but never restarted the service" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting the daemon cannot kill
+#     the container.
+#
+# Consequence for solutions: a fix must RESTART the service, not merely start it
+# if absent - the service is already up with the vulnerable configuration.

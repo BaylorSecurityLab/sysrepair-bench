@@ -17,6 +17,12 @@ RUN mkdir -p /opt
 COPY scenario-12/admin_app.rb /opt/admin_app.rb
 
 
+COPY scenario-12/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 3500
 
-CMD ["ruby", "/opt/admin_app.rb"]
+# Boot wrapper (see entrypoint.sh + .preserve-cmd): the launcher lives in a file
+# so PID 1's argv is just "/entrypoint.sh" -- otherwise pkill -f admin_app.rb
+# would match the docker-init PID 1 and kill the container.
+CMD ["/entrypoint.sh"]

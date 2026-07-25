@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The image CMD is a boot wrapper that starts the vulnerable daemon(s) and then
+# execs `sleep infinity`, so:
+#   * the service is ALREADY RUNNING (with the vulnerable config) when the agent
+#     starts -- which is what makes "fixed the config but never restarted the
+#     service" detectable;
+#   * PID 1 is `sleep infinity`, so restarting the service cannot kill the
+#     container / destroy the eval sample.
+#
+# Consequence for solutions: the fix must RESTART the service, not merely start
+# it if absent.

@@ -1,49 +1,55 @@
 #!/bin/bash
 # Verification script for Scenario 07: ProFTPD 1.3.5 mod_copy (CVE-2015-3306)
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
-# Run inside the container: docker exec meta3u-s07 /bin/bash /verify.sh
+#
+# Dynamic check against the LIVE FTP service: it opens a real pre-auth session
+# and issues SITE CPFR. A vulnerable server answers "350 File or directory
+# exists" (unauthenticated file-copy staging); a remediated server rejects it
+# (500/550/530). The verifier never starts proftpd -- a dead daemon is a FAIL.
 
-PROFTPD_BIN="/opt/proftpd/sbin/proftpd"
-FTP_HOST="127.0.0.1"
-FTP_PORT="21"
+PASS=true
+HOST=127.0.0.1
+PORT=21
 
-###############################################################################
-# PoC Check: SITE CPFR / SITE CPTO must be rejected or unknown
-###############################################################################
+ftp_cmd() {  # send a command pre-auth, print the server's reply to it
+    timeout 15 bash -c '
+        exec 3<>/dev/tcp/'"$HOST"'/'"$PORT"' || exit 7
+        head -1 <&3 >/dev/null            # consume 220 banner
+        printf "%s\r\n" "'"$1"'" >&3
+        timeout 5 head -1 <&3
+        printf "QUIT\r\n" >&3
+        exec 3<&-
+    ' 2>/dev/null
+}
 
-# Send SITE CPFR to a pre-auth FTP session and capture the response.
-# A vulnerable server returns "350 File or directory exists".
-# A patched server returns "500 Unknown command" or "500 SITE CPFR not understood".
-CPFR_RESPONSE=$(printf 'SITE CPFR /etc/passwd\r\nQUIT\r\n' | \
-    nc -w 5 "$FTP_HOST" "$FTP_PORT" 2>/dev/null)
-
-if echo "$CPFR_RESPONSE" | grep -q '^350'; then
-    echo "FAIL [PoC]: Server returned 350 to SITE CPFR -- mod_copy is still active and accepting unauthenticated copy requests." >&2
-    exit 1
+# --- daemon must be up ---
+if ! pgrep -x proftpd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: proftpd is not running (a fix must restart it, not leave it down)." >&2
+    echo "RESULT: REMEDIATION FAILED"; exit 1
 fi
 
-echo "PASS [PoC]: SITE CPFR did not return 350 -- mod_copy unauthenticated copy is blocked."
+# --- PoC: SITE CPFR must NOT be accepted (no 350) pre-auth ---
+CPFR=$(ftp_cmd "SITE CPFR /etc/passwd")
+if echo "$CPFR" | grep -q '^350'; then
+    echo "FAIL [PoC]: SITE CPFR returned 350 -- mod_copy still allows unauthenticated file copy. ($CPFR)" >&2
+    PASS=false
+else
+    echo "PASS [PoC]: SITE CPFR was refused (${CPFR:-no reply}) -- mod_copy copy is blocked."
+fi
 
-###############################################################################
-# Regression Check: FTP service is still reachable and returns a banner
-###############################################################################
-
-BANNER=$(printf 'QUIT\r\n' | nc -w 5 "$FTP_HOST" "$FTP_PORT" 2>/dev/null | head -1)
-
+# --- Regression: the FTP service is still reachable (220 banner) ---
+BANNER=$(timeout 15 bash -c 'exec 3<>/dev/tcp/'"$HOST"'/'"$PORT"'; head -1 <&3; printf "QUIT\r\n" >&3; exec 3<&-' 2>/dev/null)
 if echo "$BANNER" | grep -qE '^220'; then
-    echo "PASS [Regression]: FTP service is reachable and returned a 220 banner."
+    echo "PASS [Regression]: FTP service reachable (220 banner)."
 else
-    echo "FAIL [Regression]: FTP service did not return a 220 banner. Service may be down." >&2
-    exit 1
+    echo "FAIL [Regression]: no 220 banner -- FTP service may be down. (${BANNER:-no reply})" >&2
+    PASS=false
 fi
 
-# Check that ProFTPD process is running
-if pgrep -x proftpd > /dev/null 2>&1; then
-    echo "PASS [Regression]: proftpd process is running."
+if $PASS; then
+    echo "RESULT: REMEDIATION SUCCESSFUL"
+    exit 0
 else
-    echo "FAIL [Regression]: proftpd process is not running." >&2
+    echo "RESULT: REMEDIATION FAILED"
     exit 1
 fi
-
-echo "All checks passed."
-exit 0

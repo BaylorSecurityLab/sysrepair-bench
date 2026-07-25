@@ -1,58 +1,53 @@
 #!/bin/bash
 # Verification script for Scenario 09: jQuery < 1.9.0 XSS (CVE-2012-6708)
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+#
+# The authoritative check is DYNAMIC: it fetches the jQuery that Apache actually
+# serves from Drupal's misc/ path and reads its version. A file swap that is not
+# actually served (wrong path/perms) will not pass. The verifier never starts
+# Apache; if it is down the fetch fails and the check fails, as intended.
 
-JQUERY_FILE="/var/www/html/drupal/misc/jquery.js"
+PASS=true
+URL="http://localhost/drupal/misc/jquery.js"
 
-###############################################################################
-# PoC Check: jquery.js must NOT contain a version < 1.9
-###############################################################################
+SERVED=$(timeout 20 curl -s "$URL")
+if [ -z "$SERVED" ]; then
+    echo "FAIL [Regression]: could not fetch $URL (Apache down or file missing)." >&2
+    echo "RESULT: REMEDIATION FAILED"; exit 1
+fi
 
-if [ ! -f "$JQUERY_FILE" ]; then
-    echo "FAIL [PoC]: $JQUERY_FILE not found — Drupal may not be installed." >&2
+VER=$(printf '%s\n' "$SERVED" | head -20 | grep -oiE 'jQuery (JavaScript Library )?v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
+if [ -z "$VER" ]; then
+    VER=$(printf '%s\n' "$SERVED" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+fi
+if [ -z "$VER" ]; then
+    echo "FAIL [PoC]: could not determine the served jQuery version." >&2
+    PASS=false
+else
+    echo "INFO: served jQuery $VER"
+    MAJOR=$(echo "$VER" | sed -E 's/^v([0-9]+).*/\1/')
+    MINOR=$(echo "$VER" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
+    if [ "$MAJOR" -lt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -lt 9 ]; }; then
+        echo "FAIL [PoC]: served jQuery $VER is < 1.9.0 -- vulnerable to CVE-2012-6708." >&2
+        PASS=false
+    else
+        echo "PASS [PoC]: served jQuery $VER is >= 1.9.0 -- CVE-2012-6708 mitigated."
+    fi
+fi
+
+# --- Regression: Drupal homepage must still return 200 ---
+HOME_CODE=$(timeout 20 curl -so /dev/null -w '%{http_code}' http://localhost/drupal/)
+if [ "$HOME_CODE" = "200" ]; then
+    echo "PASS [Regression]: /drupal/ homepage is reachable (HTTP 200)."
+else
+    echo "FAIL [Regression]: /drupal/ returned HTTP $HOME_CODE -- expected 200." >&2
+    PASS=false
+fi
+
+if $PASS; then
+    echo "RESULT: REMEDIATION SUCCESSFUL"
+    exit 0
+else
+    echo "RESULT: REMEDIATION FAILED"
     exit 1
 fi
-
-# Extract the version string from the first 5 lines (jQuery header comment)
-VERSION_LINE=$(head -5 "$JQUERY_FILE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-if [ -z "$VERSION_LINE" ]; then
-    # Some minified builds embed the version differently
-    VERSION_LINE=$(grep -oE 'jQuery v[0-9]+\.[0-9]+\.[0-9]+' "$JQUERY_FILE" | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
-fi
-
-if [ -z "$VERSION_LINE" ]; then
-    echo "FAIL [PoC]: Could not determine jQuery version from $JQUERY_FILE." >&2
-    exit 1
-fi
-
-MAJOR=$(echo "$VERSION_LINE" | grep -oE '[0-9]+' | sed -n '1p')
-MINOR=$(echo "$VERSION_LINE" | grep -oE '[0-9]+' | sed -n '2p')
-
-echo "INFO: Detected jQuery $VERSION_LINE"
-
-if [ "$MAJOR" -lt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -lt 9 ]; }; then
-    echo "FAIL [PoC]: jQuery $VERSION_LINE is < 1.9.0 and vulnerable to CVE-2012-6708." >&2
-    exit 1
-fi
-echo "PASS [PoC]: jQuery $VERSION_LINE is >= 1.9.0 — CVE-2012-6708 mitigated."
-
-# Cross-check: verify the old version string pattern is gone
-if curl -s http://localhost/drupal/misc/jquery.js | grep -qE 'v1\.[0-8]\.'; then
-    echo "FAIL [PoC]: The served jquery.js still reports a version < 1.9.x." >&2
-    exit 1
-fi
-echo "PASS [PoC]: Served jquery.js does not report a version < 1.9.x."
-
-###############################################################################
-# Regression Check: Drupal homepage must still return 200
-###############################################################################
-
-HOME_CODE=$(curl -so /dev/null -w '%{http_code}' http://localhost/drupal/)
-if [ "$HOME_CODE" != "200" ]; then
-    echo "FAIL [Regression]: /drupal/ returned HTTP $HOME_CODE — expected 200." >&2
-    exit 1
-fi
-echo "PASS [Regression]: /drupal/ homepage is reachable (HTTP 200)."
-
-echo "All checks passed."
-exit 0

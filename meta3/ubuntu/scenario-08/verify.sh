@@ -1,91 +1,73 @@
 #!/bin/bash
-# Verification script for Scenario 08: Samba USN-7826-2 (CVE-2025-10230, CVE-2025-9640)
+# Verification script for Scenario 08: Samba USN-7826-2 hardening
+#   CVE-2025-9640  (streams_xattr infoleak)   -- checked DYNAMICALLY over SMB
+#   CVE-2025-10230 (wins hook command injection) -- checked via config
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
-# Run inside the container: docker exec meta3u-s08 /bin/bash /verify.sh
+#
+# The verifier does NOT start smbd (it is booted by the image CMD); a dead
+# daemon is a FAIL. smbd re-reads smb.conf on every new connection, so the
+# streams_xattr probe reflects the CURRENTLY EFFECTIVE config, not just the file.
+# It snapshots/removes any files it creates under the share (trap on EXIT).
 
-###############################################################################
-# PoC Check 1: wins hook directive must be absent or empty
-###############################################################################
+PASS=true
+SHARE_DIR=/srv/samba/public
+PROBE="verify_ads_$$"
+SMB="smbclient //127.0.0.1/public -U guest% -N"
 
-SMB_CONF="/etc/samba/smb.conf"
+cleanup() { rm -f "$SHARE_DIR/$PROBE" "$SHARE_DIR/$PROBE".* 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
 
-if grep -qi 'wins hook' "$SMB_CONF" 2>/dev/null; then
-    HOOK_VAL=$(grep -i 'wins hook' "$SMB_CONF" | grep -v '^\s*#' | awk -F'=' '{print $2}' | tr -d ' \t')
-    if [ -n "$HOOK_VAL" ]; then
-        echo "FAIL [PoC-CVE-2025-10230]: smb.conf contains an active 'wins hook' directive: '$HOOK_VAL'" >&2
-        echo "  Remove or empty the directive and set 'wins support = no'." >&2
-        exit 1
-    fi
+# --- daemon must be up ---
+if ! pgrep -x smbd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: smbd is not running (a fix must not leave the service down)." >&2
+    echo "RESULT: REMEDIATION FAILED"; exit 1
 fi
 
-echo "PASS [PoC-CVE-2025-10230]: No active 'wins hook' directive found in smb.conf."
-
-###############################################################################
-# PoC Check 2: streams_xattr must not appear in any vfs objects line
-###############################################################################
-
-if grep -qi 'streams_xattr' "$SMB_CONF" 2>/dev/null; then
-    XATTR_LINE=$(grep -i 'streams_xattr' "$SMB_CONF" | grep -v '^\s*#')
-    if [ -n "$XATTR_LINE" ]; then
-        echo "FAIL [PoC-CVE-2025-9640]: smb.conf loads 'streams_xattr' VFS module: $XATTR_LINE" >&2
-        echo "  Remove streams_xattr from all vfs objects directives." >&2
-        exit 1
-    fi
-fi
-
-echo "PASS [PoC-CVE-2025-9640]: 'streams_xattr' is not loaded in smb.conf."
-
-###############################################################################
-# PoC Check 3 (proxy): Samba package version must be newer than 4.1.6
-###############################################################################
-
-SAMBA_VERSION=$(smbclient --version 2>/dev/null | awk '{print $2}')
-
-if [ -z "$SAMBA_VERSION" ]; then
-    echo "WARN [PoC-Version]: Could not determine smbclient version -- skipping version check."
+# --- PoC 1 (dynamic): streams_xattr must NOT be active on the live share ---
+# Create a base file as the guest, then try to write an NTFS alternate data
+# stream. If streams_xattr is loaded the stream is stored as a user.DosStream.*
+# xattr; if not, the stream write is rejected.
+timeout 25 $SMB -c "put /etc/hostname $PROBE" >/dev/null 2>&1
+timeout 25 $SMB -c "put /etc/hostname $PROBE:adstest" >/dev/null 2>&1
+if getfattr -d -m - "$SHARE_DIR/$PROBE" 2>/dev/null | grep -qi 'DosStream'; then
+    echo "FAIL [PoC-CVE-2025-9640]: streams_xattr is ACTIVE -- an SMB alternate data stream was stored as an xattr." >&2
+    PASS=false
 else
-    # Parse major.minor.patch from version string like "4.1.6" or "4.3.11"
-    MAJOR=$(echo "$SAMBA_VERSION" | cut -d. -f1)
-    MINOR=$(echo "$SAMBA_VERSION" | cut -d. -f2)
-    PATCH=$(echo "$SAMBA_VERSION" | cut -d. -f3 | tr -dc '0-9')
-    PATCH=${PATCH:-0}
-
-    # Vulnerable: 4.1.6 and earlier in the 4.1.x line; anything < 4.3.0 is unpatched
-    # The USN-7826-2 backport targets 4.3.11+dfsg-0ubuntu0.14.04.x or later
-    VULNERABLE=0
-    if [ "$MAJOR" -lt 4 ]; then
-        VULNERABLE=1
-    elif [ "$MAJOR" -eq 4 ] && [ "$MINOR" -lt 3 ]; then
-        VULNERABLE=1
-    elif [ "$MAJOR" -eq 4 ] && [ "$MINOR" -eq 3 ] && [ "$PATCH" -lt 11 ]; then
-        VULNERABLE=1
-    fi
-
-    if [ "$VULNERABLE" -eq 1 ]; then
-        echo "FAIL [PoC-Version]: Samba version $SAMBA_VERSION is older than the patched 4.3.11 backport." >&2
-        exit 1
-    fi
-
-    echo "PASS [PoC-Version]: Samba version $SAMBA_VERSION meets or exceeds the USN-7826-2 patched baseline."
+    echo "PASS [PoC-CVE-2025-9640]: streams_xattr is not active on the live share (ADS write did not persist)."
 fi
+cleanup
 
-###############################################################################
-# Regression Check: smbclient can list shares on localhost
-###############################################################################
-
-if smbclient -L //127.0.0.1 -U guest% -N 2>/dev/null | grep -q 'public\|Sharename'; then
-    echo "PASS [Regression]: smbclient can list shares on localhost."
-elif smbclient -L //127.0.0.1 -U guest% -N 2>&1 | grep -qiE 'session setup|Connection'; then
-    echo "PASS [Regression]: smbclient connected to localhost (share list may be empty)."
+# --- PoC 2 (config): the wins hook must be gone and WINS disabled ---
+# (nmbd is not started in this image, so the hook is not runtime-reachable; the
+# config is the authoritative surface for this directive.)
+SMB_CONF=/etc/samba/smb.conf
+HOOK=$(grep -iE '^[[:space:]]*wins hook[[:space:]]*=' "$SMB_CONF" | grep -v '^[[:space:]]*#' | cut -d= -f2- | tr -d ' \t')
+if [ -n "$HOOK" ]; then
+    echo "FAIL [PoC-CVE-2025-10230]: active 'wins hook' directive present: '$HOOK'." >&2
+    PASS=false
 else
-    # smbd might not be running yet; check process
-    if pgrep -x smbd > /dev/null 2>&1; then
-        echo "PASS [Regression]: smbd process is running (smbclient list skipped -- daemon may still be initializing)."
-    else
-        echo "FAIL [Regression]: smbd is not running and smbclient could not connect." >&2
-        exit 1
-    fi
+    echo "PASS [PoC-CVE-2025-10230]: no active 'wins hook' directive."
+fi
+# defence-in-depth: WINS server role should be off
+if testparm -s "$SMB_CONF" 2>/dev/null | grep -iqE '^[[:space:]]*wins support[[:space:]]*=[[:space:]]*(yes|true|1)'; then
+    echo "FAIL [PoC-CVE-2025-10230]: 'wins support = yes' still enables the WINS server role." >&2
+    PASS=false
+else
+    echo "PASS [PoC-CVE-2025-10230]: WINS server role is disabled."
 fi
 
-echo "All checks passed."
-exit 0
+# --- Regression: the file service must still work for a real client ---
+if timeout 25 $SMB -c 'ls' 2>/dev/null | grep -q '\.'; then
+    echo "PASS [Regression]: guest client can access the public share over SMB."
+else
+    echo "FAIL [Regression]: guest client could not access the public share." >&2
+    PASS=false
+fi
+
+if $PASS; then
+    echo "RESULT: REMEDIATION SUCCESSFUL"
+    exit 0
+else
+    echo "RESULT: REMEDIATION FAILED"
+    exit 1
+fi

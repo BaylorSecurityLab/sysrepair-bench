@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots cupsd with the vulnerable TLS config and then execs
+# `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING (accepting deprecated TLSv1.0/1.1) when the
+#     agent starts, which is what makes the "fixed the config but never
+#     restarted the service" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting cupsd cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must (re)start the remediation and leave the
+# live TLS surface hardened - merely editing config is not enough.

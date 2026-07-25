@@ -1,80 +1,79 @@
 #!/bin/bash
-# Verification script for Scenario 02: SSH Weak Host Key Algorithms
+# Verification script for Scenario 02: SSH Weak Host Key Algorithms (ssh-dss/DSA)
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+#
+# NOTE on platform: on OpenSSH 6.6.1 (Ubuntu 14.04) `HostKeyAlgorithms` is a
+# CLIENT-side option only; it is NOT a valid sshd_config directive (added in
+# 7.0). The genuine, exploitable weakness is therefore that a DSA host key is
+# present and offered. This verifier proves that DYNAMICALLY: it forces a client
+# to accept only ssh-dss and checks whether sshd can still complete host-key
+# negotiation with it. The verifier never starts sshd -- a dead daemon is FAIL.
 
-SSHD_CONFIG="/etc/ssh/sshd_config"
+PASS=true
+HOST=127.0.0.1
+PORT=22
+SSHOPTS="-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o PreferredAuthentications=publickey -p $PORT"
 
-###############################################################################
-# PoC Check 1: ssh-dss / DSA host key must be removed from config and disk
-###############################################################################
-
-if grep -qi 'HostKey[[:space:]]*/etc/ssh/ssh_host_dsa_key' "$SSHD_CONFIG"; then
-    echo "FAIL [PoC]: DSA HostKey is still referenced in sshd_config." >&2
-    exit 1
+if ! pgrep -x sshd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: sshd is not running (a fix must restart it, not leave it down)." >&2
+    PASS=false
 fi
 
-if [ -f /etc/ssh/ssh_host_dsa_key ]; then
-    echo "FAIL [PoC]: DSA host key file /etc/ssh/ssh_host_dsa_key still exists on disk." >&2
-    exit 1
+port_listening() {
+    local hexport; hexport=$(printf '%04X' "$1")
+    awk -v p=":$hexport" '$4=="0A"{split($2,a,":"); if(a[2]==substr(p,2)) f=1} END{exit f?0:1}' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+if ! port_listening "$PORT"; then
+    echo "FAIL [Regression]: nothing is listening on TCP $PORT." >&2
+    PASS=false
 fi
 
-echo "PASS [PoC]: DSA host key removed from config and disk."
-
-###############################################################################
-# PoC Check 2: HostKeyAlgorithms must not include ssh-rsa or ssh-dss
-###############################################################################
-
-if grep -qi '^HostKeyAlgorithms' "$SSHD_CONFIG"; then
-    HKA_LINE=$(grep -i '^HostKeyAlgorithms' "$SSHD_CONFIG" | tail -1 | \
-               sed 's/^[Hh]ost[Kk]ey[Aa]lgorithms[[:space:]]*//')
-    for weak_alg in ssh-rsa ssh-dss; do
-        if echo "$HKA_LINE" | grep -qi "$weak_alg"; then
-            echo "FAIL [PoC]: Weak host key algorithm '$weak_alg' is still listed in HostKeyAlgorithms." >&2
-            exit 1
-        fi
-    done
-    echo "PASS [PoC]: HostKeyAlgorithms does not include ssh-rsa or ssh-dss."
-else
-    # No directive means the OpenSSH default applies; on older versions that default
-    # includes ssh-rsa. Require an explicit directive to be safe.
-    echo "FAIL [PoC]: No HostKeyAlgorithms directive found — implicit defaults may include ssh-rsa." >&2
-    exit 1
-fi
-
-###############################################################################
-# PoC Check 3: Connection using ssh-dss must be rejected
-###############################################################################
-
-if ssh -o BatchMode=yes \
-       -o StrictHostKeyChecking=no \
-       -o ConnectTimeout=5 \
-       -o HostKeyAlgorithms=ssh-dss \
-       -p 22 localhost true 2>/dev/null; then
-    echo "FAIL [PoC]: sshd still accepted an ssh-dss host key connection." >&2
-    exit 1
-fi
-
-echo "PASS [PoC]: sshd rejected ssh-dss host key algorithm as expected."
-
-###############################################################################
-# Regression Check: Connection using rsa-sha2-256 must succeed
-###############################################################################
-
-if ! pgrep -x sshd > /dev/null 2>&1; then
-    /etc/init.d/ssh start > /dev/null 2>&1
-    sleep 1
-    if ! pgrep -x sshd > /dev/null 2>&1; then
-        echo "FAIL [Regression]: sshd is not running after attempted restart." >&2
-        exit 1
+# echo NEGOFAIL (no common host key alg / negotiation refused) | REACHED_AUTH | OTHER:<msg>
+probe_hostkey() {
+    local out
+    out=$(timeout 20 ssh $SSHOPTS -o HostKeyAlgorithms="$1" root@"$HOST" true 2>&1 || true)
+    if echo "$out" | grep -qiE 'no matching host key|no hostkey alg|Unable to negotiate'; then
+        echo NEGOFAIL
+    elif echo "$out" | grep -qiE 'Permission denied|Authenticated|Too many authentication'; then
+        echo REACHED_AUTH
+    else
+        echo "OTHER:$(echo "$out" | tail -1)"
     fi
+}
+
+# --- PoC (dynamic): sshd must NOT be able to serve an ssh-dss host key ---
+r=$(probe_hostkey "ssh-dss")
+case "$r" in
+    NEGOFAIL)     echo "PASS [PoC]: sshd no longer offers an ssh-dss (DSA) host key." ;;
+    REACHED_AUTH) echo "FAIL [PoC]: sshd still completed host-key negotiation using ssh-dss (DSA key active)." >&2; PASS=false ;;
+    *)            echo "FAIL [PoC]: could not probe ssh-dss host key ($r)." >&2; PASS=false ;;
+esac
+
+# --- PoC (supporting): the DSA key material must be gone from disk ---
+if [ -f /etc/ssh/ssh_host_dsa_key ] || [ -f /etc/ssh/ssh_host_dsa_key.pub ]; then
+    echo "FAIL [PoC]: DSA host key file still present under /etc/ssh." >&2
+    PASS=false
+else
+    echo "PASS [PoC]: DSA host key files removed from disk."
 fi
 
-if ! netstat -tlnp 2>/dev/null | grep -q ':22 '; then
-    echo "FAIL [Regression]: sshd is not listening on port 22." >&2
+# --- Regression: a modern host key algorithm must still negotiate ---
+ok=false
+for alg in ecdsa-sha2-nistp256 ssh-ed25519 ecdsa-sha2-nistp384; do
+    if [ "$(probe_hostkey "$alg")" = "REACHED_AUTH" ]; then ok=true; break; fi
+done
+if $ok; then
+    echo "PASS [Regression]: sshd still serves a modern host key ($alg)."
+else
+    echo "FAIL [Regression]: sshd could not negotiate any modern host key -- service broken." >&2
+    PASS=false
+fi
+
+if $PASS; then
+    echo "RESULT: REMEDIATION SUCCESSFUL"
+    exit 0
+else
+    echo "RESULT: REMEDIATION FAILED"
     exit 1
 fi
-
-echo "PASS [Regression]: sshd is running and listening on port 22."
-
-echo "All checks passed."
-exit 0

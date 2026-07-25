@@ -1,86 +1,70 @@
 #!/bin/bash
-# Verification script for Scenario 16: MySQL 5.5 bind-address + hosts.allow allowlist
-# Category: Compensating Control
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
-# Run inside the container: docker exec meta3u-s16 /bin/bash /verify.sh
+# Verification for meta3-ubuntu/scenario-16: MySQL 5.5 bound to 0.0.0.0 --
+# compensating control (restrict bind-address + hosts.allow/deny allowlist).
+# Exit 0 = remediated (PASS), Exit 1 = vulnerable or broken.
+#
+# DYNAMIC: the runtime bind is read from the LIVE listener via /proc/net/tcp
+# (state 0A, HEX ip:port; 0CEA == 3306). bind-address is read once at startup,
+# so "edited my.cnf but did not restart mysqld" correctly FAILS. `ss` is NOT
+# relied on -- it prints "*:3306" for an all-interfaces bind, never a literal
+# 0.0.0.0.
+set -u
+MY_CNF=/etc/mysql/my.cnf
+HOSTS_ALLOW=/etc/hosts.allow
+HOSTS_DENY=/etc/hosts.deny
+PORT_HEX=0CEA          # 3306
 
-MY_CNF="/etc/mysql/my.cnf"
-HOSTS_ALLOW="/etc/hosts.allow"
-HOSTS_DENY="/etc/hosts.deny"
+bound_any() {
+    awk -v p=":$PORT_HEX" '$4=="0A" && $2=="00000000"p {f=1} END{exit !f}' /proc/net/tcp 2>/dev/null && return 0
+    awk -v p=":$PORT_HEX" '$4=="0A" && $2=="00000000000000000000000000000000"p {f=1} END{exit !f}' /proc/net/tcp6 2>/dev/null && return 0
+    return 1
+}
+present() {
+    awk -v p=":$PORT_HEX" '$4=="0A" && $2 ~ p"$" {f=1} END{exit !f}' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
 
 ###############################################################################
-# PoC Check 1: bind-address must NOT be 0.0.0.0
+# PoC 1 (RUNTIME): port 3306 must NOT be bound to all interfaces.
 ###############################################################################
-
-# Normalise: strip whitespace around the = sign
-BIND_ADDR=$(grep -i '^\s*bind-address\s*=' "$MY_CNF" 2>/dev/null | \
-    tail -1 | sed 's/.*=\s*//' | tr -d ' \t')
-
-if [ -z "$BIND_ADDR" ]; then
-    echo "FAIL [PoC-Config]: No 'bind-address' directive found in $MY_CNF." >&2
+if bound_any; then
+    echo "FAIL [PoC-Runtime]: port 3306 is bound to 0.0.0.0 / :: at runtime -- MySQL reachable on all interfaces (restart after editing my.cnf)." >&2
     exit 1
 fi
+echo "PASS [PoC-Runtime]: port 3306 is not bound to all interfaces."
 
-if [ "$BIND_ADDR" = "0.0.0.0" ]; then
-    echo "FAIL [PoC-Config]: bind-address is still '0.0.0.0' -- MySQL is reachable on all interfaces." >&2
+# Config corroboration: bind-address must not be 0.0.0.0.
+BIND=$(grep -iE '^\s*bind-address\s*=' "$MY_CNF" 2>/dev/null | tail -1 | sed 's/.*=\s*//' | tr -d ' \t')
+if [ "$BIND" = "0.0.0.0" ] || [ -z "$BIND" ]; then
+    echo "FAIL [PoC-Config]: bind-address in $MY_CNF is '${BIND:-<missing>}' (must be a restricted address)." >&2
     exit 1
 fi
-
-echo "PASS [PoC-Config]: bind-address = $BIND_ADDR (not 0.0.0.0)."
-
-# Runtime check: port 3306 must not appear bound to 0.0.0.0 in ss output
-if ss -tlnp 2>/dev/null | grep ':3306' | grep -q '0\.0\.0\.0'; then
-    echo "FAIL [PoC-Runtime]: Port 3306 is still bound to 0.0.0.0 at runtime." >&2
-    echo "  Restart MySQL after editing my.cnf." >&2
-    exit 1
-fi
-
-echo "PASS [PoC-Runtime]: Port 3306 is not bound to 0.0.0.0."
+echo "PASS [PoC-Config]: bind-address = $BIND."
 
 ###############################################################################
-# PoC Check 2: /etc/hosts.deny must contain a mysqld deny-all rule
+# PoC 2: TCP-wrappers allowlist -- deny-all default plus an explicit allow.
 ###############################################################################
-
-if ! grep -qi 'mysqld\s*:\s*ALL' "$HOSTS_DENY" 2>/dev/null; then
+if ! grep -qiE '^\s*mysqld\s*:\s*ALL' "$HOSTS_DENY" 2>/dev/null; then
     echo "FAIL [PoC-HostsDeny]: $HOSTS_DENY does not contain 'mysqld: ALL'." >&2
-    echo "  Add: mysqld: ALL" >&2
     exit 1
 fi
-
-echo "PASS [PoC-HostsDeny]: $HOSTS_DENY contains 'mysqld: ALL'."
-
-###############################################################################
-# PoC Check 3: /etc/hosts.allow must permit a specific trusted subnet/host
-###############################################################################
-
-if ! grep -qi 'mysqld\s*:' "$HOSTS_ALLOW" 2>/dev/null; then
-    echo "FAIL [PoC-HostsAllow]: $HOSTS_ALLOW does not contain any 'mysqld:' allowlist entry." >&2
-    echo "  Add: mysqld: <trusted-subnet-or-ip>" >&2
+if ! grep -iE '^\s*mysqld\s*:' "$HOSTS_ALLOW" 2>/dev/null | grep -qv 'ALL'; then
+    echo "FAIL [PoC-HostsAllow]: $HOSTS_ALLOW has no specific 'mysqld:' allow entry." >&2
     exit 1
 fi
-
-ALLOW_ENTRY=$(grep -i 'mysqld\s*:' "$HOSTS_ALLOW" | grep -v '^\s*#' | head -1)
-echo "PASS [PoC-HostsAllow]: $HOSTS_ALLOW has allowlist entry: $ALLOW_ENTRY"
+echo "PASS [PoC-Wrappers]: hosts.deny denies mysqld and hosts.allow has a specific allow."
 
 ###############################################################################
-# Regression Check: MySQL is running and local trusted_user can connect
+# Regression: mysqld up + trusted_user can query over loopback.
 ###############################################################################
-
-if ! pgrep -x mysqld > /dev/null 2>&1 && ! pgrep -x mysqld_safe > /dev/null 2>&1; then
-    echo "FAIL [Regression]: MySQL daemon is not running." >&2
+if ! present; then
+    echo "FAIL [Regression]: nothing LISTENing on 3306 -- MySQL is down." >&2
     exit 1
 fi
-
-echo "PASS [Regression]: MySQL daemon is running."
-
-QUERY_RESULT=$(mysql -h 127.0.0.1 -u trusted_user -pTrustedP@ss1 \
-    -e "SELECT 1 AS ok;" 2>/dev/null | grep -c '1')
-
-if [ "$QUERY_RESULT" -ge 1 ] 2>/dev/null; then
-    echo "PASS [Regression]: trusted_user can connect to MySQL on 127.0.0.1 and execute queries."
+OK=$(timeout 12 mysql -h 127.0.0.1 -u trusted_user -pTrustedP@ss1 -N -e 'SELECT 1;' 2>/dev/null | tr -d ' ')
+if [ "$OK" = "1" ]; then
+    echo "PASS [Regression]: trusted_user connected over 127.0.0.1 and ran a query."
 else
-    echo "FAIL [Regression]: trusted_user could not connect to MySQL on 127.0.0.1." >&2
-    echo "  Ensure MySQL is running and trusted_user@localhost has SELECT privilege." >&2
+    echo "FAIL [Regression]: trusted_user could not query MySQL on 127.0.0.1 (remote-trusted path broken)." >&2
     exit 1
 fi
 

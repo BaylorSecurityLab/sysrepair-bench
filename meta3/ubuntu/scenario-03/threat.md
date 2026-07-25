@@ -1,7 +1,20 @@
-# CUPS Accepts Deprecated TLSv1.0 / TLSv1.1
+# CUPS Accepts Deprecated TLSv1.0 / TLSv1.1 (Compensating Control)
 
 ## Severity
 **Medium** (CVSS 5.3)
+
+## Category
+Compensating Control
+
+The vulnerable service cannot be fixed in place — CUPS 1.7.2 on this frozen Ubuntu 14.04
+base has no configuration or package path to reject a TLS version (see Remediation). The
+intended solution is to **build or configure a TLS-terminating front-end proxy** that
+enforces modern TLS while cupsd stays on loopback. Reconfiguring or upgrading cupsd itself
+is not possible here; the compensating control is the expected answer.
+
+## Constraint
+**CUPS must remain at 1.7.2** (the platform-provided version; no upgrade path exists on
+trusty). The agent must reduce the exposed TLS surface without changing the CUPS package.
 
 ## CVE / CWE
 - CWE-326: Inadequate Encryption Strength
@@ -39,22 +52,25 @@ SSLOptions AllowSSL3 AllowTLS1 AllowTLS11
 ```
 
 ## Remediation Steps
-1. Edit `/etc/cups/cupsd.conf` and replace the `SSLOptions` line to deny deprecated
-   protocol versions:
-   ```
-   SSLOptions None
-   ```
-   Alternatively, explicitly deny each deprecated version:
-   ```
-   SSLOptions DenySSL3 DenyTLS1 DenyTLS11
-   ```
-2. Restart CUPS:
-   ```
-   /etc/init.d/cups restart
-   ```
-3. Verify by attempting a TLSv1.0 connection — it must fail — and a TLSv1.2 connection
-   must still succeed:
-   ```
-   openssl s_client -connect localhost:631 -tls1        # must fail
-   openssl s_client -connect localhost:631 -tls1_2      # must succeed
-   ```
+
+**Important — there is no native CUPS 1.7.2 fix.** CUPS 1.7.2 on Ubuntu 14.04 links
+against GnuTLS 2.12, whose default handshake negotiates TLSv1.0/1.1/1.2 and offers no
+way to require a minimum protocol version. The `SSLOptions` directive has **no** token
+to disable a TLS version: `AllowTLS1`, `AllowTLS11`, `DenyTLS1`, `DenyTLS11` are all
+rejected by cupsd as `Unknown value ... for SSLOptions directive`. Setting
+`SSLOptions None`, `SSLOptions DenySSL3 DenyTLS1 DenyTLS11`, or removing the line
+entirely leaves TLSv1.0 and TLSv1.1 fully accepted. Upgrading GnuTLS/CUPS is not
+possible on this frozen legacy base.
+
+Because the service cannot be hardened in place, apply a **compensating control**: interpose
+something that enforces modern TLS in front of cupsd, without changing the CUPS package.
+
+Required end state (how you achieve it is yours to design):
+
+- A client connecting to the printing service on **port 631** over TLS must have
+  **TLSv1.0 and TLSv1.1 refused at the handshake**, while **TLSv1.2 succeeds**.
+- The **real CUPS service must remain reachable** through whatever control you add — a
+  successful TLSv1.2 client must reach cupsd itself, not a stand-in.
+- CUPS stays at 1.7.2 (no upgrade, no package change).
+
+`python3` and `openssl` are already present on this base, so no new packages are needed.

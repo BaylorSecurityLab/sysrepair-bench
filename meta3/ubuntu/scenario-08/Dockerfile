@@ -44,4 +44,8 @@ RUN useradd -M -s /usr/sbin/nologin smbguest 2>/dev/null || true && \
 
 EXPOSE 445
 
-CMD ["smbd", "--foreground", "--no-process-group"]
+# Boot smbd as a daemon (it forks) then keep PID 1 as `sleep infinity` so an
+# agent restarting Samba cannot kill the container. NOT a bare `--foreground`
+# CMD (that would make smbd PID 1 and a restart would destroy the eval sample).
+# See .preserve-cmd.
+CMD ["/bin/bash", "-c", "mkdir -p /var/log/samba /var/run/samba && smbd -D && exec sleep infinity"]
