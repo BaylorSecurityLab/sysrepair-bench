@@ -1,0 +1,49 @@
+# Line-ending policy.
+#
+# Without this file a Windows clone with core.autocrlf=true rewrites every
+# checked-out script to CRLF. verify.sh is then injected into a Linux
+# container and bash dies immediately with:
+#
+#     /tmp/verify.sh: line 12: $'\r': command not found
+#     set: pipefail: invalid option name
+#
+# which exits 2, not the 1 the harness expects - so a perfectly good scenario
+# looks broken. Pin the endings per file type instead of trusting the clone.
+
+# Default: normalise to LF in the repo and check out LF everywhere.
+* text=auto eol=lf
+
+# Executed inside Linux containers / VMs - MUST be LF.
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.py        text eol=lf
+*.rb        text eol=lf
+*.erb       text eol=lf
+*.conf      text eol=lf
+*.tmpl      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.jsonl     text eol=lf
+Dockerfile  text eol=lf
+Vagrantfile text eol=lf
+
+# Windows-native tooling. cmd.exe requires CRLF; PowerShell is Windows-first
+# here (Windows containers and the AD VM lab), so keep its native endings.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+*.psm1      text eol=crlf
+
+# Never touch these.
+*.zip       binary
+*.gz        binary
+*.tgz       binary
+*.exe       binary
+*.dll       binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.pdf       binary
+*.vmdk      binary
+*.box       binary
