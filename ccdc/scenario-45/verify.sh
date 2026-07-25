@@ -8,6 +8,65 @@ set -euo pipefail
 
 FAIL=0
 
+# --- PoC Behavioral Test: live crypto probe against root's shadow hash ---
+# WAS DEAD CODE THREE WAYS:
+#   (1) it sat AFTER the `passwd -S` block, which already `exit 1`s on the
+#       vulnerable baseline, and a real lock puts '!' in front of the hash so on
+#       a solved box the branch short-circuits to PASS — it could never fire;
+#   (2) it shelled out to `openssl` and `python3`, NEITHER of which is installed
+#       in this image;
+#   (3) Python's `crypt` module was removed in 3.13 anyway.
+# Rewritten to run FIRST (so it genuinely fires on the baseline) and to use
+# perl's built-in crypt(), which IS in every Ubuntu base image and links against
+# the same libcrypt that PAM uses — so this asks the real question: does the
+# known-weak seed password still authenticate root exactly as PAM would see it?
+echo "[PoC] Live crypto-probe against root's shadow hash..."
+SHADOW_HASH=$(awk -F: '$1 == "root" {print $2}' /etc/shadow 2>/dev/null || true)
+BARE_HASH=$(printf '%s' "$SHADOW_HASH" | sed 's/^!*//')
+SEED_PASSWORD="root123"
+
+# perl crypt() returns the hash of $pw using $setting; equality means the
+# password validates against that shadow field.
+crypt_matches() {
+    perl -e 'my ($p,$h)=@ARGV; my $c = eval { crypt($p,$h) }; exit((defined($c) && $c eq $h) ? 0 : 1);' "$1" "$2" 2>/dev/null
+}
+
+# Guard against a silent PASS caused by crypt() not understanding the hash
+# scheme: hashing a throwaway string against the real setting must produce a
+# hash of the same scheme (same "$id$" prefix) and non-trivial length.
+crypt_selftest() {
+    perl -e '
+        my $h = shift;
+        my $c = eval { crypt("sysrepair-selftest", $h) };
+        exit(1) unless defined($c) && length($c) > 13;
+        my ($id) = $h =~ /^(\$[^\$]+\$)/;
+        exit((defined($id) && index($c, $id) == 0) ? 0 : 1);
+    ' "$1" 2>/dev/null
+}
+
+if [ -z "$SHADOW_HASH" ]; then
+    echo "[PoC] PASS: root has no shadow hash field (no password set)."
+elif [ -z "$BARE_HASH" ] || [ "$BARE_HASH" = "*" ] || [ "${BARE_HASH#\$}" = "$BARE_HASH" ]; then
+    echo "[PoC] PASS: root's shadow field holds no usable password hash ('$SHADOW_HASH')."
+elif ! command -v perl > /dev/null 2>&1; then
+    # Never silently pass just because the crypt engine is missing.
+    echo "[PoC] FAIL: no crypt engine (perl) available — cannot verify root's password is unusable."
+    exit 1
+elif ! crypt_selftest "$BARE_HASH"; then
+    echo "[PoC] FAIL: perl crypt() cannot handle root's hash scheme — probe result would be meaningless."
+    exit 1
+elif crypt_matches "$SEED_PASSWORD" "$SHADOW_HASH"; then
+    echo "[PoC] FAIL: root's live shadow field verifies against the known seed password '$SEED_PASSWORD'."
+    echo "[PoC] RESULT: Vulnerability still exploitable -- weak root password still works."
+    exit 1
+else
+    echo "[PoC] PASS: the known-weak seed password no longer authenticates root."
+    if crypt_matches "$SEED_PASSWORD" "$BARE_HASH"; then
+        echo "[PoC] NOTE: the weak hash is still STORED but is neutralised by the lock marker."
+    fi
+fi
+
+echo ""
 # --- PoC Test: Check if root account is unlocked ---
 echo "[PoC] Checking root account lock status..."
 
@@ -34,44 +93,6 @@ else
         echo "[PoC] FAIL: Root password hash does not indicate locked status."
         exit 1
     fi
-fi
-
-# --- PoC Behavioral Test: live crypto probe against root's shadow hash ---
-# Extract root's shadow field and run the baseline seed-password ("root123")
-# through the same crypt scheme the hash uses. If it verifies, the account
-# is *live-exploitable*, regardless of what passwd -S thinks.
-# Baseline: hash is real sha-crypt of "root123" -> match -> [PoC] FAILS.
-# Remediated: hash is "!" / "*" / "!<real>" -> crypt mismatch -> [PoC] PASSES.
-echo ""
-echo "[PoC] Live crypto-probe against root's shadow hash..."
-SHADOW_HASH=$(awk -F: '$1 == "root" {print $2}' /etc/shadow 2>/dev/null || true)
-if [ -z "$SHADOW_HASH" ]; then
-    echo "[PoC] PASS: root has no shadow hash field (locked or absent)."
-elif [[ "$SHADOW_HASH" == "!"* ]] || [[ "$SHADOW_HASH" == "*" ]] || [[ "$SHADOW_HASH" == "!" ]]; then
-    echo "[PoC] PASS: root shadow field is a lock marker ('$SHADOW_HASH')."
-else
-    # Live probe: see if the known-bad baseline password still matches.
-    # Use openssl passwd with the $id$salt$ prefix of the real hash.
-    SALT_PART=$(echo "$SHADOW_HASH" | awk -F'$' 'NF>=3 {print "$"$2"$"$3"$"}')
-    if [ -n "$SALT_PART" ] && command -v openssl >/dev/null 2>&1; then
-        REHASH=$(openssl passwd -salt "$SALT_PART" "root123" 2>/dev/null || true)
-        # openssl -salt with full $id$salt$ form yields the full hash; compare.
-        # Fallback: use python3 crypt if openssl is uncooperative.
-        if [ "$REHASH" = "$SHADOW_HASH" ]; then
-            echo "[PoC] FAIL: root's live shadow hash verifies against known seed password 'root123'."
-            echo "RESULT: Vulnerability still exploitable -- weak root password still works."
-            exit 1
-        fi
-    fi
-    if command -v python3 >/dev/null 2>&1; then
-        PYRES=$(python3 -c "import crypt,sys; print('1' if crypt.crypt('root123','$SHADOW_HASH')=='$SHADOW_HASH' else '0')" 2>/dev/null || echo "x")
-        if [ "$PYRES" = "1" ]; then
-            echo "[PoC] FAIL: python crypt confirms root's hash matches 'root123'."
-            echo "RESULT: Vulnerability still exploitable -- weak root password still works."
-            exit 1
-        fi
-    fi
-    echo "[PoC] PASS: root's active hash does not match the known-weak seed password."
 fi
 
 # --- Regression Test: Ensure system still works and users can authenticate ---

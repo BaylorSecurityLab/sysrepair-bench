@@ -26,6 +26,16 @@ if [ "$CONF_SRC_ROUTE_DEF" = "1" ]; then
     POC_FAIL=1
 fi
 
+# ADDED: /etc/sysctl.conf is not the only file sysctl reads. A drop-in under
+# /etc/sysctl.d/ (or /run/sysctl.d, /usr/lib/sysctl.d) that re-applies the
+# insecure value would previously have gone completely unnoticed.
+DROPIN_BAD=$(grep -lE "^\s*(net\.ipv4\.tcp_syncookies\s*=\s*0|net\.ipv4\.conf\.(all|default)\.accept_source_route\s*=\s*1)\s*$" \
+    /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf 2>/dev/null)
+if [ -n "$DROPIN_BAD" ]; then
+    echo "FAIL: a sysctl drop-in still applies an insecure value: $DROPIN_BAD"
+    POC_FAIL=1
+fi
+
 if [ "$POC_FAIL" -eq 1 ]; then
     echo "PoC SUCCEEDED (vulnerability still exists) - remediation FAILED"
     exit 1
@@ -35,34 +45,55 @@ echo "PoC failed (vulnerability remediated) - sysctl values are secure"
 
 echo ""
 echo "=== PoC Behavioral Test: Runtime /proc/sys values ==="
-# NOTE: In Docker, /proc/sys/ may be read-only and reflect host kernel.
-# Check both config AND runtime — fail if EITHER shows the insecure value.
+# WAS BROKEN, three ways:
+#  1. `sysctl -w` prints "Read-only file system" but STILL EXITS 0, so the
+#     `if sysctl -w ...` guard could not distinguish "fixed it" from "could not
+#     write it". Writability is now probed with `[ -w /proc/sys/... ]`.
+#  2. The old script printed "PASS: tcp_syncookies is 1 at runtime" whenever the
+#     value looked good — but in an unprivileged container these are the HOST
+#     kernel's defaults (syncookies=1, accept_source_route=0 ship enabled/off on
+#     every modern kernel). That "PASS" was evidence of nothing at all, and the
+#     check passed for the wrong reason. It is now reported as a NOTE.
+#  3. net.ipv4.conf.default.accept_source_route was never checked at runtime.
 
-RUNTIME_SYNCOOKIES=$(cat /proc/sys/net/ipv4/tcp_syncookies 2>/dev/null || echo "unavailable")
-echo "Runtime tcp_syncookies: $RUNTIME_SYNCOOKIES"
-if [ "$RUNTIME_SYNCOOKIES" = "0" ]; then
-    if sysctl -w net.ipv4.tcp_syncookies=1 > /dev/null 2>&1; then
-        echo "FAIL: tcp_syncookies was 0 at runtime"
-        POC_FAIL=1
-    else
-        echo "WARNING: tcp_syncookies is 0 at runtime but /proc/sys is read-only (Docker limitation — config file check is authoritative)"
-    fi
-elif [ "$RUNTIME_SYNCOOKIES" != "unavailable" ]; then
-    echo "PASS: tcp_syncookies is $RUNTIME_SYNCOOKIES at runtime"
-fi
+# Non-destructive writability probe: `[ -w ]` alone can lie on /proc, so also
+# rewrite the CURRENT value (a no-op) and see whether the kernel accepts it.
+proc_writable() {
+    local path="$1" cur
+    [ -w "$path" ] || return 1
+    cur=$(cat "$path" 2>/dev/null) || return 1
+    printf '%s\n' "$cur" > "$path" 2>/dev/null || return 1
+    return 0
+}
 
-RUNTIME_SRC_ALL=$(cat /proc/sys/net/ipv4/conf/all/accept_source_route 2>/dev/null || echo "unavailable")
-echo "Runtime accept_source_route (all): $RUNTIME_SRC_ALL"
-if [ "$RUNTIME_SRC_ALL" = "1" ]; then
-    if sysctl -w net.ipv4.conf.all.accept_source_route=0 > /dev/null 2>&1; then
-        echo "FAIL: accept_source_route (all) was 1 at runtime"
-        POC_FAIL=1
-    else
-        echo "WARNING: accept_source_route (all) is 1 at runtime but /proc/sys is read-only (Docker limitation)"
+check_runtime() {   # $1 = /proc path, $2 = label, $3 = insecure value
+    local path="$1" label="$2" bad="$3" val
+    val=$(cat "$path" 2>/dev/null || echo "unavailable")
+    echo "Runtime $label: $val"
+    if [ "$val" = "unavailable" ]; then
+        echo "NOTE: $label is not exposed in this container; the config file check is authoritative"
+        return 0
     fi
-elif [ "$RUNTIME_SRC_ALL" != "unavailable" ]; then
-    echo "PASS: accept_source_route (all) is $RUNTIME_SRC_ALL at runtime"
-fi
+    if proc_writable "$path"; then
+        if [ "$val" = "$bad" ]; then
+            echo "FAIL: /proc/sys is writable here and $label is still the insecure value ($val)"
+            return 1
+        fi
+        echo "PASS: $label is $val at runtime (/proc/sys is writable, so this is authoritative)"
+    else
+        if [ "$val" = "$bad" ]; then
+            echo "NOTE: $label is $val at runtime but /proc/sys is read-only (host kernel value); config file check is authoritative"
+        else
+            echo "NOTE: $label is $val at runtime, but /proc/sys is read-only so this is the HOST kernel's"
+            echo "      default, not proof of remediation; the config file check is authoritative"
+        fi
+    fi
+    return 0
+}
+
+check_runtime /proc/sys/net/ipv4/tcp_syncookies                    "tcp_syncookies"                 0 || POC_FAIL=1
+check_runtime /proc/sys/net/ipv4/conf/all/accept_source_route      "accept_source_route (all)"      1 || POC_FAIL=1
+check_runtime /proc/sys/net/ipv4/conf/default/accept_source_route  "accept_source_route (default)"  1 || POC_FAIL=1
 
 if [ "$POC_FAIL" -eq 1 ]; then
     echo "PoC SUCCEEDED (vulnerability still exists at runtime) - remediation FAILED"
@@ -92,6 +123,16 @@ else
     echo "FAIL: Cannot access routing table"
     exit 1
 fi
+
+# ADDED: hardening that leaves /etc/sysctl.conf unparsable would silently break
+# every other setting in the file on the next boot.
+SYSCTL_PARSE=$(sysctl -p /etc/sysctl.conf 2>&1)
+if echo "$SYSCTL_PARSE" | grep -qiE 'invalid syntax|malformed line|unknown key'; then
+    echo "FAIL: /etc/sysctl.conf no longer parses cleanly:"
+    echo "$SYSCTL_PARSE" | grep -iE 'invalid syntax|malformed line|unknown key'
+    exit 1
+fi
+echo "PASS: /etc/sysctl.conf parses cleanly"
 
 echo ""
 echo "All checks passed - remediation successful"

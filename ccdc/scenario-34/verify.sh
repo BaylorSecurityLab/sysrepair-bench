@@ -54,38 +54,76 @@ fi
 
 
 # --- PoC Behavioral Test: unattended-upgrades applies runtime config ---
-# Hybrid probe: config grep is already above; here we exercise the actual
-# apt periodic evaluation and the dry-run unattended-upgrade entrypoint.
-# Baseline has neither the binary nor the config, so both sub-checks fail.
+# WAS WEAK: this was an OR of two sub-probes, and sub-probe B (`apt-config dump`
+# showing the Periodic knobs) is just a restatement of the config grep performed
+# in checks 3 and 4 - it added no behavioural coverage and could satisfy the
+# whole probe on its own. The real behavioural evidence is the unattended-upgrade
+# entry point actually running and resolving its allowed origins, so that is now
+# required; apt-config dump is retained only as a corroborating signal.
 echo ""
 echo "[PoC] Probing live unattended-upgrades behaviour..."
-LIVE_OK=false
 
-# Sub-probe A: the unattended-upgrade binary actually runs in dry-run mode
-# (this parses the merged /etc/apt/apt.conf.d/* tree at runtime).
-if command -v unattended-upgrade &>/dev/null; then
-    if unattended-upgrade --dry-run --debug >/tmp/uu_dry.$$.log 2>&1; then
-        if grep -qiE '(Allowed origins are|Initial blacklist|pkgs that look like)' /tmp/uu_dry.$$.log; then
-            LIVE_OK=true
-            echo "[PoC] PASS: unattended-upgrade --dry-run parsed runtime config."
-        fi
-    fi
-    rm -f /tmp/uu_dry.$$.log
+if ! command -v unattended-upgrade &>/dev/null; then
+    echo "[PoC] FAIL: the unattended-upgrade entry point is not installed."
+    echo "RESULT: Vulnerability still present (no unattended-upgrades runtime)."
+    exit 1
 fi
 
-# Sub-probe B: apt-config dump reflects the merged runtime periodic values
+UU_LOG=/tmp/uu_dry.$$.log
+if ! unattended-upgrade --dry-run --debug >"$UU_LOG" 2>&1; then
+    echo "[PoC] FAIL: 'unattended-upgrade --dry-run' exited non-zero - it cannot run on this host."
+    tail -5 "$UU_LOG"
+    rm -f "$UU_LOG"
+    echo "RESULT: Vulnerability still present (unattended-upgrades cannot run)."
+    exit 1
+fi
+
+if ! grep -qiE '(Allowed origins are|Initial blacklist|pkgs that look like)' "$UU_LOG"; then
+    echo "[PoC] FAIL: unattended-upgrade produced no origin resolution - runtime config not parsed."
+    tail -5 "$UU_LOG"
+    rm -f "$UU_LOG"
+    echo "RESULT: Vulnerability still present (no live unattended-upgrades state)."
+    exit 1
+fi
+echo "[PoC] PASS: unattended-upgrade --dry-run parsed runtime config."
+
+# The origins it resolved must actually include a security pocket, otherwise the
+# daemon would run happily and still never apply a security update.
+ORIGINS=$(grep -i 'Allowed origins are' "$UU_LOG" | head -1)
+if echo "$ORIGINS" | grep -qiE '(security|esm)'; then
+    echo "[PoC] PASS: resolved allowed origins include a security pocket."
+    echo "  $ORIGINS"
+else
+    echo "[PoC] FAIL: resolved allowed origins contain no security pocket: $ORIGINS"
+    rm -f "$UU_LOG"
+    echo "RESULT: Vulnerability still present (security updates would never be applied)."
+    exit 1
+fi
+rm -f "$UU_LOG"
+
+# Corroborating signal only (equivalent to the config grep above).
 if command -v apt-config &>/dev/null; then
     PERIODIC_DUMP=$(apt-config dump 2>/dev/null | grep -E '^APT::Periodic::(Update-Package-Lists|Unattended-Upgrade)' || true)
     if echo "$PERIODIC_DUMP" | grep -qE 'Update-Package-Lists "1"' && \
        echo "$PERIODIC_DUMP" | grep -qE 'Unattended-Upgrade "1"'; then
-        LIVE_OK=true
         echo "[PoC] PASS: apt-config dump shows Periodic knobs enabled at runtime."
+    else
+        echo "[PoC] FAIL: apt-config dump does not show both Periodic knobs at \"1\"."
+        echo "  $PERIODIC_DUMP"
+        echo "RESULT: Vulnerability still present (apt runtime values not set)."
+        exit 1
     fi
 fi
 
-if ! $LIVE_OK; then
-    echo "[PoC] FAIL: live unattended-upgrades behaviour not verified (binary missing or apt runtime values not set)."
-    echo "RESULT: Vulnerability still present (no live unattended-upgrades state)."
+# Nothing schedules the periodic run without a timer or the cron.daily shim, so
+# the knobs above would never actually fire.
+if [ -f /lib/systemd/system/apt-daily-upgrade.timer ] || \
+   [ -f /usr/lib/systemd/system/apt-daily-upgrade.timer ] || \
+   [ -f /etc/cron.daily/apt-compat ]; then
+    echo "[PoC] PASS: a periodic trigger (apt-daily timer or cron.daily/apt-compat) is present."
+else
+    echo "[PoC] FAIL: no apt periodic trigger installed - the Periodic knobs would never fire."
+    echo "RESULT: Vulnerability still present (nothing schedules unattended upgrades)."
     exit 1
 fi
 
@@ -104,11 +142,32 @@ if ! apt-get --version &>/dev/null; then
 fi
 echo "[Regression] PASS: apt-get works."
 
-# Check that apt-get update can run (basic connectivity test)
-if ! apt-get update -qq 2>/dev/null; then
-    echo "[Regression] WARNING: apt-get update failed (may be network-restricted in container)."
-else
+# Check that apt-get update can run.
+# WAS WEAK: a failure here was only a WARNING, so a remediation that wrecked
+# /etc/apt/sources.list (the classic way to "stop the update noise") still
+# passed even though no update - unattended or not - could ever be fetched.
+# One retry absorbs a cold-start hiccup; a second failure is a real regression.
+apt_update_ok() {
+    # apt-get update exits 0 even when every index fails to download, so the
+    # warnings have to be inspected too.
+    apt-get update -qq >/tmp/aptreg.$$.log 2>&1 || return 1
+    grep -qE '(Failed to fetch|Some index files failed to download)' /tmp/aptreg.$$.log && return 1
+    return 0
+}
+if apt_update_ok; then
     echo "[Regression] PASS: apt-get update works."
+    rm -f /tmp/aptreg.$$.log
+else
+    sleep 5
+    if apt_update_ok; then
+        echo "[Regression] PASS: apt-get update works (after retry)."
+        rm -f /tmp/aptreg.$$.log
+    else
+        echo "[Regression] FAIL: apt-get update cannot refresh the package indexes - apt sources are broken."
+        tail -3 /tmp/aptreg.$$.log
+        rm -f /tmp/aptreg.$$.log
+        exit 1
+    fi
 fi
 
 # Check basic system operations

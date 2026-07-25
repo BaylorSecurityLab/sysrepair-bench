@@ -43,32 +43,42 @@ echo "PoC failed (vulnerability remediated) - Redis configuration is secure"
 echo ""
 echo "=== PoC Behavioral Test: Unauthenticated Redis access should be denied ==="
 
-# Start Redis if not running
+# NOTE: this verifier deliberately has NO "start Redis if it is not running"
+# helper. The image entrypoint boots redis-server with the vulnerable config
+# (see .preserve-cmd), so the daemon is already up when grading starts. Starting
+# it here would (a) mask an agent that stopped or broke Redis and (b) hide the
+# "edited redis.conf but never restarted redis-server" mistake by launching a
+# fresh daemon that reads the fixed config. A dead Redis is a FAILURE.
+
+# BROKEN BEFORE: this whole block was wrapped in `if pgrep -x redis-server`, and
+# its final branch PASSed on ANY non-PONG value - including the empty string that
+# `redis-cli` prints when the connection is refused. A dead Redis therefore
+# satisfied the security check silently. Now the daemon must genuinely be up and
+# must genuinely answer NOAUTH; "no answer at all" is a FAIL, not a pass.
 if ! pgrep -x redis-server > /dev/null 2>&1; then
-    redis-server "$REDIS_CONF" --daemonize yes 2>/dev/null
-    sleep 1
+    echo "FAIL: Redis is not running - cannot demonstrate that auth is enforced"
+    exit 1
 fi
 
-if pgrep -x redis-server > /dev/null 2>&1; then
-    # Try PING without authentication — should require auth
-    NOAUTH_RESULT=$(redis-cli -h 127.0.0.1 PING 2>/dev/null || true)
-    if [ "$NOAUTH_RESULT" = "PONG" ]; then
-        echo "FAIL: Unauthenticated PING returned PONG — Redis has no auth"
-        exit 1
-    elif echo "$NOAUTH_RESULT" | grep -qi "NOAUTH\|ERR.*authentication\|denied"; then
-        echo "PASS: Unauthenticated PING correctly requires authentication"
-    else
-        echo "PASS: Unauthenticated PING did not return PONG (got: $NOAUTH_RESULT)"
-    fi
+# Try PING without authentication — should require auth.
+# 2>&1 so a "Could not connect" error cannot masquerade as "no output".
+NOAUTH_RESULT=$(redis-cli -h 127.0.0.1 PING 2>&1 || true)
+if [ "$NOAUTH_RESULT" = "PONG" ]; then
+    echo "FAIL: Unauthenticated PING returned PONG — Redis has no auth"
+    exit 1
+elif echo "$NOAUTH_RESULT" | grep -qi "NOAUTH\|ERR.*authentication\|denied"; then
+    echo "PASS: Unauthenticated PING correctly requires authentication"
+else
+    echo "FAIL: Redis did not refuse the unauthenticated PING - it is not reachable on 127.0.0.1:6379 (got: $NOAUTH_RESULT)"
+    exit 1
 fi
 
 echo ""
 echo "=== Regression Test: Redis works locally ==="
 
-# Start Redis if not running (it may have been restarted with new config)
 if ! pgrep -x redis-server > /dev/null 2>&1; then
-    redis-server "$REDIS_CONF" --daemonize yes 2>/dev/null
-    sleep 1
+    echo "FAIL: Redis is not running"
+    exit 1
 fi
 
 # Extract password for testing

@@ -27,6 +27,10 @@ Or specify specific secondary DNS IPs:
 allow-transfer { 192.168.1.2; };
 ```
 
+Then reload BIND so the running server picks up the change (`rndc reload`, or
+restart `named`). Editing `named.conf` alone leaves the live daemon serving the
+old policy, and zone transfers keep succeeding until it is reloaded.
+
 ## Impact
 An attacker can enumerate all DNS records, discovering internal hostnames, IP addresses, mail servers, and network structure. This is a critical reconnaissance step.
 

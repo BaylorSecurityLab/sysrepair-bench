@@ -31,29 +31,41 @@ if [ -f "$WP_CONFIG" ]; then
     fi
 fi
 
-# --- PoC Behavioral Test: Theme/plugin editor endpoint should not be accessible ---
-# Start Apache if not running
+# --- PoC Behavioral Test: the file editor must be blocked as PHP actually sees it ---
+# WAS A TAUTOLOGY: it curl'd /wp-admin/theme-editor.php and passed on anything
+# other than HTTP 200. /var/www/html/wp-admin is an EMPTY directory in this
+# image, so the request returns 404 on the VULNERABLE BASELINE too and the check
+# could never fail. Replaced with a real runtime evaluation: load wp-config.php
+# through the PHP interpreter and ask whether DISALLOW_FILE_EDIT is actually in
+# effect, which is exactly what WordPress does before rendering the editor.
+# NOTE: this verifier deliberately has NO "start apache2 if it is not running"
+# helper. The image CMD boots Apache with the vulnerable WordPress tree (see
+# .preserve-cmd), so the server is already up when grading starts; starting it
+# here would mask an agent that stopped or broke it. A dead Apache is a FAILURE.
 if ! pgrep -x apache2 > /dev/null 2>&1; then
-    apachectl start 2>/dev/null
-    sleep 1
+    echo "FAIL [Regression]: apache2 is not running"
+    PASS=false
 fi
 
-if command -v curl > /dev/null 2>&1; then
-    EDITOR_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 http://localhost/wp-admin/theme-editor.php 2>/dev/null || true)
-    if [[ "$EDITOR_CODE" == "200" ]]; then
-        echo "FAIL [PoC]: wp-admin/theme-editor.php returns HTTP 200 (editor may be accessible)"
-        PASS=false
+if [ -f "$WP_CONFIG" ] && command -v php > /dev/null 2>&1; then
+    EDIT_STATE=$(php -r '
+        error_reporting(0);
+        include "/var/www/html/wp-config.php";
+        if (!defined("DISALLOW_FILE_EDIT")) { echo "allowed"; exit; }
+        echo filter_var(constant("DISALLOW_FILE_EDIT"), FILTER_VALIDATE_BOOLEAN) ? "blocked" : "allowed";
+    ' 2>/dev/null)
+    if [[ "$EDIT_STATE" == "blocked" ]]; then
+        echo "PASS [PoC]: PHP runtime confirms DISALLOW_FILE_EDIT is in effect (theme/plugin editor blocked)"
     else
-        echo "PASS [PoC]: wp-admin/theme-editor.php returns HTTP $EDITOR_CODE (not directly accessible)"
+        echo "FAIL [PoC]: PHP runtime says the theme/plugin editor is still enabled (DISALLOW_FILE_EDIT not in effect)"
+        PASS=false
     fi
+else
+    echo "FAIL [PoC]: cannot evaluate DISALLOW_FILE_EDIT (wp-config.php or php missing)"
+    PASS=false
 fi
 
 # --- Regression Test: Apache should be serving the WordPress site ---
-if ! pgrep -x apache2 > /dev/null 2>&1; then
-    apachectl start 2>/dev/null
-    sleep 1
-fi
-
 RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null)
 if [[ "$RESPONSE" == "200" ]]; then
     echo "PASS [Regression]: Apache is serving WordPress (HTTP 200)"

@@ -19,14 +19,36 @@ else
     echo "PASS [PoC]: Directory listing is disabled"
 fi
 
-# Also verify by HTTP if Apache is running
-if pgrep -x apache2 > /dev/null 2>&1 || { apachectl start 2>/dev/null; sleep 1; pgrep -x apache2 > /dev/null 2>&1; }; then
-    LISTING=$(curl -s http://localhost/data/ 2>/dev/null)
-    if echo "$LISTING" | grep -qi "Index of /data"; then
-        echo "FAIL [PoC]: Directory listing is accessible via HTTP"
+# --- PoC Behavioral Test (RUNTIME, MANDATORY): actually request the listing ---
+#
+# The grep above only reads CONFIG FILES. Removing "Indexes" from a config and
+# never restarting apache2 leaves the running server happily enumerating
+# /data/ for any anonymous client - that state must FAIL. So fetch the
+# directory over HTTP and look at what the LIVE server returns.
+#
+# The image CMD boots apache2 with Indexes enabled (see .preserve-cmd), so a
+# server is ALWAYS expected here. verify.sh must never start it: a freshly
+# started httpd would load the agent's edited config and mask the not-restarted
+# case. A dead server is a failure.
+if ! pgrep -x apache2 > /dev/null 2>&1; then
+    echo "FAIL [PoC]: apache2 is not running - cannot prove directory listing is off"
+    PASS=false
+else
+    LISTING=$(curl -s --max-time 10 http://localhost/data/ 2>/dev/null)
+    LISTING_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost/data/ 2>/dev/null)
+    if [ -z "$LISTING_CODE" ] || [ "$LISTING_CODE" = "000" ]; then
+        echo "FAIL [PoC]: no HTTP response for /data/ - cannot prove listing is off"
+        PASS=false
+    elif echo "$LISTING" | grep -qi "Index of /data"; then
+        echo "FAIL [PoC]: Directory listing is accessible via HTTP (HTTP $LISTING_CODE)"
+        echo "            (config may look clean, but apache2 was never restarted)"
+        PASS=false
+    elif echo "$LISTING" | grep -qiE '<a href="[^"]+">[^<]*</a>.*[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+        # mod_autoindex with a custom HeaderName still emits a file table.
+        echo "FAIL [PoC]: /data/ still returns an autoindex file listing (HTTP $LISTING_CODE)"
         PASS=false
     else
-        echo "PASS [PoC]: Directory listing not accessible via HTTP"
+        echo "PASS [PoC]: Directory listing not accessible via HTTP (HTTP $LISTING_CODE)"
     fi
 fi
 

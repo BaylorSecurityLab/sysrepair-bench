@@ -15,13 +15,23 @@ else
 fi
 
 # --- PoC Behavioral Test: Zone transfer MUST be denied (mandatory) ---
-# Ensure BIND is running for this test
-if ! pgrep -x named > /dev/null 2>&1; then
-    named -u bind 2>/dev/null
-    sleep 1
-fi
+# NOTE: this verifier deliberately has NO "start named if it is not running"
+# fallback. The image CMD boots named with the permissive transfer ACL (see
+# .preserve-cmd), so the daemon is already up when grading starts. Starting it
+# here would (a) mask an agent that stopped or broke BIND and (b) hide the
+# "edited named.conf but never restarted named" mistake by launching a fresh
+# daemon that loads the fixed config. A dead named is a FAILURE.
+# `pgrep -x named` alone would also match a zombie, so require a live process.
+named_alive() {
+    local p st
+    for p in $(pgrep -x named 2>/dev/null); do
+        st=$(awk '{print $3}' "/proc/$p/stat" 2>/dev/null)
+        [ -n "$st" ] && [ "$st" != "Z" ] && return 0
+    done
+    return 1
+}
 
-if pgrep -x named > /dev/null 2>&1; then
+if named_alive; then
     AXFR_RESULT=$(dig @127.0.0.1 example.com AXFR +short 2>/dev/null)
     if [ -n "$AXFR_RESULT" ] && ! echo "$AXFR_RESULT" | grep -qi "Transfer failed\|refused"; then
         echo "FAIL [PoC]: Zone transfer still succeeds"
@@ -35,17 +45,11 @@ else
 fi
 
 # --- Regression Test: BIND should resolve DNS queries ---
-if pgrep -x named > /dev/null 2>&1; then
+if named_alive; then
     echo "PASS [Regression]: named process is running"
 else
-    named -u bind 2>/dev/null
-    sleep 1
-    if pgrep -x named > /dev/null 2>&1; then
-        echo "PASS [Regression]: named started successfully"
-    else
-        echo "FAIL [Regression]: named is not running and cannot be started"
-        PASS=false
-    fi
+    echo "FAIL [Regression]: named is not running"
+    PASS=false
 fi
 
 # Check that DNS queries still work

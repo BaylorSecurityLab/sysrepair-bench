@@ -37,41 +37,38 @@ else
     echo "[PoC] PASS: minlen is $MINLEN (>= 14)."
 fi
 
-# Check dcredit (should be <= -1, meaning at least 1 digit required)
-DCREDIT=$(get_pwquality_val "dcredit")
-if [ -n "$DCREDIT" ] && [ "$DCREDIT" -ge 0 ] 2>/dev/null; then
-    echo "[PoC] FAIL: dcredit is $DCREDIT (should be <= -1 to require digits)."
-    POC_FAIL=1
-else
-    echo "[PoC] PASS: dcredit is ${DCREDIT:-(not set, default)}."
+# Check the character-class credits (each should be <= -1, i.e. at least one
+# character of that class is REQUIRED).
+# WAS WEAK: an UNSET credit was scored PASS as "default". The libpwquality
+# default is +1, which merely lets a character of that class earn one length
+# credit - it does not require the class at all. Leaving dcredit/ucredit/
+# lcredit/ocredit unset is therefore not compliant, and treating it as a pass
+# meant "delete the weak lines and stop" scored as a full remediation. A credit
+# must now be explicitly set to a negative value (or minclass must demand all
+# four classes, which is the equivalent CIS formulation).
+MINCLASS=$(get_pwquality_val "minclass")
+CLASS_COVERED=false
+if [ -n "$MINCLASS" ] && [ "$MINCLASS" -ge 4 ] 2>/dev/null; then
+    CLASS_COVERED=true
+    echo "[PoC] PASS: minclass is $MINCLASS (all four character classes required)."
 fi
 
-# Check ucredit (should be <= -1, meaning at least 1 uppercase required)
-UCREDIT=$(get_pwquality_val "ucredit")
-if [ -n "$UCREDIT" ] && [ "$UCREDIT" -ge 0 ] 2>/dev/null; then
-    echo "[PoC] FAIL: ucredit is $UCREDIT (should be <= -1 to require uppercase)."
-    POC_FAIL=1
-else
-    echo "[PoC] PASS: ucredit is ${UCREDIT:-(not set, default)}."
-fi
-
-# Check lcredit (should be <= -1, meaning at least 1 lowercase required)
-LCREDIT=$(get_pwquality_val "lcredit")
-if [ -n "$LCREDIT" ] && [ "$LCREDIT" -ge 0 ] 2>/dev/null; then
-    echo "[PoC] FAIL: lcredit is $LCREDIT (should be <= -1 to require lowercase)."
-    POC_FAIL=1
-else
-    echo "[PoC] PASS: lcredit is ${LCREDIT:-(not set, default)}."
-fi
-
-# Check ocredit (should be <= -1, meaning at least 1 special char required)
-OCREDIT=$(get_pwquality_val "ocredit")
-if [ -n "$OCREDIT" ] && [ "$OCREDIT" -ge 0 ] 2>/dev/null; then
-    echo "[PoC] FAIL: ocredit is $OCREDIT (should be <= -1 to require special chars)."
-    POC_FAIL=1
-else
-    echo "[PoC] PASS: ocredit is ${OCREDIT:-(not set, default)}."
-fi
+for key in dcredit ucredit lcredit ocredit; do
+    VAL=$(get_pwquality_val "$key")
+    if [ -z "$VAL" ]; then
+        if $CLASS_COVERED; then
+            echo "[PoC] PASS: $key not set, but minclass=$MINCLASS already requires that class."
+        else
+            echo "[PoC] FAIL: $key is not set - the pwquality default (+1) does NOT require that character class."
+            POC_FAIL=1
+        fi
+    elif [ "$VAL" -ge 0 ] 2>/dev/null; then
+        echo "[PoC] FAIL: $key is $VAL (should be <= -1 to require that character class)."
+        POC_FAIL=1
+    else
+        echo "[PoC] PASS: $key is $VAL."
+    fi
+done
 
 # Check enforcing (should be 1)
 ENFORCING=$(get_pwquality_val "enforcing")
@@ -129,37 +126,70 @@ if [ "$POC_FAIL" -eq 1 ]; then
     exit 1
 fi
 
-# --- PoC Behavioral Test: live pwquality enforcement via pwscore ---
-# pwscore is shipped with libpwquality and evaluates a candidate password
-# using the live /etc/security/pwquality.conf. We feed it a trivially-weak
-# password ("a") and a reasonable-looking one ("CorrectHorse9!Battery").
-# Baseline (minlen=1, all credits=0, enforcing=0): "a" is accepted => [PoC] FAILS.
-# Remediated (minlen>=14, credits<=-1): "a" is rejected => [PoC] PASSES.
+# --- PoC Behavioral Test: live pwquality enforcement through the real PAM stack ---
+# WAS WEAK: this probe used pwscore (not installed - libpwquality-tools is absent)
+# and therefore always fell through to cracklib-check with the password "a".
+# cracklib-check rejects "a" as "WAY too short" from its own built-in rules,
+# ignoring /etc/security/pwquality.conf entirely - so the "live enforcement" layer
+# passed identically on the VULNERABLE baseline. It proved nothing.
+#
+# Instead, drive a real `passwd` as the unprivileged testuser over a pty and try
+# to set a password that:
+#   * pam_unix's `obscure` check accepts (12 chars, so not "too short"), and
+#   * a compliant pwquality policy must reject (single character class, < 14).
+# On the baseline (minlen=1, credits=0, enforcing=0) this password is ACCEPTED.
+# The account's shadow entry is saved and restored around the probe.
 echo ""
-echo "[PoC] Probing live pwquality enforcement with pwscore..."
-if command -v pwscore >/dev/null 2>&1; then
-    if printf 'a' | pwscore >/dev/null 2>&1; then
-        echo "[PoC] FAIL: pwscore accepted trivially-weak password 'a' against live pwquality.conf."
+echo "[PoC] Probing live password-quality enforcement through PAM (passwd as testuser)..."
+
+WEAK_CANDIDATE='abcdefghijkl'          # 12 chars, lowercase only - no digit/upper/special
+PROBE_CURRENT='Zq7#vNp2Lk9@wTxR'       # complies with any sane policy
+STRONG_CANDIDATE='Xk9#mQr2Vt7@Lp'      # 14 chars, all four classes
+
+if command -v script >/dev/null 2>&1 && id testuser >/dev/null 2>&1; then
+    SHADOW_BAK=$(mktemp /tmp/shadowbak.XXXXXX)
+    cat /etc/shadow > "$SHADOW_BAK"
+
+    # Root-driven chpasswd bypasses pam_pwquality (root is exempt), so this only
+    # establishes a known current password for the probe.
+    echo "testuser:${PROBE_CURRENT}" | chpasswd 2>/dev/null
+
+    pw_change() {
+        local newpw="$1"
+        ( sleep 1; printf '%s\n' "$PROBE_CURRENT"
+          sleep 1; printf '%s\n' "$newpw"
+          sleep 1; printf '%s\n' "$newpw"
+          sleep 2 ) | timeout 40 script -qec "su - testuser -c passwd" /dev/null 2>&1 | tr -d '\r' || true
+    }
+
+    WEAK_OUT=$(pw_change "$WEAK_CANDIDATE" || true)
+    cat "$SHADOW_BAK" > /etc/shadow
+    echo "testuser:${PROBE_CURRENT}" | chpasswd 2>/dev/null
+
+    if echo "$WEAK_OUT" | grep -q 'password updated successfully'; then
+        echo "[PoC] FAIL: PAM accepted the weak password '$WEAK_CANDIDATE' (12 chars, one character class)."
         POC_FAIL=1
     else
-        echo "[PoC] PASS: pwscore rejected trivially-weak password 'a'."
+        echo "[PoC] PASS: PAM rejected the weak password '$WEAK_CANDIDATE'."
+        echo "$WEAK_OUT" | grep -E 'BAD PASSWORD|must choose' | head -1 | sed 's/^/    /'
     fi
-    # Sanity: a strong password should score; if pwscore rejects even strong,
-    # something is misconfigured enough to note (don't fail on this alone).
-    if ! printf 'CorrectHorse9!Battery' | pwscore >/dev/null 2>&1; then
-        echo "[PoC] WARN: pwscore also rejected a strong candidate -- unusually strict, but still compliant."
-    fi
-elif command -v cracklib-check >/dev/null 2>&1; then
-    # Fallback: cracklib-check reports "OK" for accepted passwords
-    RES=$(printf 'a\n' | cracklib-check 2>/dev/null | head -1)
-    if echo "$RES" | grep -q ': OK'; then
-        echo "[PoC] FAIL: cracklib-check accepted trivially-weak password 'a'."
-        POC_FAIL=1
+
+    # Regression side of the same probe: a genuinely strong password must still
+    # be accepted, or the policy is unusable rather than merely strict.
+    STRONG_OUT=$(pw_change "$STRONG_CANDIDATE" || true)
+    if echo "$STRONG_OUT" | grep -q 'password updated successfully'; then
+        echo "[PoC] PASS: PAM still accepts a compliant strong password."
     else
-        echo "[PoC] PASS: cracklib-check rejected trivially-weak password 'a'."
+        echo "[PoC] FAIL: PAM rejected a compliant strong password - password changes are broken."
+        echo "$STRONG_OUT" | grep -E 'BAD PASSWORD|must choose|error' | head -1 | sed 's/^/    /'
+        POC_FAIL=1
     fi
+
+    cat "$SHADOW_BAK" > /etc/shadow
+    rm -f "$SHADOW_BAK"
 else
-    echo "[PoC] INFO: neither pwscore nor cracklib-check available for live enforcement probe."
+    echo "[PoC] FAIL: cannot run the live enforcement probe (script(1) or testuser missing)."
+    POC_FAIL=1
 fi
 
 if [ "$POC_FAIL" -eq 1 ]; then

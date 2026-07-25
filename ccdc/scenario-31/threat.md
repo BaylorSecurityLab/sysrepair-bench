@@ -30,6 +30,10 @@ The system has no audit daemon (auditd) installed or configured. Without system 
    - System administration actions (sudoers, sudolog)
 4. Enable and start the auditd service.
 5. Ensure the audit configuration is immutable (add `-e 2` rule).
+6. Compile and load the rules so they take effect, not merely exist on disk —
+   `augenrules --load` (or `auditctl -R`). Rules dropped in `/etc/audit/rules.d/`
+   that are never compiled into `/etc/audit/audit.rules` leave the system
+   unaudited.
 
 ## References
 - CIS Ubuntu Linux Benchmark - Section 4.1 (Configure System Accounting)

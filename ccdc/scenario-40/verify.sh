@@ -47,14 +47,23 @@ if id sysadmin >/dev/null 2>&1; then
         echo "PASS [PoC]: live write-probe shows sysadmin cannot write /etc/passwd"
     fi
 
-    # Belt-and-braces: actually attempt an append as sysadmin. Should fail with EACCES.
-    if su -s /bin/sh -c 'echo "# probe" >> /etc/passwd' sysadmin 2>/dev/null; then
-        echo "FAIL [PoC]: sysadmin successfully appended to /etc/passwd at runtime"
-        # Try to undo the append so we don't corrupt state mid-verify
-        sed -i '/^# probe$/d' /etc/passwd 2>/dev/null || true
+    # Belt-and-braces: exercise the real open(2) permission check as sysadmin.
+    # WAS DESTRUCTIVE: this used to `echo "# probe" >> /etc/passwd`, actually
+    # MUTATING GROUND TRUTH on the vulnerable baseline, and only best-effort
+    # `sed -i`'d it back. A verifier must never leave the system altered.
+    # Opening the file for append with `exec 3>>` runs the identical kernel
+    # permission check but writes zero bytes, so /etc/passwd is untouched.
+    PASSWD_SUM_BEFORE=$(md5sum /etc/passwd 2>/dev/null | awk '{print $1}')
+    if su -s /bin/sh -c 'exec 3>>/etc/passwd' sysadmin 2>/dev/null; then
+        echo "FAIL [PoC]: sysadmin can open /etc/passwd for writing at runtime"
         PASS=false
     else
-        echo "PASS [PoC]: sysadmin append to /etc/passwd was rejected by kernel"
+        echo "PASS [PoC]: sysadmin write-open of /etc/passwd was rejected by kernel"
+    fi
+    PASSWD_SUM_AFTER=$(md5sum /etc/passwd 2>/dev/null | awk '{print $1}')
+    if [[ "$PASSWD_SUM_BEFORE" != "$PASSWD_SUM_AFTER" ]]; then
+        echo "FAIL [PoC]: the write-probe altered /etc/passwd (verifier must be non-destructive)"
+        PASS=false
     fi
 else
     echo "WARN [PoC]: sysadmin user missing, skipping live write-probe"
@@ -72,6 +81,16 @@ if id webadmin > /dev/null 2>&1; then
     echo "PASS [Regression]: webadmin user still exists"
 else
     echo "FAIL [Regression]: webadmin user is missing"
+    PASS=false
+fi
+
+# The image CMD boots sshd (see .preserve-cmd) and this verifier deliberately
+# does NOT start it: the remote-access service must survive the re-permissioning
+# of /etc/passwd. A dead sshd is a FAILURE, not something verify.sh repairs.
+if pgrep -x sshd > /dev/null 2>&1; then
+    echo "PASS [Regression]: sshd is running"
+else
+    echo "FAIL [Regression]: sshd is not running"
     PASS=false
 fi
 

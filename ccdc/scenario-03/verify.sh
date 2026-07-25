@@ -57,10 +57,15 @@ echo "  [PASS] No weak ciphers found in configuration"
 echo ""
 echo "[PoC Test] Attempting SSH connection with weak cipher (3des-cbc)..."
 
-# Ensure sshd is running for behavioral test
+# The image CMD boots sshd with the vulnerable cipher list (see .preserve-cmd),
+# so a daemon is ALWAYS expected to be up here. We must NOT start one: a config
+# edit that was never followed by a restart leaves the running daemon still
+# offering 3des-cbc, and starting a fresh daemon would silently repair that -
+# masking the exact "edited the config, forgot to restart" mistake this test
+# exists to catch. A dead daemon is a failure, not something to fix.
 if ! pgrep -x sshd >/dev/null 2>&1; then
-    /usr/sbin/sshd 2>/dev/null
-    sleep 1
+    echo "  [FAIL] sshd is not running - cannot prove weak ciphers are refused"
+    exit $FAIL
 fi
 
 WEAK_RESULT=$(sshpass -p 'TestPass123!' ssh -o Ciphers=3des-cbc -o StrictHostKeyChecking=no \
@@ -68,11 +73,17 @@ WEAK_RESULT=$(sshpass -p 'TestPass123!' ssh -o Ciphers=3des-cbc -o StrictHostKey
 
 if echo "$WEAK_RESULT" | grep -q "weak_cipher_worked"; then
     echo "  [FAIL] SSH connection with 3des-cbc succeeded — weak cipher still allowed"
+    echo "         (sshd_config may list only strong ciphers, but sshd was never restarted)"
     exit $FAIL
-elif echo "$WEAK_RESULT" | grep -qi "no matching cipher\|no matching key exchange\|connection refused"; then
-    echo "  [PASS] SSH correctly rejected 3des-cbc connection"
+elif echo "$WEAK_RESULT" | grep -qiE "connection refused|connection reset|connection closed|no route to host|timed out"; then
+    # The daemon is up but would not talk to us at all - that is a broken
+    # service, not proof that the weak cipher is gone.
+    echo "  [FAIL] could not reach the live sshd on 127.0.0.1:22 (got: ${WEAK_RESULT:0:80})"
+    exit $FAIL
+elif echo "$WEAK_RESULT" | grep -qi "no matching cipher\|no matching key exchange"; then
+    echo "  [PASS] Live daemon correctly rejected the 3des-cbc connection"
 else
-    echo "  [PASS] SSH did not accept 3des-cbc (got: ${WEAK_RESULT:0:80})"
+    echo "  [PASS] Live daemon did not accept 3des-cbc (got: ${WEAK_RESULT:0:80})"
 fi
 
 ###############################################################################

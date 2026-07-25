@@ -24,6 +24,87 @@ else
     exit 1
 fi
 
+# =============================================================================
+# PoC Behavioral Test (RUNTIME): ACTUALLY PERFORM THE CROSS-USER ATTACK.
+#
+# `stat` above only reads inode metadata. This block runs the real attack the
+# sticky bit exists to prevent: user `alice` creates a file in a shared temp
+# directory and user `bob` - who does not own the file and is not in alice's
+# group - tries to DELETE it and to RENAME it out from under her (the classic
+# /tmp symlink/hijack setup).
+#
+# If bob succeeds, the directory is unsafe regardless of what stat reported.
+# Every probe file is cleaned up and the directory mode is checksummed before
+# and after so this test leaves no permanent change.
+# =============================================================================
+echo ""
+echo "[PoC] Running the real cross-user /tmp hijack attack (alice -> bob)..."
+
+for user in alice bob; do
+    if ! id "$user" >/dev/null 2>&1; then
+        echo "[PoC] FAIL: user $user is missing -- cannot run the hijack probe."
+        exit 1
+    fi
+done
+
+EXPLOITABLE=0
+
+for SHARED in /tmp /var/tmp /dev/shm; do
+    [ -d "$SHARED" ] || continue
+    # Only shared dirs that are world-writable are in scope.
+    case "$(stat -c '%a' "$SHARED")" in
+        *7|*6|*3|*2) : ;;
+        *) continue ;;
+    esac
+
+    MODE_BEFORE=$(stat -c '%a %U:%G' "$SHARED")
+
+    VICTIM="$SHARED/.sticky_probe_victim.$$"
+    STOLEN="$SHARED/.sticky_probe_stolen.$$"
+    rm -f "$VICTIM" "$STOLEN" 2>/dev/null
+
+    if ! su -s /bin/bash -c "echo alice-owned-data > '$VICTIM'" alice 2>/dev/null; then
+        # alice cannot write here at all; nothing to hijack.
+        continue
+    fi
+
+    # --- Attack 1: bob deletes a file he does not own ---
+    su -s /bin/bash -c "rm -f '$VICTIM'" bob >/dev/null 2>&1 || true
+    if [ ! -e "$VICTIM" ]; then
+        echo "[PoC] FAIL: bob DELETED alice's file in $SHARED -- sticky bit is not protecting it."
+        EXPLOITABLE=1
+        # recreate for the rename test
+        su -s /bin/bash -c "echo alice-owned-data > '$VICTIM'" alice 2>/dev/null || true
+    else
+        echo "[PoC] PASS: bob could not delete alice's file in $SHARED."
+    fi
+
+    # --- Attack 2: bob renames alice's file out from under her ---
+    if [ -e "$VICTIM" ]; then
+        su -s /bin/bash -c "mv '$VICTIM' '$STOLEN'" bob >/dev/null 2>&1 || true
+        if [ -e "$STOLEN" ]; then
+            echo "[PoC] FAIL: bob RENAMED alice's file in $SHARED -- file-hijack attack works."
+            EXPLOITABLE=1
+        else
+            echo "[PoC] PASS: bob could not rename alice's file in $SHARED."
+        fi
+    fi
+
+    # --- restore exact prior state ---
+    rm -f "$VICTIM" "$STOLEN" 2>/dev/null
+    MODE_AFTER=$(stat -c '%a %U:%G' "$SHARED")
+    if [ "$MODE_BEFORE" != "$MODE_AFTER" ]; then
+        echo "[PoC] WARN: $SHARED changed during the probe ($MODE_BEFORE -> $MODE_AFTER)"
+    fi
+done
+
+if [ "$EXPLOITABLE" -eq 1 ]; then
+    echo "[PoC] RESULT: Vulnerability still exploitable -- an unprivileged user destroyed"
+    echo "              another user's files in a shared temp directory."
+    exit 1
+fi
+echo "[PoC] PASS: cross-user delete and rename attacks were both refused by the kernel."
+
 # --- Regression Test: Ensure /tmp is still writable by users ---
 echo ""
 echo "[Regression] Checking that /tmp is still usable by regular users..."

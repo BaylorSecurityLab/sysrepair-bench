@@ -61,49 +61,59 @@ fi
 echo ""
 echo "[PoC] Checking actual password aging applied to testuser..."
 
-if command -v chage > /dev/null 2>&1 && id testuser > /dev/null 2>&1; then
-    CHAGE_OUT=$(chage -l testuser 2>/dev/null || true)
-    if [ -n "$CHAGE_OUT" ]; then
-        # Check Maximum number of days between password change
-        APPLIED_MAX=$(echo "$CHAGE_OUT" | grep -i "Maximum number of days" | awk -F: '{print $2}' | tr -d ' ')
-        if [ -n "$APPLIED_MAX" ] && [ "$APPLIED_MAX" != "" ]; then
-            if [ "$APPLIED_MAX" -gt 90 ] 2>/dev/null; then
-                echo "[PoC] FAIL: testuser PASS_MAX_DAYS is $APPLIED_MAX (should be <= 90)."
-                POC_FAIL=1
-            else
-                echo "[PoC] PASS: testuser PASS_MAX_DAYS is $APPLIED_MAX (<= 90)."
-            fi
-        fi
-
-        # Check Minimum number of days between password change
-        APPLIED_MIN=$(echo "$CHAGE_OUT" | grep -i "Minimum number of days" | awk -F: '{print $2}' | tr -d ' ')
-        if [ -n "$APPLIED_MIN" ] && [ "$APPLIED_MIN" != "" ]; then
-            if [ "$APPLIED_MIN" -lt 7 ] 2>/dev/null; then
-                echo "[PoC] FAIL: testuser PASS_MIN_DAYS is $APPLIED_MIN (should be >= 7)."
-                POC_FAIL=1
-            else
-                echo "[PoC] PASS: testuser PASS_MIN_DAYS is $APPLIED_MIN (>= 7)."
-            fi
-        fi
-
-        # Check warning days
-        APPLIED_WARN=$(echo "$CHAGE_OUT" | grep -i "Number of days of warning" | awk -F: '{print $2}' | tr -d ' ')
-        if [ -n "$APPLIED_WARN" ] && [ "$APPLIED_WARN" != "" ]; then
-            if [ "$APPLIED_WARN" -lt 7 ] 2>/dev/null; then
-                echo "[PoC] FAIL: testuser PASS_WARN_AGE is $APPLIED_WARN (should be >= 7)."
-                POC_FAIL=1
-            else
-                echo "[PoC] PASS: testuser PASS_WARN_AGE is $APPLIED_WARN (>= 7)."
-            fi
-        fi
-
-        if [ "$POC_FAIL" -eq 1 ]; then
-            echo "[PoC] RESULT: Password aging not properly applied to testuser."
-            exit 1
-        fi
+# WAS FAIL-OPEN: every unreadable value fell through the `[ -n ... ]` guards
+# without setting POC_FAIL, and a missing chage(1) or testuser printed
+# "[PoC] INFO: ... skipping" and carried on to exit 0. shadow-utils and testuser
+# both ship in the base image, so a box where this probe cannot run is a damaged
+# box, not a remediated one. Every branch below now FAILS CLOSED.
+#
+# check_aging LABEL VALUE COMPARISON BOUND -> 0 = compliant, 1 = fail.
+# A value we cannot read, or that is not a plain number ("never", "-1", ""), is
+# not evidence of compliance and is treated as a failure.
+check_aging() {
+    local label="$1" val="$2" cmp="$3" bound="$4"
+    case "$val" in
+        ''|*[!0-9]*)
+            echo "[PoC] FAIL: $label could not be read as a number (got '${val:-<empty>}')."
+            return 1 ;;
+    esac
+    if [ "$val" -"$cmp" "$bound" ]; then
+        echo "[PoC] FAIL: $label is $val (should be $( [ "$cmp" = gt ] && echo '<=' || echo '>=' ) $bound)."
+        return 1
     fi
-else
-    echo "[PoC] INFO: chage or testuser not available, skipping applied-aging behavioral test."
+    echo "[PoC] PASS: $label is $val."
+    return 0
+}
+
+if ! command -v chage > /dev/null 2>&1; then
+    echo "[PoC] FAIL: chage(1) is unavailable, so the aging actually applied to accounts"
+    echo "  cannot be read. chage ships in the base image - its absence means the box is broken."
+    exit 1
+fi
+if ! id testuser > /dev/null 2>&1; then
+    echo "[PoC] FAIL: the testuser account is missing, so the applied-aging behavioural test"
+    echo "  cannot run. Deleting the account is not a remediation."
+    exit 1
+fi
+
+CHAGE_OUT=$(chage -l testuser 2>/dev/null || true)
+if [ -z "$CHAGE_OUT" ]; then
+    echo "[PoC] FAIL: chage -l testuser produced no output - the applied password aging"
+    echo "  cannot be verified."
+    exit 1
+fi
+
+APPLIED_MAX=$(echo "$CHAGE_OUT" | grep -i "Maximum number of days" | awk -F: '{print $2}' | tr -d ' ')
+APPLIED_MIN=$(echo "$CHAGE_OUT" | grep -i "Minimum number of days" | awk -F: '{print $2}' | tr -d ' ')
+APPLIED_WARN=$(echo "$CHAGE_OUT" | grep -i "Number of days of warning" | awk -F: '{print $2}' | tr -d ' ')
+
+check_aging "testuser PASS_MAX_DAYS" "$APPLIED_MAX" gt 90 || POC_FAIL=1
+check_aging "testuser PASS_MIN_DAYS" "$APPLIED_MIN" lt 7 || POC_FAIL=1
+check_aging "testuser PASS_WARN_AGE" "$APPLIED_WARN" lt 7 || POC_FAIL=1
+
+if [ "$POC_FAIL" -eq 1 ]; then
+    echo "[PoC] RESULT: Password aging not properly applied to testuser."
+    exit 1
 fi
 
 # --- PoC Behavioral Test: live useradd applies the new login.defs aging ---
@@ -114,37 +124,72 @@ fi
 echo ""
 echo "[PoC] Probing live useradd inheritance of password aging..."
 PROBE_USER="pwage_probe_$$"
-if command -v useradd >/dev/null 2>&1 && command -v userdel >/dev/null 2>&1; then
-    if useradd -M -s /usr/sbin/nologin "$PROBE_USER" 2>/dev/null; then
-        PROBE_CHAGE=$(chage -l "$PROBE_USER" 2>/dev/null || true)
-        PROBE_MAX=$(echo "$PROBE_CHAGE" | awk -F: '/Maximum number of days/ {gsub(/ /,"",$2); print $2}')
-        PROBE_MIN=$(echo "$PROBE_CHAGE" | awk -F: '/Minimum number of days/ {gsub(/ /,"",$2); print $2}')
-        PROBE_WARN=$(echo "$PROBE_CHAGE" | awk -F: '/Number of days of warning/ {gsub(/ /,"",$2); print $2}')
-        PROBE_FAIL=0
-        if [ -n "$PROBE_MAX" ] && [ "$PROBE_MAX" -gt 90 ] 2>/dev/null; then
-            echo "[PoC] FAIL: newly-created user inherited PASS_MAX_DAYS=$PROBE_MAX (>90)."
-            PROBE_FAIL=1
-        fi
-        if [ -n "$PROBE_MIN" ] && [ "$PROBE_MIN" -lt 7 ] 2>/dev/null; then
-            echo "[PoC] FAIL: newly-created user inherited PASS_MIN_DAYS=$PROBE_MIN (<7)."
-            PROBE_FAIL=1
-        fi
-        if [ -n "$PROBE_WARN" ] && [ "$PROBE_WARN" -lt 7 ] 2>/dev/null; then
-            echo "[PoC] FAIL: newly-created user inherited PASS_WARN_AGE=$PROBE_WARN (<7)."
-            PROBE_FAIL=1
-        fi
-        userdel "$PROBE_USER" 2>/dev/null || true
-        if [ "$PROBE_FAIL" -eq 1 ]; then
-            echo "[PoC] RESULT: Live useradd inheritance still uses insecure aging defaults."
-            exit 1
-        fi
-        echo "[PoC] PASS: newly-created user inherited compliant aging (max=$PROBE_MAX min=$PROBE_MIN warn=$PROBE_WARN)."
-    else
-        echo "[PoC] INFO: could not create probe user (useradd refused), skipping live inheritance probe."
+
+# A verifier must not leave anything behind on the box it grades: remove the probe
+# account and restore the account databases even if the run is interrupted.
+PROBE_BK=""
+cleanup_probe_user() {
+    userdel "$PROBE_USER" >/dev/null 2>&1 || true
+    if [ -n "$PROBE_BK" ] && [ -d "$PROBE_BK" ]; then
+        for b in "$PROBE_BK"/*; do
+            [ -f "$b" ] || continue
+            cp -p "$b" "/etc/${b##*/}" 2>/dev/null || true
+        done
+        rm -rf "$PROBE_BK"
+        PROBE_BK=""
     fi
-else
-    echo "[PoC] INFO: useradd/userdel unavailable, skipping live inheritance probe."
+    return 0
+}
+trap cleanup_probe_user EXIT INT TERM
+
+PROBE_BK=$(mktemp -d)
+for f in passwd shadow group gshadow subuid subgid passwd- shadow- group- gshadow-; do
+    if [ -f "/etc/$f" ]; then cp -p "/etc/$f" "$PROBE_BK/$f" 2>/dev/null || true; fi
+done
+
+# WAS FAIL-OPEN: a missing useradd/userdel, or a useradd that refused to run, only
+# printed "[PoC] INFO: ... skipping" and the script went on to exit 0 - the strongest
+# layer of this check evaporated exactly when the box was most suspect. Likewise an
+# unreadable PROBE_MAX/MIN/WARN slipped past the `[ -n ... ]` guards silently. These
+# tools are part of the base image, so a box that cannot run this probe is damaged,
+# not remediated: every branch now FAILS CLOSED.
+if ! command -v useradd >/dev/null 2>&1 || ! command -v userdel >/dev/null 2>&1; then
+    echo "[PoC] FAIL: useradd/userdel are unavailable, so whether a new account actually"
+    echo "  inherits the /etc/login.defs aging cannot be established. Both ship with the"
+    echo "  base image - a box missing them is broken, not fixed."
+    exit 1
 fi
+
+if ! useradd -M -s /usr/sbin/nologin "$PROBE_USER" 2>/dev/null; then
+    echo "[PoC] FAIL: useradd refused to create a probe account, so the live inheritance of"
+    echo "  the password aging policy cannot be verified. A working host must be able to"
+    echo "  add a user."
+    exit 1
+fi
+
+PROBE_CHAGE=$(chage -l "$PROBE_USER" 2>/dev/null || true)
+if [ -z "$PROBE_CHAGE" ]; then
+    echo "[PoC] FAIL: chage -l reported nothing for the freshly-created probe user - the aging"
+    echo "  it inherited from /etc/login.defs cannot be read."
+    exit 1
+fi
+
+PROBE_MAX=$(echo "$PROBE_CHAGE" | awk -F: '/Maximum number of days/ {gsub(/ /,"",$2); print $2}')
+PROBE_MIN=$(echo "$PROBE_CHAGE" | awk -F: '/Minimum number of days/ {gsub(/ /,"",$2); print $2}')
+PROBE_WARN=$(echo "$PROBE_CHAGE" | awk -F: '/Number of days of warning/ {gsub(/ /,"",$2); print $2}')
+PROBE_FAIL=0
+check_aging "newly-created user PASS_MAX_DAYS" "$PROBE_MAX" gt 90 || PROBE_FAIL=1
+check_aging "newly-created user PASS_MIN_DAYS" "$PROBE_MIN" lt 7 || PROBE_FAIL=1
+check_aging "newly-created user PASS_WARN_AGE" "$PROBE_WARN" lt 7 || PROBE_FAIL=1
+
+cleanup_probe_user
+trap - EXIT INT TERM
+
+if [ "$PROBE_FAIL" -eq 1 ]; then
+    echo "[PoC] RESULT: Live useradd inheritance still uses insecure aging defaults."
+    exit 1
+fi
+echo "[PoC] PASS: newly-created user inherited compliant aging (max=$PROBE_MAX min=$PROBE_MIN warn=$PROBE_WARN)."
 
 # --- Regression Test: Ensure users can still change passwords ---
 echo ""

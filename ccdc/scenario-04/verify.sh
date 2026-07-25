@@ -62,37 +62,102 @@ fi
 echo "  [PASS] MaxAuthTries is $MAX_AUTH (acceptable: <= 6)"
 
 ###############################################################################
-# PoC Behavioral Test: X11 forwarding should be rejected at connection time
+# PoC Behavioral Test (RUNTIME): X11 forwarding must be refused by the LIVE
+# daemon.
+#
+# NOTE: `sshd -T` above only PARSES /etc/ssh/sshd_config. A config edit without
+# a service restart leaves the running daemon fully vulnerable, and that state
+# MUST fail. Everything below talks to the daemon on the wire instead.
+#
+# `ssh -X` is a NO-OP when the client has no $DISPLAY - it never even sends the
+# x11-req channel request, so the old version of this test passed trivially.
+# Set up a throwaway DISPLAY + MIT-MAGIC-COOKIE-1 so the client genuinely asks
+# for X11 forwarding, then read $DISPLAY on the REMOTE side: a non-empty
+# "localhost:10.0" proves the server allocated a real X11 forwarding channel.
 ###############################################################################
 echo ""
-echo "[PoC Test] Attempting SSH connection with X11 forwarding request..."
+echo "[PoC Test] Attempting REAL X11 forwarding against the running daemon..."
 
-# Ensure sshd is running for behavioral test
+# The behavioural tests below are mandatory - a dead daemon cannot be shown to
+# be remediated.
 if ! pgrep -x sshd >/dev/null 2>&1; then
-    /usr/sbin/sshd 2>/dev/null
-    sleep 1
+    echo "  [FAIL] sshd is not running - cannot prove X11 forwarding is refused"
+    exit $FAIL
 fi
 
-X11_RESULT=$(sshpass -p 'TestPass123!' ssh -o StrictHostKeyChecking=no \
-    -o ConnectTimeout=5 -X -v -p 22 testuser@127.0.0.1 "echo x11_test_done" 2>&1 || true)
+X11_XAUTH=/tmp/.x11probe.$$.Xauth
+# Snapshot the target user's Xauthority so the probe leaves no trace.
+VICTIM_XAUTH=$(getent passwd testuser | cut -d: -f6)/.Xauthority
+VICTIM_XAUTH_EXISTED=0
+[ -e "$VICTIM_XAUTH" ] && VICTIM_XAUTH_EXISTED=1
 
-if echo "$X11_RESULT" | grep -qi "X11 forwarding request failed\|Requesting X11 forwarding.*rejected"; then
-    echo "  [PASS] X11 forwarding request was denied by server"
-elif echo "$X11_RESULT" | grep -q "x11_test_done"; then
-    # Connection worked but check if X11 was actually granted
-    if echo "$X11_RESULT" | grep -qi "Requesting X11 forwarding"; then
-        if ! echo "$X11_RESULT" | grep -qi "X11 forwarding.*success\|DISPLAY"; then
-            echo "  [PASS] SSH connected but X11 forwarding was not granted"
-        else
-            echo "  [FAIL] X11 forwarding appears to have been granted"
-            exit $FAIL
-        fi
-    else
-        echo "  [PASS] SSH connected without X11 forwarding"
-    fi
-else
-    echo "  [PASS] SSH did not grant X11 forwarding (connection output indicates denial)"
+: > "$X11_XAUTH"
+COOKIE=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+xauth -f "$X11_XAUTH" add :99 MIT-MAGIC-COOKIE-1 "$COOKIE" >/dev/null 2>&1
+
+X11_RESULT=$(DISPLAY=:99 XAUTHORITY="$X11_XAUTH" \
+    sshpass -p 'TestPass123!' ssh -Y -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 -p 22 testuser@127.0.0.1 \
+    'echo X11_DISPLAY=[$DISPLAY]' 2>&1 || true)
+
+# Restore prior state - verify.sh must not permanently mutate the system.
+rm -f "$X11_XAUTH"
+if [ "$VICTIM_XAUTH_EXISTED" -eq 0 ]; then
+    rm -f "$VICTIM_XAUTH"
 fi
+
+REMOTE_DISPLAY=$(echo "$X11_RESULT" | sed -n 's/.*X11_DISPLAY=\[\(.*\)\].*/\1/p' | tail -1)
+
+if ! echo "$X11_RESULT" | grep -q 'X11_DISPLAY='; then
+    echo "  [FAIL] Could not run the X11 probe over SSH (got: ${X11_RESULT:0:120})"
+    exit $FAIL
+fi
+
+if [ -n "$REMOTE_DISPLAY" ]; then
+    echo "  [FAIL] Live daemon GRANTED X11 forwarding - remote DISPLAY=$REMOTE_DISPLAY"
+    echo "         (config may say X11Forwarding no, but sshd was never restarted)"
+    exit $FAIL
+fi
+
+echo "  [PASS] Live daemon refused X11 forwarding (remote DISPLAY is empty)"
+
+###############################################################################
+# PoC Behavioral Test (RUNTIME): MaxAuthTries must be enforced on the wire.
+#
+# sshd counts every failed public-key offer against MaxAuthTries and then drops
+# the connection. Offer 8 throwaway keys and count how many the RUNNING server
+# actually accepted before cutting us off. Vulnerable (MaxAuthTries 30) -> all 8
+# get offered. Remediated (<= 6) -> the server disconnects early.
+###############################################################################
+echo ""
+echo "[PoC Test] Probing enforced MaxAuthTries on the running daemon..."
+
+PROBE_KEYS=/tmp/.maxauth_probe.$$
+rm -rf "$PROBE_KEYS"; mkdir -p "$PROBE_KEYS"
+IDOPTS=""
+for i in 1 2 3 4 5 6 7 8; do
+    ssh-keygen -q -t ed25519 -N '' -f "$PROBE_KEYS/k$i" >/dev/null 2>&1
+    IDOPTS="$IDOPTS -i $PROBE_KEYS/k$i"
+done
+
+# shellcheck disable=SC2086
+AUTH_OUT=$(ssh -v $IDOPTS -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes \
+    -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
+    -p 22 testuser@127.0.0.1 true 2>&1 || true)
+
+rm -rf "$PROBE_KEYS"
+
+OFFERS=$(echo "$AUTH_OUT" | grep -c "Offering public key" || true)
+echo "  Server accepted $OFFERS public-key attempts before disconnecting"
+
+if [ "$OFFERS" -gt 6 ]; then
+    echo "  [FAIL] Running daemon allowed $OFFERS auth attempts (MaxAuthTries > 6)"
+    echo "         (config may say MaxAuthTries 4, but sshd was never restarted)"
+    exit $FAIL
+fi
+
+echo "  [PASS] Running daemon enforces MaxAuthTries <= 6"
 
 ###############################################################################
 # Regression Test: SSH service must still be running
