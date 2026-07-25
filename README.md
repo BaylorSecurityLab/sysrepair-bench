@@ -204,7 +204,7 @@ The harness injects `cap_add=["NET_ADMIN"]` for every scenario and `privileged=T
 > Windows containers (`mcr.microsoft.com/windows/servercore`) share the Windows NT kernel with the host; they cannot run on Linux or macOS. Meta4 has **no** Windows-container scenarios — only Linux images; its Windows host requirement is limited to `meta4/kernel-vm/` (see 3d).
 
 Applies to:
-- **All 20 `meta3/windows/` scenarios** (Server Core ltsc2019/ltsc2022)
+- **All 21 `meta3/windows/` scenarios** (Server Core ltsc2019/ltsc2022)
 - **Hivestorm Windows-container scenarios**: [`scenario-03-win10`](hivestorm/scenario-03-win10/), [`scenario-04-win2019`](hivestorm/scenario-04-win2019/), [`scenario-05-win2016`](hivestorm/scenario-05-win2016/) (ltsc2016 — note below), [`scenario-08-win-iis`](hivestorm/scenario-08-win-iis/), [`scenario-11-win-dc-dns`](hivestorm/scenario-11-win-dc-dns/)
 - (Hivestorm `scenario-13-ad-dc-win2019` is VM-based, not container-based — see 3e)
 
