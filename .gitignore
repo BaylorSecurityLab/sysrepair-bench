@@ -12,14 +12,14 @@ CLAUDE.local.md
 .copilot/
 .github/copilot-instructions.md
 .plandex/
-docs/superpowers/
-docs/claude/
-docs/ai-agents/
 superpowers.md
 *.superpowers.md
 memory/
 .agent/
 .agents/
+
+# docs/ is agent scratch space (plans, notes, validation reports).
+# The ENTIRE directory is ignored — never commit anything under it.
 docs/
 
 # Docker project generated files to ignore
@@ -35,9 +35,6 @@ build_src
 .flymake*
 .idea
 .DS_Store
-docs/_build
-docs/_static
-docs/_templates
 .gopath/
 .dotcloud
 *.test
