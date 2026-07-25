@@ -182,6 +182,27 @@ No other system-level Python packages are needed — everything the scenarios do
 
 No extras beyond Docker. These use modern base images (Ubuntu 14.04 / 22.04, Debian 11 / 12, Alpine, vendor images). On first run, the harness will `docker build` each scenario on demand. Runtime-escape scenarios (Leaky Vessels, docker.sock, `--privileged` abuse) are auto-elevated by the harness when a `.needs-privileged` marker is present in the scenario dir — no manual `docker run --privileged` needed.
 
+> **Sandbox-escape scenarios need a native Linux Docker host.** Docker Desktop
+> (Windows/macOS, WSL2 backend) applies its own seccomp profile even when the
+> scenario's `.run-opts` passes `--security-opt seccomp=unconfined`: `/proc/1/status`
+> still reports `Seccomp: 2` (FILTER). Scenarios whose PoC depends on an
+> unconfined sandbox — notably [`meta4/scenario-70`](meta4/scenario-70/) (cgroup
+> escape, CVE-2022-0492) — therefore verify as *already remediated* (`verify.sh`
+> exits 0 on the untouched container) and cannot be scored on Docker Desktop.
+> Run them on a native Linux host, same as [`meta2/`](#3b-meta2--linux-host-only).
+
+> **Kernel-coupled scenarios.** `meta4/scenario-19`, `-21`, `-22` (and `-117`)
+> target kernel vulnerabilities. Containers share the host kernel, so their PoC
+> cannot fire in Docker at all and `verify.sh` exits 0 at baseline. They are
+> excluded from the `linux_all` preset and ship a Vagrant VM instead — see
+> [3d](#3d-meta4kernel-vm--virtualbox-vm-for-kernel-coupled-lpe-scenarios-s21-s22-s117-optionally-s19).
+
+> **Scenarios that keep their image `CMD`.** A `.preserve-cmd` marker means a
+> real daemon boots with the container (dockerd, k3s, a database). Give it time
+> to bind before running `verify.sh` — `meta4/scenario-33` exposes dockerd on
+> `tcp://0.0.0.0:2375` but takes ~10s, and verifying too early reads as a
+> false "not vulnerable".
+
 #### 3b. `meta2/` — Linux host only
 
 > The Metasploitable 2 suite uses `lpenz/ubuntu-hardy-amd64` (Ubuntu 8.04). Hardy's glibc requires the legacy `vsyscall` page, which is disabled in the Docker Desktop / WSL2 kernels shipped on Windows and macOS. Every process SIGSEGVs (exit 139) before `apt-get` runs.
