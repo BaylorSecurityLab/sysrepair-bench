@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots xinetd with the rsh + rlogin stanzas enabled and then
+# execs `sleep infinity`, so:
+#   * the r-services are ALREADY LISTENING on 514/513 when the agent starts,
+#     which is what makes "removed /etc/xinetd.d/rsh but never stopped xinetd"
+#     detectable - a running xinetd keeps serving the stanzas it loaded at
+#     startup;
+#   * PID 1 is still `sleep infinity`, so stopping xinetd cannot kill the
+#     container.
+#
+# Consequence for solutions: the live listener must be STOPPED, not just
+# disabled on disk.

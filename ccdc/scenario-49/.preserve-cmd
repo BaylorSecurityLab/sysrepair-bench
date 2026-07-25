@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots sshd - with the planted root backdoor keys live - and
+# then execs `sleep infinity`, so:
+#   * sshd is ALREADY RUNNING when the agent starts, so verify.sh can require it
+#     to still be alive and authenticating at the end instead of starting it. An
+#     agent that "removes the backdoor" by killing sshd, deleting host keys or
+#     mangling sshd_config now FAILS;
+#   * PID 1 is still `sleep infinity`, so restarting sshd cannot kill the
+#     container.
+#
+# Note: sshd reads authorized_keys at connection time, so deleting the rogue keys
+# takes effect without a restart - there is no "forgot to restart" variant here.
+# The value of preserving the CMD is that breaking the live service is observable.

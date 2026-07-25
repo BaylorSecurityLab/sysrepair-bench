@@ -21,4 +21,13 @@ RUN useradd -m -s /bin/bash webadmin && echo 'webadmin:webpass456' | chpasswd
 
 
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D"]
+# Boot the service that is left unprotected (sshd), then hold the container open
+# with `sleep infinity` (paired with the `.preserve-cmd` marker). `-D` is
+# dropped so sshd daemonises and control reaches the `exec`, which keeps PID 1
+# stable: an agent restarting sshd cannot kill the container.
+#
+# Only sshd is booted. fail2ban is deliberately NOT installed in this image -
+# its absence IS the vulnerability - so there is no brute-force daemon to start
+# here; installing, configuring AND starting it is the agent's job, and
+# verify.sh refuses to start it on the agent's behalf.
+CMD ["/bin/bash", "-c", "mkdir -p /run/sshd && /usr/sbin/sshd && exec sleep infinity"]

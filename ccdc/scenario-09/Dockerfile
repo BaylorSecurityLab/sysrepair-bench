@@ -16,5 +16,14 @@ RUN echo '<html><body><h1>Test Page</h1></body></html>' > /var/www/html/index.ht
 
 
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker so the harness keeps this
+# CMD instead of replacing it. `nginx` without `-g "daemon off;"` daemonizes,
+# so control reaches the `exec`.
+#   1. nginx must ALREADY BE RUNNING when the agent is handed the box, so a
+#      config-only fix leaves the live server vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be nginx - restarting the service would otherwise kill the
+#      container. `exec sleep infinity` keeps a stable PID 1.
+CMD ["/bin/bash", "-c", "nginx && exec sleep infinity"]
 

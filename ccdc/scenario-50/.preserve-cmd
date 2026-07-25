@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots nginx serving the world-writable document root and
+# then execs `sleep infinity`, so:
+#   * the web server is ALREADY RUNNING when the agent starts, so verify.sh can
+#     require it to still be serving HTTP 200 instead of starting it. An
+#     over-tight chmod (e.g. 700 on /var/www/html) that leaves nginx unable to
+#     read the content is now a hard FAILURE;
+#   * PID 1 is still `sleep infinity`, so restarting nginx cannot kill the
+#     container.
+#
+# Note: the fix is filesystem permissions, evaluated by the kernel per access, so
+# there is no "forgot to restart nginx" variant - the value of preserving the CMD
+# is that collateral damage to the running service is now observable.

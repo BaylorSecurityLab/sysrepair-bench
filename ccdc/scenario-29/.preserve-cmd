@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots sshd AND nginx - the two services this box exposes
+# with no firewall in front of them - and then execs `sleep infinity`, so:
+#   * both daemons are ALREADY RUNNING when the agent starts, so verify.sh can
+#     hold the agent responsible for keeping them reachable instead of starting
+#     them itself (a firewall that blackholes SSH is now a hard FAILURE);
+#   * PID 1 is still `sleep infinity`, so restarting either daemon cannot kill
+#     the container.
+#
+# Note: the remediation here is kernel netfilter state, not a service config
+# file, so there is no "forgot to restart the daemon" variant - but "wrote a ufw
+# config without loading any rules into the kernel" is the equivalent mistake and
+# verify.sh reads `iptables -S` rather than the config files to catch it.

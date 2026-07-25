@@ -50,4 +50,10 @@ RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
 
 EXPOSE 513 514
-CMD ["xinetd", "-dontfork"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `-dontfork` is dropped so
+# xinetd daemonises and control reaches the `exec`, which keeps PID 1 stable:
+# an agent stopping xinetd cannot kill the container, and rsh/rlogin are already
+# listening on 514/513 when the agent is handed the box - so "deleted the
+# xinetd stanzas but never stopped the daemon" is caught.
+CMD ["/bin/bash", "-c", "xinetd && exec sleep infinity"]

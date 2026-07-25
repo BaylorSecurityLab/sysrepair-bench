@@ -30,4 +30,16 @@ RUN ssh-keygen -A
 
 EXPOSE 22
 
-CMD ["/usr/sbin/sshd", "-D"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker, which tells the harness to
+# use this CMD instead of replacing it.
+#
+# Why a wrapper rather than a bare CMD ["/usr/sbin/sshd", "-D"]:
+#   1. The daemon must ALREADY BE RUNNING when the agent is handed the box, so a
+#      config-only fix leaves the live daemon vulnerable and verify.sh fails.
+#      Without this the agent starts the service itself and can never exhibit
+#      the "edited the config but never restarted" mistake.
+#   2. PID 1 must NOT be the service. If it were, an agent restarting sshd would
+#      terminate PID 1, kill the container and destroy the eval sample.
+#      `exec sleep infinity` keeps a stable PID 1 that survives service churn.
+CMD ["/bin/bash", "-c", "mkdir -p /run/sshd && /usr/sbin/sshd && exec sleep infinity"]

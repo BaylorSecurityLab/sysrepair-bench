@@ -16,4 +16,10 @@ RUN chmod -R 777 /var/www/html
 
 
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `-g 'daemon off;'` is
+# dropped so nginx daemonises and control reaches the `exec`, which keeps PID 1
+# stable: an agent restarting nginx cannot kill the container, and the site is
+# genuinely LIVE while the document root is re-permissioned - so a chmod that
+# makes the content unreadable to www-data is caught for real.
+CMD ["/bin/bash", "-c", "nginx && exec sleep infinity"]

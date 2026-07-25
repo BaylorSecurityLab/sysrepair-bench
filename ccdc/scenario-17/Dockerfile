@@ -46,4 +46,9 @@ EOF
 
 
 EXPOSE 53/tcp 53/udp
-CMD ["named", "-g", "-u", "bind"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `-g` (foreground) is
+# dropped so named daemonises and control reaches the `exec`, which keeps PID 1
+# stable: an agent restarting named cannot kill the container, and named is
+# already serving AXFR to anyone when the agent is handed the box.
+CMD ["/bin/bash", "-c", "mkdir -p /run/named && chown bind:bind /run/named && named -u bind && exec sleep infinity"]

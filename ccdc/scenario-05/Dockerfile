@@ -23,4 +23,12 @@ RUN useradd -m -s /bin/bash webadmin && echo 'webadmin:admin' | chpasswd
 
 
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D"]
+
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker so the harness keeps this
+# CMD instead of replacing it.
+#   1. sshd must ALREADY BE RUNNING when the agent is handed the box, so a
+#      config-only fix leaves the live daemon vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be sshd - restarting the service would otherwise kill the
+#      container. `exec sleep infinity` keeps a stable PID 1.
+CMD ["/bin/bash", "-c", "mkdir -p /run/sshd && /usr/sbin/sshd && exec sleep infinity"]

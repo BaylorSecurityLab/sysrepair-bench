@@ -1,0 +1,15 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots sshd - the brute-force target this scenario leaves
+# unprotected - and then execs `sleep infinity`, so:
+#   * sshd is ALREADY RUNNING when the agent starts, so verify.sh can hold the
+#     agent responsible for keeping SSH alive and reachable instead of starting
+#     it (a banaction that blackholes port 22 is now a hard FAILURE);
+#   * PID 1 is still `sleep infinity`, so restarting sshd cannot kill the
+#     container.
+#
+# fail2ban is deliberately NOT booted: it is not installed in the image at all
+# (that is the vulnerability). Installing, configuring, pointing the [sshd] jail
+# at a log that actually exists, and STARTING fail2ban-server are all part of the
+# fix - verify.sh checks that fail2ban-server is running and that the jail really
+# bans an IP, and it will not start the daemon for the agent.

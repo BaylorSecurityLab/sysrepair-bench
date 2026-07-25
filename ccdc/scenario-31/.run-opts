@@ -1,0 +1,2 @@
+--cap-add AUDIT_CONTROL
+--cap-add SYS_NICE

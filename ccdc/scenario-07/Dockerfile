@@ -21,4 +21,12 @@ RUN mkdir -p /var/www/html/data && \
 
 
 EXPOSE 80
-CMD ["apachectl", "-D", "FOREGROUND"]
+
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker so the harness keeps this
+# CMD instead of replacing it.
+#   1. apache2 must ALREADY BE RUNNING when the agent is handed the box, so a
+#      config-only fix leaves the live server vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be httpd - restarting the service would otherwise kill the
+#      container. `exec sleep infinity` keeps a stable PID 1.
+CMD ["/bin/bash", "-c", "apachectl start && exec sleep infinity"]

@@ -42,4 +42,9 @@ RUN chown -R www-data:www-data /var/www/html && chmod 644 /var/www/html/wp-confi
 
 
 EXPOSE 80
-CMD ["apachectl", "-D", "FOREGROUND"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `-D FOREGROUND` is dropped
+# so apache2 daemonises and control reaches the `exec`, which keeps PID 1
+# stable: an agent restarting Apache cannot kill the container, and the site is
+# already being served with the editable wp-config.php when the agent starts.
+CMD ["/bin/bash", "-c", "apachectl start && exec sleep infinity"]

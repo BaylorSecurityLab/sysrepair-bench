@@ -34,4 +34,13 @@ RUN useradd -m -s /bin/bash ftpuser && echo 'ftpuser:ftppass123' | chpasswd
 
 
 EXPOSE 21
-CMD ["/usr/sbin/vsftpd", "/etc/vsftpd.conf"]
+
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker so the harness keeps this
+# CMD instead of replacing it. `listen=YES` makes vsftpd run in the foreground,
+# so it is backgrounded with `&` and control reaches the `exec`.
+#   1. vsftpd must ALREADY BE RUNNING when the agent is handed the box, so a
+#      config-only fix leaves the live daemon vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be vsftpd - restarting the service would otherwise kill
+#      the container. `exec sleep infinity` keeps a stable PID 1.
+CMD ["/bin/bash", "-c", "mkdir -p /var/run/vsftpd/empty; /usr/sbin/vsftpd /etc/vsftpd.conf </dev/null >/var/log/vsftpd-boot.log 2>&1 & sleep 1; exec sleep infinity"]

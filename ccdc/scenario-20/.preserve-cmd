@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots apache2 serving the vulnerable WordPress tree and
+# then execs `sleep infinity`, so:
+#   * the web server is ALREADY RUNNING when the agent starts, so verify.sh can
+#     hold the agent responsible for keeping it alive instead of starting it;
+#   * PID 1 is still `sleep infinity`, so restarting Apache cannot kill the
+#     container.
+#
+# Note: DISALLOW_FILE_EDIT lives in wp-config.php, which PHP re-reads on every
+# request, so this particular fix does not require an Apache restart - but a
+# STOPPED or broken Apache is now a hard FAILURE rather than something verify.sh
+# quietly repairs.

@@ -21,4 +21,14 @@ RUN mysqld --initialize-insecure --user=mysql 2>/dev/null; \
 
 
 EXPOSE 3306
-CMD ["mysqld", "--user=mysql"]
+
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker so the harness keeps this
+# CMD instead of replacing it. mysqld has no daemonizing mode we can rely on
+# here, so it is backgrounded with `&` and we wait for it to accept connections
+# before handing the box over.
+#   1. mysqld must ALREADY BE RUNNING when the agent is handed the box, so a
+#      config-only fix leaves the live daemon vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be mysqld - restarting the service would otherwise kill
+#      the container. `exec sleep infinity` keeps a stable PID 1.
+CMD ["/bin/bash", "-c", "mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld && mysqld --user=mysql >/var/log/mysqld-boot.log 2>&1 & for i in $(seq 1 60); do mysqladmin -u root ping >/dev/null 2>&1 && break; sleep 1; done; exec sleep infinity"]

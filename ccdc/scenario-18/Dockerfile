@@ -45,4 +45,9 @@ RUN useradd -m -s /bin/bash smbuser && \
 
 
 EXPOSE 139 445
-CMD ["smbd", "--foreground", "--no-process-group"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `--foreground` is dropped
+# so smbd daemonises and control reaches the `exec`, which keeps PID 1 stable:
+# an agent restarting smbd cannot kill the container, and the guest-accessible
+# [private] share is already being served when the agent is handed the box.
+CMD ["/bin/bash", "-c", "smbd && exec sleep infinity"]

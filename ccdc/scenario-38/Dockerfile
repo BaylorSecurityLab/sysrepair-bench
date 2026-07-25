@@ -17,4 +17,10 @@ RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
 
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+# Boot the production service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `-g 'daemon off;'` is
+# dropped so nginx daemonises and control reaches the `exec`, which keeps PID 1
+# stable: an agent restarting nginx cannot kill the container, and the web
+# server is genuinely LIVE while the toolchain purge happens - so a purge that
+# rips out the C runtime and bricks nginx is caught for real.
+CMD ["/bin/bash", "-c", "nginx && exec sleep infinity"]

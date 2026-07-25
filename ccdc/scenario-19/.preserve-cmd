@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots php-fpm AND nginx with the vulnerable php.ini
+# (disable_functions empty, allow_url_include=On, expose_php=On) and then execs
+# `sleep infinity`, so:
+#   * both daemons are ALREADY RUNNING when the agent starts, which is what
+#     makes the "fixed the config but never restarted the service" case
+#     detectable - php-fpm keeps its old php.ini in memory, so the
+#     X-Powered-By header survives a file-only edit;
+#   * PID 1 is still `sleep infinity`, so restarting php-fpm or nginx cannot
+#     kill the container.
+#
+# Consequence for solutions: a fix must RESTART php-fpm, not merely start it if
+# absent - the pool is already up with the vulnerable configuration.

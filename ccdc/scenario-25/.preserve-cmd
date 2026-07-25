@@ -1,0 +1,14 @@
+# Use the image CMD (/entrypoint.sh) instead of replacing it with
+# `sleep infinity`.
+#
+# /entrypoint.sh boots redis-server with the vulnerable config (bind 0.0.0.0,
+# protected-mode no, no requirepass) and then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "fixed the config but never restarted the service" case detectable -
+#     Redis reads redis.conf only at startup, so an unauthenticated PING still
+#     returns PONG after a file-only edit;
+#   * PID 1 is still `sleep infinity`, so restarting Redis cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART redis-server, not merely start
+# it if absent - the daemon is already up with the vulnerable configuration.

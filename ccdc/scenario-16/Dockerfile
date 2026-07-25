@@ -29,4 +29,9 @@ RUN useradd -m -s /bin/bash ftpuser && echo 'ftpuser:ftppass123' | chpasswd
 
 
 EXPOSE 21
-CMD ["/usr/sbin/vsftpd", "/etc/vsftpd.conf"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). vsftpd is backgrounded
+# with `&` so control reaches the `exec`, which keeps PID 1 stable: an agent
+# restarting vsftpd cannot kill the container, and the daemon is already
+# running with the vulnerable config when the agent is handed the box.
+CMD ["/bin/bash", "-c", "/usr/sbin/vsftpd /etc/vsftpd.conf & exec sleep infinity"]

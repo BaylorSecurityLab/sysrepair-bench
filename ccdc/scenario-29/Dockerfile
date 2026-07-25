@@ -20,4 +20,10 @@ RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
 
 EXPOSE 22 80
-CMD service ssh start && nginx -g "daemon off;"
+# Boot BOTH services that the firewall is supposed to protect (sshd and nginx),
+# then hold the container open with `sleep infinity` (paired with the
+# `.preserve-cmd` marker). `-g "daemon off;"` is dropped so nginx daemonises and
+# control reaches the `exec`, which keeps PID 1 stable: an agent restarting
+# either daemon cannot kill the container, and both are already exposed with no
+# packet filter at all when the agent is handed the box.
+CMD ["/bin/bash", "-c", "mkdir -p /run/sshd && service ssh start && nginx && exec sleep infinity"]

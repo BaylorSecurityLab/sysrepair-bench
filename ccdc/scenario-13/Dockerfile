@@ -27,4 +27,13 @@ USER root
 
 
 EXPOSE 5432
-CMD ["su", "-c", "pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') start --foreground", "postgres"]
+
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity`. Paired with the `.preserve-cmd` marker so the harness keeps this
+# CMD instead of replacing it. Dropping `--foreground` lets pg_ctlcluster
+# return once the postmaster is up, so control reaches the `exec`.
+#   1. PostgreSQL must ALREADY BE RUNNING when the agent is handed the box, so
+#      a config-only fix leaves the live cluster vulnerable and verify.sh fails.
+#   2. PID 1 must NOT be the postmaster - restarting the cluster would otherwise
+#      kill the container. `exec sleep infinity` keeps a stable PID 1.
+CMD ["/bin/bash", "-c", "C=$(pg_lsclusters -h | awk '{print $1, $2}'); su postgres -c \"pg_ctlcluster $C start\" && exec sleep infinity"]

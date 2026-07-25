@@ -18,4 +18,10 @@ RUN mkdir -p /run/sshd
 
 
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D"]
+# Boot the service, then hold the container open with `sleep infinity` (paired
+# with the `.preserve-cmd` marker). `-D` is dropped so sshd daemonises and
+# control reaches the `exec`, which keeps PID 1 stable: an agent restarting sshd
+# cannot kill the container, and sshd is genuinely LIVE while /etc/shadow
+# permissions change - so a chmod that breaks PAM/password auth is caught for
+# real rather than being hidden behind a freshly started daemon.
+CMD ["/bin/bash", "-c", "mkdir -p /run/sshd && /usr/sbin/sshd && exec sleep infinity"]

@@ -1,0 +1,15 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots nginx - the production service this host exists to
+# run - and then execs `sleep infinity`, so:
+#   * nginx is ALREADY RUNNING when the agent starts, so verify.sh can hold the
+#     agent responsible for keeping it up rather than starting it. An
+#     over-broad `apt-get purge 'gcc-[0-9]*'` cascade that removes libgcc-s1 and
+#     kills the live nginx is now a hard FAILURE instead of something verify.sh
+#     silently papers over by relaunching the daemon;
+#   * PID 1 is still `sleep infinity`, so restarting nginx cannot kill the
+#     container.
+#
+# Note: the vulnerability here is "a compiler is installed", not a service
+# config, so there is no "forgot to restart" variant - the value of preserving
+# the CMD is that collateral damage to the running service is now observable.

@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots sshd and then execs `sleep infinity`, so:
+#   * sshd is ALREADY RUNNING when the agent starts, so verify.sh can hold the
+#     agent responsible for keeping password authentication working instead of
+#     starting the daemon itself. A remediation that chmod 000's /etc/shadow or
+#     drops the shadow group now fails against a live auth stack;
+#   * PID 1 is still `sleep infinity`, so restarting sshd cannot kill the
+#     container.
+#
+# Note: the fix here is file permissions, which the kernel evaluates per access,
+# so there is no "forgot to restart sshd" variant - the value of preserving the
+# CMD is that collateral damage to the running service is now observable.

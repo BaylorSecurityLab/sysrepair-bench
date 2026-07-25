@@ -16,7 +16,7 @@ service telnet
     socket_type = stream
     wait        = no
     user        = root
-    server      = /usr/sbin/in.telnetd
+    server      = /usr/sbin/telnetd
     log_on_failure += USERID
 }
 EOF
@@ -26,4 +26,10 @@ RUN useradd -m -s /bin/bash sysadmin && echo 'sysadmin:password123' | chpasswd
 
 
 EXPOSE 23
-CMD ["xinetd", "-dontfork"]
+# Boot the vulnerable service, then hold the container open with `sleep
+# infinity` (paired with the `.preserve-cmd` marker). `-dontfork` is dropped so
+# xinetd daemonises and control reaches the `exec`, which keeps PID 1 stable:
+# an agent stopping xinetd cannot kill the container, and telnet is already
+# listening on port 23 when the agent is handed the box - so "deleted the
+# xinetd stanza but never stopped the daemon" is caught.
+CMD ["/bin/bash", "-c", "xinetd && exec sleep infinity"]
