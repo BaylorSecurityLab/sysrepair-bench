@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots MariaDB (holding the weak phpass wp_users password
+# hashes) and apache, then execs `sleep infinity`, so:
+#   * the DB is ALREADY running for verify.sh to query the live credential store;
+#   * PID 1 is still `sleep infinity`, so restarting the DB cannot kill the
+#     container.
+#
+# Note: password hashes are data read on every query, so re-hashing them takes
+# effect WITHOUT a restart - there is no "forgot to restart" variant. Preserving
+# the CMD ensures the check reads the live database and a dead DB is a FAILURE.

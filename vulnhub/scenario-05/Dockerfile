@@ -20,6 +20,17 @@ RUN printf '%s\n' \
     'exec "$@"' \
     > /usr/local/bin/timeout && chmod +x /usr/local/bin/timeout
 
-# Metasploitable 2 has Samba configured with wide links = yes
+# Make the "wide links" vulnerability EXPLICIT in smb.conf.
+#
+# Metasploitable 2 ships Samba 3.0.x, whose *default* is `wide links = yes`, so
+# the vulnerable behaviour was present but NOT written in smb.conf - a config
+# grep for "wide links = yes" found nothing and a do-nothing agent passed. We
+# now write it explicitly (and keep unix extensions on, as on the real box) so
+# the scenario is unambiguously vulnerable and the effective value is greppable.
+RUN sed -i '/^\[global\]/a\   wide links = yes\n   unix extensions = yes' /etc/samba/smb.conf
 
-CMD ["/bin/services.sh"]
+# Boot all the metasploitable services (smbd binds 139/445) then hold the
+# container open. Paired with .preserve-cmd so Samba is live for verify.sh and
+# PID 1 stays `sleep infinity`. services.sh normally returns (killing the
+# container); the wrapper waits for smbd's port then execs `sleep infinity`.
+CMD ["/bin/bash", "-c", "/bin/services.sh >/dev/null 2>&1; for i in $(seq 1 30); do grep -qi ' 01BD ' /proc/net/tcp && break; sleep 1; done; exec sleep infinity"]

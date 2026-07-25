@@ -15,4 +15,6 @@ RUN echo "[options]" > /etc/knockd.conf && \
     echo "    tcpflags = syn" >> /etc/knockd.conf
 
 
-CMD ["knockd", "-d"]
+# Boot wrapper: start knockd in the background, then hand PID 1 to sleep so a
+# solution can restart knockd without killing the container (see .preserve-cmd).
+CMD ["/bin/bash", "-c", "knockd & exec sleep infinity"]

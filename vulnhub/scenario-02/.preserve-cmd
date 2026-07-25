@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots MariaDB and apache serving the vulnerable search.php
+# (raw SQL string concatenation) and then execs `sleep infinity`, so:
+#   * the injectable endpoint is ALREADY live over HTTP when the agent starts,
+#     so verify.sh probes the real SQL injection against a running stack;
+#   * PID 1 is still `sleep infinity`, so restarting apache/mariadb cannot kill
+#     the container.
+#
+# Note: mod_php re-reads search.php on every request, so patching it to use a
+# prepared statement takes effect WITHOUT an apache restart - there is no
+# "forgot to restart" variant. Preserving the CMD ensures the exploit is probed
+# against a genuinely live service and a stopped/broken stack is a FAILURE.

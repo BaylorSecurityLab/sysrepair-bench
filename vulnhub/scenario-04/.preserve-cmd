@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Tomcat with the weak-credential tomcat-users.xml and
+# the privileged, unrestricted manager context, then execs `sleep infinity`, so:
+#   * the Manager app is ALREADY live on :8080 accepting admin:admin when the
+#     agent starts. Tomcat reads tomcat-users.xml at start-up (MemoryRealm), so
+#     changing credentials without restarting Tomcat leaves the old creds valid
+#     and verify.sh (which authenticates over HTTP) still FAILS;
+#   * PID 1 is still `sleep infinity`, so restarting Tomcat cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART Tomcat after editing
+# tomcat-users.xml / the manager context.

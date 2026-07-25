@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots apache (with the Shellshock-vulnerable bash in place
+# for its CGIs) and then execs `sleep infinity`, so the CGI attack surface is
+# live when the agent starts and PID 1 is stable across an apache restart.
+#
+# Consequence for solutions: the fix is to restore a patched bash
+# (apt-get install --reinstall bash). No apache restart is required - mod_cgi
+# forks a fresh bash per request, so the patched binary takes effect immediately.

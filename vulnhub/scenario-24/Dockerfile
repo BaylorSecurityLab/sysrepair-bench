@@ -20,4 +20,6 @@ RUN mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld && \
 EXPOSE 3306
 
 
-CMD mysqld
+# Boot wrapper: start mariadb in the background, then exec sleep as PID 1 (see
+# .preserve-cmd) so the DB is already up when grading starts.
+CMD ["/bin/bash", "-c", "mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld; mysqld --user=mysql & exec sleep infinity"]

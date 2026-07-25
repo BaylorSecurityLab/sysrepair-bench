@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the metasploitable services - smbd with
+# `wide links = yes` (symlink traversal out of a share) listening on 139/445 -
+# and then execs `sleep infinity`, so:
+#   * Samba is ALREADY serving when the agent starts, so verify.sh can require a
+#     live smbd and read the per-connection effective config;
+#   * PID 1 is still `sleep infinity`, so restarting smbd cannot kill the
+#     container.
+#
+# Note: smbd forks a fresh child per client connection and re-reads smb.conf, so
+# a `wide links = no` edit takes effect for the next attacker connection WITHOUT
+# a full restart - there is no "forgot to restart" variant. The value of
+# preserving the CMD is that a stopped/broken smbd is observably a FAILURE.

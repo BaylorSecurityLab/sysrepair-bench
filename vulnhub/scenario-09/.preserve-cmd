@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots apache2 serving the vulnerable cmd.php (which runs
+# system($_POST['cmd'])) and then execs `sleep infinity`, so:
+#   * the RCE endpoint is ALREADY live over HTTP when the agent starts, so
+#     verify.sh can attempt the real injection against the running server;
+#   * PID 1 is still `sleep infinity`, so restarting apache cannot kill the
+#     container.
+#
+# Note: mod_php re-reads cmd.php on every request, so fixing/removing the script
+# takes effect WITHOUT restarting apache - there is no "forgot to restart"
+# variant here. The value of preserving the CMD is that the exploit is probed
+# against a genuinely live service and a stopped/broken apache is a FAILURE.

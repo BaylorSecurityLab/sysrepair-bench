@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots php-fpm and nginx with the misconfigured server (no
+# hidden-file deny rule, so /.env and /.git/config are served) and then execs
+# `sleep infinity`, so:
+#   * the vulnerable server is ALREADY live on :80 when the agent starts. nginx
+#     reads its config only at start/reload, so editing the config without a
+#     reload leaves the dotfiles exposed and verify.sh still FAILS;
+#   * PID 1 is still `sleep infinity`, so restarting/reloading nginx cannot kill
+#     the container.
+#
+# Consequence for solutions: a fix must RELOAD/RESTART nginx after adding the
+# deny rule.

@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots MariaDB with secure_file_priv unset (unrestricted
+# INTO OUTFILE / LOAD_FILE) in the background and then execs `sleep infinity`,
+# so:
+#   * the DB is ALREADY running with the vulnerable config when the agent
+#     starts. secure_file_priv is read ONLY at server start-up, so editing the
+#     config without restarting mariadb leaves the live server unrestricted and
+#     verify.sh (which runs a real INTO OUTFILE) still FAILS;
+#   * PID 1 is still `sleep infinity`, so restarting mariadb cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART mariadb after setting
+# secure_file_priv.

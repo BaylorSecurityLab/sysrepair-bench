@@ -1,80 +1,66 @@
 #!/bin/bash
-# Verification script for Scenario 01: Apache Deprecated SSL/TLS Protocols
+# Verification: Scenario 01 - Apache deprecated SSL/TLS protocols (CWE-327)
 # VulnHub Source: Kioptrix Level 1
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable (FAIL)
+#
+# Exit 0 = remediated (legacy TLS rejected by the LIVE server, TLS1.2 still works)
+# Exit 1 = still vulnerable (server negotiates TLSv1.0/1.1) OR httpd is down
+#
+# Dynamic evidence: we speak TLS to the RUNNING server on :443 with openssl
+# s_client (the only TLS tool present - curl/nc are absent) and require the
+# deprecated protocols to be refused on the wire. This reflects the live daemon,
+# so a config edit without an apache restart FAILS. The image CMD boots httpd
+# (see .preserve-cmd); verify.sh must NOT start it - a dead server is a failure.
 
-###############################################################################
-# PoC Check: Ensure deprecated SSL/TLS protocols are disabled
-###############################################################################
+PASS=true
+HOST=127.0.0.1
+PORT=443
 
-SSL_CONF="/etc/apache2/sites-available/default-ssl.conf"
-
-if ! [ -f "$SSL_CONF" ]; then
-    echo "FAIL [PoC]: SSL config file not found."
-    exit 1
+if ! command -v openssl >/dev/null 2>&1; then
+    echo "FAIL: openssl missing - cannot run the TLS handshake probe."; exit 1
 fi
 
-SSL_PROTOCOL=$(grep -i '^\s*SSLProtocol' "$SSL_CONF" | tail -1)
+# Returns 0 if a full TLS handshake at $1 protocol succeeds (cert received).
+handshake() {  # $1 = openssl proto flag e.g. -tls1
+    local out
+    out=$(timeout 12 bash -c "echo | openssl s_client $1 -connect $HOST:$PORT 2>&1" 2>/dev/null)
+    printf '%s' "$out" | grep -q 'BEGIN CERTIFICATE'
+}
 
-if echo "$SSL_PROTOCOL" | grep -qi 'all\b' && ! echo "$SSL_PROTOCOL" | grep -qi '\-SSLv3'; then
-    echo "FAIL [PoC]: SSLProtocol still allows deprecated protocols (contains 'all' without exclusions)."
-    exit 1
-fi
-
-for proto in SSLv2 SSLv3 TLSv1.0 TLSv1.1; do
-    if echo "$SSL_PROTOCOL" | grep -qi "+${proto}"; then
-        echo "FAIL [PoC]: SSLProtocol explicitly enables deprecated protocol: $proto"
-        exit 1
-    fi
-done
-
-echo "PASS [PoC]: SSLProtocol does not allow deprecated protocols."
-
-# Check cipher suite
-CIPHER_LINE=$(grep -i '^\s*SSLCipherSuite' "$SSL_CONF" | tail -1)
-
-for weak in RC4 3DES LOW MEDIUM; do
-    if echo "$CIPHER_LINE" | grep -qi "+${weak}\|:${weak}"; then
-        echo "FAIL [PoC]: Weak cipher '$weak' still in SSLCipherSuite."
-        exit 1
-    fi
-done
-
-echo "PASS [PoC]: Cipher suite does not include weak ciphers."
-
-# Behavioral test: actually try deprecated protocols against the running server
-if pgrep -x apache2 > /dev/null 2>&1 || { apachectl start > /dev/null 2>&1; sleep 1; pgrep -x apache2 > /dev/null 2>&1; }; then
-    # Test SSLv3 — connection must fail
-    if openssl s_client -connect localhost:443 -ssl3 </dev/null 2>&1 | grep -qi 'BEGIN CERTIFICATE\|Secure Renegotiation IS supported'; then
-        echo "FAIL [PoC]: SSLv3 connection succeeded — protocol not disabled."
-        exit 1
-    fi
-    echo "PASS [PoC]: SSLv3 connection correctly rejected."
-
-    # Test TLSv1.0 — connection must fail
-    if openssl s_client -connect localhost:443 -tls1 </dev/null 2>&1 | grep -qi 'BEGIN CERTIFICATE\|Secure Renegotiation IS supported'; then
-        echo "FAIL [PoC]: TLSv1.0 connection succeeded — protocol not disabled."
-        exit 1
-    fi
-    echo "PASS [PoC]: TLSv1.0 connection correctly rejected."
-fi
-
-###############################################################################
-# Regression Check: Apache is running
-###############################################################################
-
-if pgrep -x apache2 > /dev/null 2>&1; then
-    echo "PASS [Regression]: Apache process is running."
+# --- Regression FIRST: is the server actually up and doing modern TLS? ---
+if handshake "-tls1_2"; then
+    echo "PASS [Regression]: server completes a TLSv1.2 handshake (httpd is live)."
 else
-    apachectl start > /dev/null 2>&1
-    sleep 1
-    if pgrep -x apache2 > /dev/null 2>&1; then
-        echo "PASS [Regression]: Apache started and is running."
-    else
-        echo "FAIL [Regression]: Apache is not running."
-        exit 1
-    fi
+    echo "FAIL [Regression]: no TLSv1.2 handshake on $HOST:$PORT - apache is down or broken."
+    echo "RESULT: REMEDIATION FAILED"; exit 1
 fi
 
-echo "All checks passed."
-exit 0
+# --- PoC: deprecated protocols must be REFUSED by the live server ---
+if handshake "-tls1"; then
+    echo "FAIL [PoC]: server negotiated TLSv1.0 - deprecated protocol still enabled."
+    echo "            (config may say TLSv1.2+, but was apache restarted?)"
+    PASS=false
+else
+    echo "PASS [PoC]: TLSv1.0 handshake refused by the live server."
+fi
+
+if handshake "-tls1_1"; then
+    echo "FAIL [PoC]: server negotiated TLSv1.1 - deprecated protocol still enabled."
+    PASS=false
+else
+    echo "PASS [PoC]: TLSv1.1 handshake refused by the live server."
+fi
+
+# --- PoC: weak ciphers (RC4/3DES) must not be offered over TLSv1.2 ---
+for weak in RC4-SHA DES-CBC3-SHA; do
+    if timeout 12 bash -c "echo | openssl s_client -tls1_2 -cipher $weak -connect $HOST:$PORT 2>&1" 2>/dev/null | grep -q 'BEGIN CERTIFICATE'; then
+        echo "FAIL [PoC]: live server accepted weak cipher $weak."
+        PASS=false
+    fi
+done
+$PASS && echo "PASS [PoC]: live server rejected weak RC4/3DES ciphers (or none matched)."
+
+if $PASS; then
+    echo "All checks passed."; exit 0
+else
+    echo "RESULT: REMEDIATION FAILED"; exit 1
+fi

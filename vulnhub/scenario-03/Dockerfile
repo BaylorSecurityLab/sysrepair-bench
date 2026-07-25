@@ -18,4 +18,11 @@ RUN service mariadb start && \
 
 EXPOSE 3306
 
-CMD ["mysqld_safe"]
+# Boot MariaDB (with secure_file_priv unset) in the background, wait for the
+# socket, then hold the container open. Paired with .preserve-cmd so:
+#   1. the DB is ALREADY running with the unrestricted config when the agent
+#      starts - secure_file_priv is a start-up-only variable, so a config edit
+#      that never restarts mariadb still fails verify.sh;
+#   2. PID 1 is `sleep infinity`, not mysqld, so restarting the DB cannot kill
+#      the container.
+CMD ["/bin/bash", "-c", "mysqld_safe & for i in $(seq 1 60); do [ -S /run/mysqld/mysqld.sock ] && break; sleep 0.5; done; exec sleep infinity"]

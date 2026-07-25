@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots apache2 with the vulnerable SSL vhost (SSLProtocol
+# all, weak ciphers) and then execs `sleep infinity`, so:
+#   * httpd is ALREADY serving TLS on :443 when the agent starts, which makes
+#     the "edited default-ssl.conf but never restarted apache" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting apache cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART apache after editing the SSL
+# config; apache reads SSLProtocol/SSLCipherSuite only at (re)start, so an
+# un-restarted server keeps negotiating TLSv1.0/1.1 and verify.sh FAILS.

@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots apache2 serving the vulnerable read.php (no
+# open_basedir) and then execs `sleep infinity`, so:
+#   * httpd is ALREADY serving the LFI endpoint when the agent starts, which
+#     makes the "set open_basedir but never restarted apache" case detectable
+#     (apache reads php.ini only at startup);
+#   * PID 1 is still `sleep infinity`, so restarting apache cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART apache after editing the
+# apache2 php.ini; an un-restarted server keeps honouring file_get_contents on
+# arbitrary paths and verify.sh FAILS.

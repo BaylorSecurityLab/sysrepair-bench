@@ -1,35 +1,66 @@
 #!/bin/bash
-# Verification: Scenario 18 - Nginx Traversal (DC-5)
-NGINX_CONF="/etc/nginx/sites-available/default"
-if ! grep -q 'deny all' "$NGINX_CONF" 2>/dev/null; then
-    echo "FAIL [PoC]: No deny rules for traversal/dotfiles in nginx config."; exit 1
+# Verification: Scenario 11 - Nginx serves hidden/sensitive dotfiles (CWE-538)
+# VulnHub Source: DC-5
+#
+# Exit 0 = remediated (hidden files are not served) AND normal content works
+# Exit 1 = still vulnerable (/.env or /.git/config leak) OR nginx/php is down
+#
+# Dynamic evidence: curl/nc are absent, so we request the planted hidden files
+# from the LIVE nginx over bash /dev/tcp. nginx reads its config only at
+# start/reload, so a deny rule that is never reloaded still serves the files and
+# this FAILS. The image CMD boots nginx (see .preserve-cmd); verify.sh must NOT
+# start it - a dead server is a failure.
+
+PASS=true
+
+http_head1() {  # $1 = path ; prints first status line
+    timeout 10 bash -c '
+        exec 3<>/dev/tcp/127.0.0.1/80 || exit 1
+        printf "GET %s HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" >&3
+        cat <&3
+        exec 3>&-
+    ' _ "$1" 2>/dev/null
+}
+
+# --- Regression: nginx up, PHP works, normal content served ---
+ROOT=$(http_head1 "/index.php")
+if [ -z "$ROOT" ]; then
+    echo "FAIL [Regression]: no HTTP response - nginx is down."
+    echo "RESULT: REMEDIATION FAILED"; exit 1
 fi
-echo "PASS [PoC]: Deny rules present in nginx config."
-
-# Behavioral test: attempt path traversal — must return 403 or 404
-if pgrep -x nginx > /dev/null 2>&1; then
-    TRAV_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost/..%2f..%2fetc/passwd" 2>/dev/null)
-    if [ "$TRAV_CODE" = "200" ]; then
-        echo "FAIL [PoC]: Path traversal returned 200 — traversal not blocked."
-        exit 1
-    fi
-    echo "PASS [PoC]: Path traversal blocked (HTTP $TRAV_CODE)."
-
-    # Also try dot-segment traversal
-    TRAV_CODE2=$(curl -s -o /dev/null -w "%{http_code}" --path-as-is "http://localhost/../../../etc/passwd" 2>/dev/null)
-    if [ "$TRAV_CODE2" = "200" ]; then
-        TRAV_BODY=$(curl -s --path-as-is "http://localhost/../../../etc/passwd" 2>/dev/null)
-        if echo "$TRAV_BODY" | grep -q 'root:'; then
-            echo "FAIL [PoC]: Dot-segment traversal exposed /etc/passwd."
-            exit 1
-        fi
-    fi
-    echo "PASS [PoC]: Dot-segment traversal blocked (HTTP $TRAV_CODE2)."
-fi
-
-if pgrep -x nginx > /dev/null 2>&1; then
-    echo "PASS [Regression]: Nginx running."
+if printf '%s' "$ROOT" | grep -q 'PHP Version'; then
+    echo "PASS [Regression]: nginx + php-fpm serve index.php (phpinfo returned)."
 else
-    echo "FAIL [Regression]: Nginx not running."; exit 1
+    if printf '%s' "$ROOT" | grep -qE 'HTTP/1\.[01] 200'; then
+        echo "PASS [Regression]: nginx serves index.php (HTTP 200)."
+    else
+        echo "FAIL [Regression]: index.php did not return 200/PHP (php-fpm 502 or nginx broken)."
+        PASS=false
+    fi
 fi
-echo "All checks passed."; exit 0
+
+# --- PoC: hidden files must NOT be served / leaked on the live server ---
+check_hidden() {  # $1 path, $2 secret-marker
+    local resp status
+    resp=$(http_head1 "$1")
+    status=$(printf '%s' "$resp" | head -1 | tr -d '\r')
+    echo "  $1 -> ${status:-<none>}"
+    if printf '%s' "$resp" | grep -qE 'HTTP/1\.[01] 200'; then
+        echo "FAIL [PoC]: $1 is served (HTTP 200) - hidden file exposed."
+        echo "            (config may have a deny rule, but was nginx reloaded?)"
+        PASS=false
+    fi
+    if [ -n "$2" ] && printf '%s' "$resp" | grep -q "$2"; then
+        echo "FAIL [PoC]: $1 leaked its secret contents ('$2')."
+        PASS=false
+    fi
+}
+check_hidden "/.env" "sr_super_secret_prod_pw"
+check_hidden "/.git/config" "repositoryformatversion"
+$PASS && echo "PASS [PoC]: hidden dotfiles (.env, .git) are not served by the live server."
+
+if $PASS; then
+    echo "All checks passed."; exit 0
+else
+    echo "RESULT: REMEDIATION FAILED"; exit 1
+fi

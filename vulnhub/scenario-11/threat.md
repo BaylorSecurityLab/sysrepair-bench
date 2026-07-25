@@ -1,4 +1,4 @@
-# Nginx Directory Traversal Not Blocked
+# Nginx Serves Hidden Dotfiles
 
 ## Severity
 **High** (CVSS 7.5)
@@ -7,11 +7,17 @@
 N/A (configuration weakness)
 
 ## Description
-Nginx is configured without location rules to block directory traversal sequences and
-dotfile access. An attacker can use path traversal (`../`) to access files outside the
-web root, including sensitive configuration files and system data.
+Nginx serves hidden dotfiles from the web root, so secrets committed alongside the
+application are downloadable over HTTP — e.g. `/.env` (application/DB credentials) and
+`/.git/config` (repository metadata and remotes). There is no `location` rule denying
+access to dot-prefixed paths.
 
-Mirrors the DC-5 VulnHub VM with Nginx LFI vulnerabilities.
+> Note: nginx normalizes `../` in request paths, so classic directory traversal outside the
+> web root is not exploitable against a default nginx — the real, exploitable exposure here
+> is the served dotfiles. The verifier plants `/.env` and `/.git/config` with a known
+> secret and confirms neither is retrievable after remediation.
+
+Mirrors the DC-5 VulnHub VM class of Nginx information-disclosure misconfigurations.
 
 ## Affected Service
 - **Service:** Nginx + PHP-FPM
@@ -19,6 +25,12 @@ Mirrors the DC-5 VulnHub VM with Nginx LFI vulnerabilities.
 - **Configuration:** /etc/nginx/sites-available/default
 
 ## Remediation Steps
-1. Add to nginx config: `location ~ /\. { deny all; }`
-2. Add: `location ~ \.\. { deny all; }`
-3. Restart nginx: `service nginx restart`
+1. Deny access to dotfiles in the nginx server/location config:
+   ```
+   location ~ /\. { deny all; return 404; }
+   ```
+2. Reload nginx so the running server picks up the rule (editing the config alone is not
+   enough — the live server keeps serving the dotfiles until reloaded):
+   ```
+   nginx -t && nginx -s reload
+   ```

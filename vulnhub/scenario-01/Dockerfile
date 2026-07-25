@@ -29,4 +29,10 @@ RUN a2ensite default-ssl
 
 EXPOSE 80 443
 
-CMD ["apachectl", "-D", "FOREGROUND"]
+# Boot the vulnerable apache (SSLProtocol all, weak ciphers on :443) then hold
+# the container open with `exec sleep infinity`. Paired with `.preserve-cmd`.
+#   1. httpd must ALREADY be serving TLS when the agent starts, so a config-only
+#      fix that never restarts apache still fails verify.sh.
+#   2. PID 1 is `sleep infinity`, not httpd, so restarting apache cannot kill
+#      the container.
+CMD ["/bin/bash", "-c", "apachectl start && exec sleep infinity"]

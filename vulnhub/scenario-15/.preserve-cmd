@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots exim with dc_local_interfaces='0.0.0.0' (listening on
+# every interface) in the background and then execs `sleep infinity`, so:
+#   * the SMTP daemon is ALREADY LISTENING on 0.0.0.0:25 when the agent starts,
+#     which is what makes the "restricted the config but never restarted exim"
+#     case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting exim cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART exim after editing
+# update-exim4.conf.conf; exim reads dc_local_interfaces only at startup, so an
+# un-restarted daemon keeps its 0.0.0.0 binding and verify.sh (which reads
+# /proc/net/tcp) still FAILS.
