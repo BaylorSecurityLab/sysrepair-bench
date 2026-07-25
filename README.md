@@ -186,9 +186,11 @@ No extras beyond Docker. These use modern base images (Ubuntu 14.04 / 22.04, Deb
 > (Windows/macOS, WSL2 backend) applies its own seccomp profile even when the
 > scenario's `.run-opts` passes `--security-opt seccomp=unconfined`: `/proc/1/status`
 > still reports `Seccomp: 2` (FILTER). Scenarios whose PoC depends on an
-> unconfined sandbox — notably [`meta4/scenario-70`](meta4/scenario-70/) (cgroup
-> escape, CVE-2022-0492) — therefore verify as *already remediated* (`verify.sh`
-> exits 0 on the untouched container) and cannot be scored on Docker Desktop.
+> unconfined sandbox therefore verify as *already remediated* (`verify.sh` exits
+> 0 on the untouched container) and cannot be scored on Docker Desktop:
+> [`meta4/scenario-70`](meta4/scenario-70/) (cgroup escape, CVE-2022-0492),
+> [`scenario-71`](meta4/scenario-71/) (`seccomp=unconfined`) and
+> [`scenario-72`](meta4/scenario-72/) (`apparmor=unconfined`).
 > Run them on a native Linux host, same as [`meta2/`](#3b-meta2--linux-host-only).
 
 > **Kernel-coupled scenarios.** `meta4/scenario-19`, `-21`, `-22` (and `-117`)
