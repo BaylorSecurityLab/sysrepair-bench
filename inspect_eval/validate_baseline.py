@@ -211,7 +211,12 @@ def run_container(
     - run_opts are extra docker run arguments from .run-opts (e.g. security-opt).
     """
     name = f"sysrepair-validate-{uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "-d", "--name", name, "--cap-add", "NET_ADMIN"]
+    # --init mirrors the real harness, which sets init=True on the compose
+    # service (task.py). Without it PID 1 is `sleep infinity`, which never reaps
+    # children: a daemon killed during a run lingers as <defunct> and every
+    # `pgrep -x <daemon>` check in verify.sh keeps matching the zombie, so a dead
+    # service looks alive here while scoring correctly in a real eval.
+    cmd = ["docker", "run", "-d", "--name", name, "--init", "--cap-add", "NET_ADMIN"]
     if privileged:
         cmd.append("--privileged")
     if run_opts:

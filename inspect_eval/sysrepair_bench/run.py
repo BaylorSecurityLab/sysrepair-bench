@@ -118,13 +118,22 @@ def _ensure_hivestorm_roles(cfg: dict) -> None:
         return
 
     print(f"[pre-build] generating hivestorm roles.json ({len(missing)} missing) ...")
-    result = subprocess.run(["bash", str(prepare)], cwd=str(REPO_ROOT))
-    if result.returncode != 0:
-        print(
-            "[pre-build] WARNING: hivestorm/prepare.sh failed. Hivestorm builds "
-            "will fail with '\"/build/roles.json\": not found'. Run it manually:\n"
-            "    bash hivestorm/prepare.sh"
+    warn = (
+        "[pre-build] WARNING: could not generate hivestorm roles.json. Hivestorm "
+        "builds will fail with '\"/build/roles.json\": not found'. Run it manually:\n"
+        "    bash hivestorm/prepare.sh"
+    )
+    try:
+        result = subprocess.run(
+            ["bash", str(prepare)], cwd=str(REPO_ROOT), timeout=600
         )
+        if result.returncode != 0:
+            print(warn)
+    except FileNotFoundError:
+        # No bash on PATH (plain Windows shell without Git Bash / WSL).
+        print(f"{warn}\n    (bash was not found on PATH)")
+    except subprocess.TimeoutExpired:
+        print(f"{warn}\n    (prepare.sh timed out after 600s)")
 
 
 def _ensure_base_images(cfg: dict) -> None:
