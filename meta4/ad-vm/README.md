@@ -16,21 +16,49 @@ Linux LPEs.
 
 ## Prerequisites
 
-- VirtualBox ≥ 7.0
-- Vagrant ≥ 2.4.9 with the `vagrant-reload` plugin
-  (`vagrant plugin install vagrant-reload`)
-- `jq` on the host (used by `run-scenario.sh`)
-- ~8 GB free RAM, ~40 GB free disk for three linked-clone VMs
-- The community box `jborean93/WindowsServer2019` (pulled automatically
-  on first `vagrant up`; a reproducible Packer template is on the
-  roadmap for later phases)
+The lab runs on **Hyper-V via AutomatedLab**. The Vagrant/VirtualBox
+implementation has been retired — see [Migration status](#migration-status).
 
-## Quick start (manual route)
+- Windows 11 Pro with Hyper-V enabled
+- AutomatedLab (pin the version; record it in [`lab/IMAGES.md`](lab/IMAGES.md))
+- Pester ≥ 5.0
+- Windows ADK Deployment Tools, for `oscdimg` (builds the cloud-init seed ISO)
+- Docker, to build the attacker tooling image
+- Windows Server 2019 evaluation ISO and Ubuntu Server 24.04 ISO, with SHA256
+  hashes recorded in `lab/IMAGES.md`
+- ~10 GB free RAM, ~60 GB free disk for four VMs
 
-Fresh-clone DC bringup currently requires a two-step dance: `vagrant up dc`
-will time out mid-DCPROMO with a WinRM auth error, but the bootstrap chain
-keeps running in the background on the VM. You wait for it to finish, then
-bring up the other two VMs.
+Full step-by-step setup is in [`lab/RUNBOOK.md`](lab/RUNBOOK.md).
+
+## Quick start
+
+```powershell
+# One-time (elevated). Full detail in lab/RUNBOOK.md.
+. .\lab\New-LabSwitches.ps1;     New-LabSwitches -ExternalAdapterName '<adapter>'
+powershell -ExecutionPolicy Bypass -File .\lab\SysRepairLab.ps1
+. .\lab\Protect-ParentDisk.ps1;  Set-LabVMHardening
+. .\lab\New-AttackerVM.ps1;      New-AttackerSshKey; New-AttackerVM ...
+. .\lab\Save-LabBaseline.ps1;    Save-LabBaseline
+
+# Per scenario
+./run-scenario.sh 13                    # restore -> inject -> handoff
+./run-scenario.sh 13 --verify-only      # grade; exits 0 iff both gates pass
+```
+
+**There is no manual wait step.** The previous implementation needed one
+because Vagrant could not survive `Install-ADDSForest` destroying the local
+SAM mid-session, which invalidated the WinRM session it was holding.
+AutomatedLab's `RootDC` role promotes the DC out of band, so the entire
+self-driving bootstrap chain — the scheduled task, the reboot dance, the
+30-minute marker poll — is gone.
+
+<details>
+<summary>Retired Vagrant bringup (kept for reference)</summary>
+
+Fresh-clone DC bringup used to require a two-step dance: `vagrant up dc`
+would time out mid-DCPROMO with a WinRM auth error, but the bootstrap chain
+kept running in the background on the VM. You waited for it to finish, then
+brought up the other two VMs.
 
 ```bash
 cd meta4/ad-vm
@@ -82,19 +110,31 @@ something broke — open the VirtualBox GUI (`VBoxManage startvm meta4-ad-dc
 --type separate`) or RDP to `127.0.0.1:3389` as `Administrator` /
 `Vagrant1DSRM!` and check `C:\meta4-setup\bootstrap.log`.
 
+</details>
+
 ## VMs
 
 | Role | VM name | IP | Notes |
 |---|---|---|---|
-| DC / forest root | `corp-dc01` | `10.20.30.5` | `corp.local` / `CORP` NetBIOS |
-| Enterprise CA | `corp-ca01` | `10.20.30.6` | Member of corp.local, ADCS EnterpriseRootCA |
-| Kali attacker | `kali-attacker` | `10.20.30.10` | `corp\alice:Password1!` seeded in `~/creds.txt` |
+| DC / forest root | `corp-dc01` | `10.20.30.5` | `corp.local` / `CORP` NetBIOS. Fixed 3 GB — AD's ESE cache sizes at boot, so this must not balloon. |
+| Enterprise CA | `corp-ca01` | `10.20.30.6` | Member server, ADCS EnterpriseRootCA, CN pinned to `corp-ca01-CA` |
+| Member workstation | `corp-ws01` | `10.20.30.20` | Domain member. Enables the behavioural PoCs for S13, S15, S17 and S19. |
+| Attacker | `attacker01` | `10.20.30.10` | Ubuntu Server running the pinned `srb-attacker` Kali tooling container. `corp\alice:Password1!` in `~/creds.txt`. |
+
+All four sit on the `SRB-Lab` Internal switch, which has no route to the
+internet — verified from inside the guest by `Test-LabEgress`, not merely
+asserted from the switch type.
 
 ## Scenario matrix
 
-All 20 scenarios shipped (Phase 0–4 complete; final Phase 4 batch landed
-2026-04-24). Each ships behavioral PoC + service probes — no config-only
-checks. User-side smoke validation pending.
+All 20 scenarios are present and all 20 now dispatch. **They are not all
+valid, and none is publishable yet** — see [Migration status](#migration-status).
+
+An earlier version of this section claimed "behavioral PoC + service probes —
+no config-only checks". That claim did not hold: at least S11, S13 and S18 read
+configuration rather than performing the attack, and the toolchain the PoCs
+depend on was never installed. It is corrected here rather than quietly
+dropped.
 
 | # | Title | Category | Severity | CVE | Comp-ctrl | Shipped |
 |---|---|---|---|---|---|---|
@@ -130,13 +170,51 @@ Same dual-gate rule as container-mode `meta4/scenario-NNN/`.
 
 ## Teardown
 
-```bash
-vagrant destroy -f
+```powershell
+Remove-Lab -Name SysRepairBench          # the three Windows machines
+Remove-VM -Name attacker01 -Force        # built outside AutomatedLab
 ```
 
-Snapshots and linked clones are removed; pull the community box again with
-`vagrant up` next time. `vagrant box remove jborean93/WindowsServer2019`
-frees ~12 GB if you're done for a while.
+Remove the `SRB-Lab`, `SRB-Build` and `SRB-Kernel` switches with
+`Remove-VMSwitch` if you are done entirely.
+
+## Migration status
+
+The lab was ported from Vagrant + VirtualBox to Hyper-V + AutomatedLab. What
+that fixed, and what it did not:
+
+**Done.** VM creation, DC promotion, CA install, ordered boot with
+service-level readiness gating, clock verification, atomic cross-machine
+baseline capture, and scenario dispatch with post-handoff grader staging. The
+attacker tooling image builds with every tool the scenarios invoke resolving
+*and executing*.
+
+**Retired but still on disk.** `Vagrantfile`, `reset.sh`,
+`capture-baselines.sh`, `provision/dc-baseline.ps1`, `provision/ca-baseline.ps1`
+and `provision/attacker-baseline.sh` are superseded and no longer referenced by
+`run-scenario.sh`. They are kept until the Hyper-V path has completed one
+successful run on real hardware, then deleted.
+
+**Not done — and this gates publication.** An audit of all 20 scenarios found
+the graders themselves broken, independently of the hypervisor. The root cause
+was a provisioning bug: tools were installed under names and paths the
+scenarios never call, every symlink was silently skipped, and fail-open
+branches then graded "PoC BLOCKED" — a PASS on an unmodified vulnerable box.
+
+Repaired so far: **03, 04, 07, 08, 09, 10, 12, 14, 19**.
+
+Still outstanding:
+
+| Scenario | Problem |
+|---|---|
+| S01 Zerologon | `zerologon_tester` is not an impacket tool; the image now supplies it from upstream, but the scenario needs revalidation |
+| S05 Unconstrained delegation | `getST -impersonate` as a plain user is S4U2self, which requires the *requesting* account to hold delegation rights — the probe can never observe what it grades |
+| S11 ESC8 | The documented EPA remediation still returns HTTP 200 and the banner, so a correct fix is penalised |
+| S16 PrintNightmare | Grades the wrong vulnerability: `spoolsample` is MS-RPRN coercion (PrinterBug), while `threat.md` describes `RpcAddPrinterDriverEx` |
+
+**No score from this suite is publishable until each scenario has passed a
+negative control** — failing against an unmodified vulnerable box and passing
+against a reference fix. That fixture does not exist yet.
 
 ## Contract for scorer integration
 
