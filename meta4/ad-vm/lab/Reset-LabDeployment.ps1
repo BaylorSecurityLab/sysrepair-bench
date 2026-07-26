@@ -91,24 +91,52 @@ function Reset-LabDeployment {
     # by another process, and stale entries do not block Install-Lab -- it
     # rewrites its own. Report the real outcome rather than assuming the write
     # landed.
+    # SAFETY: a failed or empty read must NEVER be written back.
+    #
+    # The first version of this did `Get-Content ... -ErrorAction SilentlyContinue`
+    # and then wrote the filtered result. When the file was locked the read
+    # returned nothing, the filtered result was also nothing, and Set-Content
+    # TRUNCATED the system hosts file to zero bytes. Destructive operations must
+    # fail closed on an unreadable source, never treat "read nothing" as
+    # "there was nothing".
     $hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
     if (Test-Path -LiteralPath $hosts) {
-        $lines = Get-Content -LiteralPath $hosts -ErrorAction SilentlyContinue
-        $keep  = $lines | Where-Object { $_ -notmatch '(?i)\b(corp-dc01|corp-ca01|corp-ws01)\b' }
-        $n     = $lines.Count - $keep.Count
+        $lines = $null
+        try   { $lines = [IO.File]::ReadAllLines($hosts) }
+        catch { $lines = $null }
 
-        if ($n -gt 0) {
-            if ($WhatIfOnly) {
-                $actions.Add("strip $n lab entries from hosts file")
-            }
-            else {
-                try {
-                    Set-Content -LiteralPath $hosts -Value $keep -Encoding ascii -ErrorAction Stop
-                    $actions.Add("stripped $n lab entries from hosts file")
+        if ($null -eq $lines) {
+            $actions.Add('SKIPPED hosts file (unreadable; refusing to write)')
+            Write-Warning '[reset] hosts file could not be read, so it will not be rewritten. Stale lab entries may remain; they do not block Install-Lab.'
+        }
+        elseif ($lines.Count -eq 0) {
+            $actions.Add('SKIPPED hosts file (read as empty; refusing to write)')
+            Write-Warning '[reset] hosts file read as empty - not rewriting. If this is unexpected, restore it before continuing.'
+        }
+        else {
+            $keep = @($lines | Where-Object { $_ -notmatch '(?i)\b(corp-dc01|corp-ca01|corp-ws01)\b' })
+            $n    = $lines.Count - $keep.Count
+
+            if ($n -gt 0) {
+                if ($WhatIfOnly) {
+                    $actions.Add("strip $n lab entries from hosts file")
                 }
-                catch {
-                    $actions.Add("SKIPPED hosts file ($n stale entries left): $($_.Exception.Message.Split([char]10)[0])")
-                    Write-Warning "[reset] could not rewrite the hosts file; $n stale lab entries remain. This does not block Install-Lab."
+                elseif ($keep.Count -eq 0) {
+                    # Every line matched. A real hosts file always retains its
+                    # comment header, so this means the filter is wrong -- do
+                    # not blank the file on the strength of it.
+                    $actions.Add('SKIPPED hosts file (filter would remove every line)')
+                    Write-Warning '[reset] refusing to rewrite the hosts file: the filter matched every line.'
+                }
+                else {
+                    try {
+                        [IO.File]::WriteAllLines($hosts, $keep)
+                        $actions.Add("stripped $n lab entries from hosts file")
+                    }
+                    catch {
+                        $actions.Add("SKIPPED hosts file ($n stale entries left): $($_.Exception.Message.Split([char]10)[0])")
+                        Write-Warning "[reset] could not rewrite the hosts file; $n stale lab entries remain. This does not block Install-Lab."
+                    }
                 }
             }
         }

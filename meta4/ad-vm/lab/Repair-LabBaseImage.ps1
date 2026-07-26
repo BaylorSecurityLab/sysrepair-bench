@@ -93,23 +93,32 @@ re-run this, then re-run Install-Lab.
             if (-not $espPart) { throw "no EFI System partition in $($t.Name)" }
             if (-not $winPart) { throw "no Windows partition in $($t.Name)" }
 
-            if (-not $espPart.DriveLetter) {
-                $espPart | Set-Partition -NewDriveLetter S
-                Start-Sleep -Seconds 2
-                $espPart = Get-Partition -DiskNumber $dn -PartitionNumber $espPart.PartitionNumber
-                $assigned += @{ Part = $espPart.PartitionNumber; Letter = 'S' }
-            }
-            if (-not $winPart.DriveLetter) {
-                $winPart | Set-Partition -NewDriveLetter W
-                Start-Sleep -Seconds 2
-                $winPart = Get-Partition -DiskNumber $dn -PartitionNumber $winPart.PartitionNumber
-                $assigned += @{ Part = $winPart.PartitionNumber; Letter = 'W' }
-            }
+            # Mount to DIRECTORY JUNCTIONS, never drive letters.
+            #
+            # Assigning a drive letter persists in the partition table, and
+            # AutomatedLab builds its copy destination from $drive.DriveLetter:
+            # two lettered partitions produce the array "S F" ("Cannot find
+            # drive"), zero produce an empty path ("The given path's format is
+            # not supported"). Removing a letter afterwards is also not
+            # reliably persisted from a read-only mount. Directory access paths
+            # sidestep all of it -- they mount, they unmount, and they leave
+            # the drive-letter state exactly as found.
+            $mountRoot = Join-Path ([IO.Path]::GetTempPath()) "srb-mnt-$PID"
+            $espDir = Join-Path $mountRoot 'esp'
+            $winDir = Join-Path $mountRoot 'win'
+            New-Item -ItemType Directory -Path $espDir -Force | Out-Null
+            New-Item -ItemType Directory -Path $winDir -Force | Out-Null
 
-            $esp = $espPart.DriveLetter
-            $win = $winPart.DriveLetter
+            Add-PartitionAccessPath -DiskNumber $dn -PartitionNumber $espPart.PartitionNumber -AccessPath $espDir -ErrorAction Stop
+            Add-PartitionAccessPath -DiskNumber $dn -PartitionNumber $winPart.PartitionNumber -AccessPath $winDir -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $assigned += @{ Part = $espPart.PartitionNumber; Path = $espDir }
+            $assigned += @{ Part = $winPart.PartitionNumber; Path = $winDir }
 
-            $bootloader = "${esp}:\EFI\Microsoft\Boot\bootmgfw.efi"
+            $esp = $espDir
+            $win = $winDir
+
+            $bootloader = Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'
             $alreadyOk  = Test-Path $bootloader
 
             if ($alreadyOk) {
@@ -127,13 +136,13 @@ re-run this, then re-run Install-Lab.
 
             # Use the IMAGE's bcdboot, not the host's. A host much newer than
             # the guest fails with "Failure when attempting to copy boot files".
-            $imageBcdboot = "${win}:\Windows\System32\bcdboot.exe"
+            $imageBcdboot = Join-Path $win 'Windows\System32\bcdboot.exe'
             if (-not (Test-Path $imageBcdboot)) {
                 throw "no bcdboot.exe inside the image at $imageBcdboot -- the applied image is incomplete, which is a different problem"
             }
 
             Write-Host "[repair] running the image's own bcdboot"
-            $out = & $imageBcdboot "${win}:\Windows" /s "${esp}:" /f UEFI /l en-us 2>&1
+            $out = & $imageBcdboot (Join-Path $win 'Windows') /s $esp /f UEFI /l en-us 2>&1
             $rc  = $LASTEXITCODE
             $out | ForEach-Object { Write-Host "  $_" }
 
@@ -165,12 +174,13 @@ re-run this, then re-run Install-Lab.
                 foreach ($a in $assigned) {
                     try {
                         Remove-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
-                            -PartitionNumber $a.Part -AccessPath "$($a.Letter):\" -ErrorAction Stop
-                        Write-Verbose "[repair] removed temporary drive letter $($a.Letter):"
+                            -PartitionNumber $a.Part -AccessPath $a.Path -ErrorAction Stop
+                        Write-Verbose "[repair] released access path $($a.Path)"
                     } catch {
-                        Write-Warning "[repair] could not remove drive letter $($a.Letter): -- Install-Lab may fail with a 'drive name' error. Remove it by hand."
+                        Write-Warning "[repair] could not release access path $($a.Path): $($_.Exception.Message.Split([char]10)[0])"
                     }
                 }
+                Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) "srb-mnt-$PID") -Recurse -Force -ErrorAction SilentlyContinue
             }
             if ($mounted) { Dismount-VHD -Path $t.FullName -ErrorAction SilentlyContinue }
         }
@@ -248,14 +258,17 @@ function Test-LabBaseImageBootable {
             Start-Sleep -Seconds 2
             $espPart = Get-Partition -DiskNumber $mounted.DiskNumber | Where-Object Type -eq 'System'
 
-            if (-not $espPart.DriveLetter) {
-                $espPart | Set-Partition -NewDriveLetter S
-                Start-Sleep -Seconds 2
-                $espPart  = Get-Partition -DiskNumber $mounted.DiskNumber -PartitionNumber $espPart.PartitionNumber
-                $assigned = @{ Part = $espPart.PartitionNumber; Letter = 'S' }
-            }
+            # Directory access path, not a drive letter -- see the note in
+            # Repair-LabBaseImage. A read-only CHECK must not be able to break
+            # the build it exists to protect.
+            $dir = Join-Path ([IO.Path]::GetTempPath()) "srb-chk-$PID"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Add-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
+                -PartitionNumber $espPart.PartitionNumber -AccessPath $dir -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $assigned = @{ Part = $espPart.PartitionNumber; Path = $dir }
 
-            $ok = Test-Path "$($espPart.DriveLetter):\EFI\Microsoft\Boot\bootmgfw.efi"
+            $ok = Test-Path (Join-Path $dir 'EFI\Microsoft\Boot\bootmgfw.efi')
             [pscustomobject]@{ Image = $t.Name; Bootable = $ok }
         }
         catch {
@@ -270,10 +283,11 @@ function Test-LabBaseImageBootable {
             if ($mounted -and $assigned) {
                 try {
                     Remove-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
-                        -PartitionNumber $assigned.Part -AccessPath "$($assigned.Letter):\" -ErrorAction Stop
+                        -PartitionNumber $assigned.Part -AccessPath $assigned.Path -ErrorAction Stop
                 } catch {
-                    Write-Warning "[bootable] could not remove temporary drive letter $($assigned.Letter): -- run Clear-LabBaseImageDriveLetters before Install-Lab."
+                    Write-Warning "[bootable] could not release access path $($assigned.Path): $($_.Exception.Message.Split([char]10)[0])"
                 }
+                Remove-Item -LiteralPath $assigned.Path -Recurse -Force -ErrorAction SilentlyContinue
             }
             if ($mounted) { Dismount-VHD -Path $t.FullName -ErrorAction SilentlyContinue }
         }
