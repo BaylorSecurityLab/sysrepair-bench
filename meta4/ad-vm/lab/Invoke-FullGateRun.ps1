@@ -51,7 +51,14 @@ function Invoke-FullGateRun {
 
         # Persist after every scenario -- a 90-minute run must not lose
         # everything to one interruption.
-        $all | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ResultPath -Encoding utf8
+        #
+        # .ToArray() matters: piping a List[object] into ConvertTo-Json
+        # serialises the LIST OBJECT, producing a single record whose
+        # properties are arrays rather than an array of records. Reading that
+        # back gives one object with Scenario=@('scenario-01','scenario-02'),
+        # which prints as System.Object[] and cannot be tabulated per scenario.
+        ConvertTo-Json -InputObject $all.ToArray() -Depth 6 |
+            Set-Content -LiteralPath $ResultPath -Encoding utf8
     }
 
     Write-Host ""
