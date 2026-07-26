@@ -81,6 +81,7 @@ re-run this, then re-run Install-Lab.
         }
 
         $mounted = $null
+        $assigned = @()   # letters WE added, to be removed before dismount
         try {
             $mounted = Mount-VHD -Path $t.FullName -PassThru -ErrorAction Stop
             $dn = $mounted.DiskNumber
@@ -96,11 +97,13 @@ re-run this, then re-run Install-Lab.
                 $espPart | Set-Partition -NewDriveLetter S
                 Start-Sleep -Seconds 2
                 $espPart = Get-Partition -DiskNumber $dn -PartitionNumber $espPart.PartitionNumber
+                $assigned += @{ Part = $espPart.PartitionNumber; Letter = 'S' }
             }
             if (-not $winPart.DriveLetter) {
                 $winPart | Set-Partition -NewDriveLetter W
                 Start-Sleep -Seconds 2
                 $winPart = Get-Partition -DiskNumber $dn -PartitionNumber $winPart.PartitionNumber
+                $assigned += @{ Part = $winPart.PartitionNumber; Letter = 'W' }
             }
 
             $esp = $espPart.DriveLetter
@@ -145,11 +148,85 @@ re-run this, then re-run Install-Lab.
             [pscustomobject]@{ Image = $t.Name; Action = 'repaired'; Bootable = $true }
         }
         finally {
+            # CRITICAL: remove any drive letter we assigned before dismounting.
+            #
+            # Drive-letter assignments persist in the image's partition table.
+            # AutomatedLab mounts each new VM's disk and copies files to
+            # "$($drive.DriveLetter)...". If more than one partition carries a
+            # letter, that expression yields an ARRAY, which stringifies to
+            # e.g. "S F" and Install-Lab dies with:
+            #
+            #   Copy-Item : Cannot find drive. A drive with the name 'S F'
+            #   does not exist.
+            #
+            # So a repair that leaves letters behind fixes booting and breaks
+            # provisioning. Clean up exactly what we added, and only that.
+            if ($mounted -and $assigned) {
+                foreach ($a in $assigned) {
+                    try {
+                        Remove-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
+                            -PartitionNumber $a.Part -AccessPath "$($a.Letter):\" -ErrorAction Stop
+                        Write-Verbose "[repair] removed temporary drive letter $($a.Letter):"
+                    } catch {
+                        Write-Warning "[repair] could not remove drive letter $($a.Letter): -- Install-Lab may fail with a 'drive name' error. Remove it by hand."
+                    }
+                }
+            }
             if ($mounted) { Dismount-VHD -Path $t.FullName -ErrorAction SilentlyContinue }
         }
     }
 
     return $results
+}
+
+function Clear-LabBaseImageDriveLetters {
+    <#
+    .SYNOPSIS
+    Strips ALL drive-letter assignments from a base image's partitions.
+
+    .DESCRIPTION
+    Repairs an image that already carries persisted letters -- from an earlier
+    repair, or from any manual mount where the letters were not removed. See
+    the note in Repair-LabBaseImage's finally block for why they break
+    Install-Lab.
+    #>
+    [CmdletBinding()]
+    param(
+        [string] $VMPath = 'E:\AutomatedLab-VMs',
+        [string] $Path
+    )
+
+    $targets = if ($Path) { @(Get-Item -LiteralPath $Path -ErrorAction Stop) }
+               else { @(Get-ChildItem -LiteralPath $VMPath -Filter 'BASE_*.vhdx' -ErrorAction Stop) }
+
+    foreach ($t in $targets) {
+        $mounted = $null
+        try {
+            $mounted = Mount-VHD -Path $t.FullName -PassThru -ErrorAction Stop
+            Start-Sleep -Seconds 3
+
+            $lettered = Get-Partition -DiskNumber $mounted.DiskNumber |
+                        Where-Object DriveLetter
+
+            if (-not $lettered) {
+                Write-Host "[letters] $($t.Name): none assigned, OK"
+                continue
+            }
+
+            foreach ($p in $lettered) {
+                try {
+                    Remove-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
+                        -PartitionNumber $p.PartitionNumber -AccessPath "$($p.DriveLetter):\" -ErrorAction Stop
+                    Write-Host "[letters] $($t.Name): removed $($p.DriveLetter): from partition $($p.PartitionNumber)"
+                } catch {
+                    Write-Warning "[letters] $($t.Name): failed to remove $($p.DriveLetter): -- $($_.Exception.Message.Split([char]10)[0])"
+                }
+            }
+        }
+        finally {
+            if ($mounted) { Dismount-VHD -Path $t.FullName -ErrorAction SilentlyContinue }
+        }
+    }
 }
 
 function Test-LabBaseImageBootable {
@@ -164,16 +241,20 @@ function Test-LabBaseImageBootable {
     param([string] $VMPath = 'E:\AutomatedLab-VMs')
 
     foreach ($t in (Get-ChildItem -LiteralPath $VMPath -Filter 'BASE_*.vhdx' -ErrorAction SilentlyContinue)) {
-        $mounted = $null
+        $mounted  = $null
+        $assigned = $null
         try {
             $mounted = Mount-VHD -Path $t.FullName -ReadOnly -PassThru -ErrorAction Stop
             Start-Sleep -Seconds 2
             $espPart = Get-Partition -DiskNumber $mounted.DiskNumber | Where-Object Type -eq 'System'
+
             if (-not $espPart.DriveLetter) {
                 $espPart | Set-Partition -NewDriveLetter S
                 Start-Sleep -Seconds 2
-                $espPart = Get-Partition -DiskNumber $mounted.DiskNumber -PartitionNumber $espPart.PartitionNumber
+                $espPart  = Get-Partition -DiskNumber $mounted.DiskNumber -PartitionNumber $espPart.PartitionNumber
+                $assigned = @{ Part = $espPart.PartitionNumber; Letter = 'S' }
             }
+
             $ok = Test-Path "$($espPart.DriveLetter):\EFI\Microsoft\Boot\bootmgfw.efi"
             [pscustomobject]@{ Image = $t.Name; Bootable = $ok }
         }
@@ -181,6 +262,19 @@ function Test-LabBaseImageBootable {
             [pscustomobject]@{ Image = $t.Name; Bootable = "error: $($_.Exception.Message)" }
         }
         finally {
+            # Even a read-only mount persists the drive-letter assignment in
+            # the partition table. Leaving one here breaks Install-Lab with
+            # "Cannot find drive. A drive with the name 'S F' does not exist"
+            # -- so a read-only CHECK could break the build it was meant to
+            # protect. Remove exactly what we assigned.
+            if ($mounted -and $assigned) {
+                try {
+                    Remove-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
+                        -PartitionNumber $assigned.Part -AccessPath "$($assigned.Letter):\" -ErrorAction Stop
+                } catch {
+                    Write-Warning "[bootable] could not remove temporary drive letter $($assigned.Letter): -- run Clear-LabBaseImageDriveLetters before Install-Lab."
+                }
+            }
             if ($mounted) { Dismount-VHD -Path $t.FullName -ErrorAction SilentlyContinue }
         }
     }

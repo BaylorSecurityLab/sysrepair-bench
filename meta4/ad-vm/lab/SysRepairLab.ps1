@@ -85,6 +85,27 @@ Update `$osName in this script to one of the above.
     Write-Host "[lab] LabSources OK: $LabSourcesPath"
 }
 
+# --- 0b. base-image drive-letter guard -------------------------------------
+# Any mount of the base image -- a repair, or even a read-only inspection --
+# can leave a drive-letter assignment persisted in its partition table.
+# AutomatedLab copies files to "$($drive.DriveLetter)..." on each new VM's
+# disk; with more than one lettered partition that yields an array which
+# stringifies to e.g. "S F", and Install-Lab dies with:
+#
+#   Copy-Item : Cannot find drive. A drive with the name 'S F' does not exist.
+#
+# Removal is not reliably persisted from a read-only mount, so rather than
+# trusting each helper to clean up after itself, strip unconditionally here.
+$repairModule = Join-Path $PSScriptRoot 'Repair-LabBaseImage.ps1'
+if (Test-Path $repairModule) {
+    . $repairModule
+    $vmRoot = 'E:\AutomatedLab-VMs'
+    if (Test-Path $vmRoot) {
+        Write-Host '[lab] stripping any persisted drive letters from base images'
+        Clear-LabBaseImageDriveLetters -VMPath $vmRoot
+    }
+}
+
 # --- 1. lab definition -----------------------------------------------------
 New-LabDefinition -Name $labName -DefaultVirtualizationEngine HyperV
 
