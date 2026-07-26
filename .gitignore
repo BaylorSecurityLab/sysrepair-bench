@@ -75,3 +75,5 @@ testResults.xml
 
 # Gate run output (per-run artifact)
 meta4/ad-vm/gate-results.json
+
+gate-diagnostics.json
