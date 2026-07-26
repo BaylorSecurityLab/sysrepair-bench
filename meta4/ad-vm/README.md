@@ -164,9 +164,62 @@ dropped.
 A scenario **passes** iff both:
 
 1. `verify-poc.sh` on the attacker exits 0 (PoC blocked)
-2. `verify-service.ps1` on the DC or CA exits 0 (affected service healthy)
+2. `verify-service.ps1` on its target machine exits 0 (affected service healthy)
 
 Same dual-gate rule as container-mode `meta4/scenario-NNN/`.
+
+`verify-poc.sh` exit codes are three-valued, and the distinction matters:
+
+| Exit | Meaning |
+|---|---|
+| 0 | PoC blocked — the host is remediated |
+| 1 | PoC succeeded, or the result was inconclusive |
+| **2** | **Harness error** — a grader tool is missing or broken |
+
+**Exit 2 is never evidence of anything.** It exists because the original suite
+graded missing tools as "attack blocked": `/usr/bin/certipy-ad` did not exist,
+the PoC's `|| true` swallowed the error, and a fail-open branch reported PASS
+on an untouched vulnerable box. A scenario returning 2 is a broken harness, not
+a remediated host.
+
+## Validating a scenario — the four proof gates
+
+A green dual gate proves nothing on its own; the broken checks were green too.
+`lab/Test-ScenarioGates.ps1` runs each scenario through the four gates from the
+project's verify-check hardening methodology:
+
+| Gate | What it runs | Required result |
+|---|---|---|
+| 1 — baseline fails for the right reason | restore → inject | PoC exits **1** (attack works), and **not 2**; service healthy |
+| 2 — still solvable | apply `reference-fix.ps1` | both gates pass |
+| 3 — sabotage | re-apply `inject.ps1` | PoC fails again |
+| 4 — not-restarted | apply `reference-fix-norestart.ps1` | PoC **still fails** |
+
+Gate 4 is the one that catches config-only checks: it applies the correct
+configuration without restarting the affected service, so a check that greps a
+file rather than exercising the running service will wrongly pass. It only
+applies where the remediation involves a service — scenarios whose fix is a
+pure directory change record it as not-applicable rather than passing silently.
+
+```powershell
+. .\lab\Test-ScenarioGates.ps1
+Test-ScenarioGates -ScenarioId 06        # one scenario
+Get-ScenarioFixtureCoverage              # which fixtures exist
+
+. .\lab\Invoke-FullGateRun.ps1
+Invoke-FullGateRun                       # all 20; ~90 min; writes gate-results.json
+```
+
+### Fixtures
+
+Each scenario ships `reference-fix.ps1` — the reference remediation, used only
+by the gates and never shown to an agent. Scenarios whose fix needs a service
+restart also ship `reference-fix-norestart.ps1` for gate 4.
+
+Fixtures are deliberately **narrow**: the exact inverse of the inject, not a
+wholesale reset. A blunt reset would mask the vulnerability while changing far
+more than the scenario is about, and would make gate 3 meaningless. Each one
+verifies its own effect rather than trusting the write.
 
 ## Teardown
 
