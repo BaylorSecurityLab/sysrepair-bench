@@ -86,7 +86,18 @@ function New-CloudInitSeedIso {
         Set-Content -LiteralPath (Join-Path $staging 'user-data') -Value $rendered -Encoding utf8 -NoNewline
         Copy-Item -LiteralPath (Join-Path $CloudInitDir 'meta-data') -Destination $staging
 
-        & $oscdimgPath -lCIDATA -n $staging $OutputIsoPath
+        # -j1 adds a Joliet tree alongside ISO9660. Without it oscdimg writes
+        # plain ISO9660, which does not preserve case, so the files land as
+        # USER-DATA / META-DATA. cloud-init's NoCloud datasource looks for
+        # lowercase user-data / meta-data and would silently find neither --
+        # leaving the guest with no SSH key and no static address, which then
+        # presents as every host-side probe timing out for no obvious reason.
+        # Linux prefers the Joliet tree on mount, so names keep their case.
+        #
+        # -n is deliberately NOT passed: oscdimg rejects it alongside -j1
+        # ("With -j1 and -j2, cannot use -n, -nt, or -d"). Joliet already
+        # allows the long names -n would have provided.
+        & $oscdimgPath -lCIDATA -j1 $staging $OutputIsoPath
         if ($LASTEXITCODE -ne 0) {
             throw "New-CloudInitSeedIso: oscdimg failed with exit code $LASTEXITCODE"
         }

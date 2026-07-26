@@ -1,6 +1,6 @@
 #cloud-config
-# Template. New-AttackerVM.ps1 substitutes __SSH_PUBKEY__ and writes the real
-# user-data next to this file before packing the NoCloud seed ISO.
+# Template. New-CloudInitSeedIso substitutes the public-key placeholder below
+# and packs the rendered result into the NoCloud seed ISO.
 #
 # The key matters: every host-side probe (Test-AttackerReady, Sync-LabClocks,
 # Test-LabEgress) shells out to ssh non-interactively with -o BatchMode=yes.
