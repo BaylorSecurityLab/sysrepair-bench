@@ -84,11 +84,16 @@ function Save-LabBaseline {
     #>
     [CmdletBinding()]
     param(
-        [string[]] $VMName = @('corp-dc01', 'corp-ca01', 'corp-ws01', 'attacker01')
+        [string[]] $VMName = @('corp-dc01', 'corp-ca01', 'corp-ws01', 'attacker01'),
+
+        # Non-DC machines to gate on. Narrow during bring-up, before
+        # attacker01 exists.
+        [ValidateSet('ca', 'ws', 'attacker')]
+        [string[]] $Members = @('ca', 'ws', 'attacker')
     )
 
     Write-Host '[baseline] verifying the lab is fully provisioned before capture'
-    $ready = Start-LabOrdered
+    $ready = Start-LabOrdered -Members $Members
     if ($ready | Where-Object { -not $_.Ready }) {
         throw 'Save-LabBaseline: lab is not fully ready; refusing to capture a poisoned baseline.'
     }
@@ -121,19 +126,40 @@ function Save-LabBaseline {
         Wait-VMSnapshotMerge -VMName $vm
 
         Checkpoint-VM -Name $vm -SnapshotName $stamp -Confirm:$false
+
+        # Checkpoint-VM returns before Hyper-V has finished registering the
+        # snapshot, so an immediate Rename-VMSnapshot fails with "Unable to
+        # find a snapshot matching the given criteria" against a checkpoint
+        # that demonstrably exists moments later. Poll for it.
+        $deadline = (Get-Date).AddSeconds(120)
+        $snap = $null
+        while ((Get-Date) -lt $deadline) {
+            $snap = Get-VMSnapshot -VMName $vm -Name $stamp -ErrorAction SilentlyContinue
+            if ($snap) { break }
+            Start-Sleep -Seconds 2
+        }
+        if (-not $snap) { throw "Save-LabBaseline: checkpoint '$stamp' on $vm never became visible" }
+
         Write-Host "[baseline] captured $stamp on $vm"
     }
 
     # --- 2. rename the existing baseline aside, for all ---
     foreach ($vm in $VMName) {
-        if (Get-VMSnapshot -VMName $vm -Name 'baseline' -ErrorAction SilentlyContinue) {
-            Rename-VMSnapshot -VMName $vm -Name 'baseline' -NewName $prev
+        $old = Get-VMSnapshot -VMName $vm -Name 'baseline' -ErrorAction SilentlyContinue
+        if ($old) {
+            Rename-VMSnapshot -VMSnapshot $old -NewName $prev -ErrorAction Stop
         }
     }
 
     # --- 3. promote the new one, for all ---
+    # Rename by OBJECT, not by name, and fail loudly. The previous version used
+    # name matching with default (non-terminating) error handling, so a failed
+    # rename still printed "promoted" -- reporting success for work that had
+    # not happened.
     foreach ($vm in $VMName) {
-        Rename-VMSnapshot -VMName $vm -Name $stamp -NewName 'baseline'
+        $new = Get-VMSnapshot -VMName $vm -Name $stamp -ErrorAction SilentlyContinue
+        if (-not $new) { throw "Save-LabBaseline: '$stamp' missing on $vm at promotion time" }
+        Rename-VMSnapshot -VMSnapshot $new -NewName 'baseline' -ErrorAction Stop
         Write-Host "[baseline] promoted $vm"
     }
 

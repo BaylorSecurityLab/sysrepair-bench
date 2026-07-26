@@ -30,6 +30,11 @@ function Restore-LabBaseline {
     param(
         [string[]] $VMName = @('corp-dc01', 'corp-ca01', 'corp-ws01', 'attacker01'),
 
+        # Non-DC machines to gate on after restore. Narrow during bring-up,
+        # before attacker01 exists.
+        [ValidateSet('ca', 'ws', 'attacker')]
+        [string[]] $Members = @('ca', 'ws', 'attacker'),
+
         # Escape hatch for deliberate single-machine work. Requires the caller
         # to state that they accept the divergence risk.
         [switch] $AllowPartialRestore
@@ -63,5 +68,5 @@ understand and accept that.
 
     foreach ($vm in $VMName) { Wait-VMSnapshotMerge -VMName $vm }
 
-    return Start-LabOrdered
+    return Start-LabOrdered -Members $Members
 }
