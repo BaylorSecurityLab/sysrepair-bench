@@ -251,6 +251,23 @@ function Test-ScenarioGates {
     $hard = @($results['gate1_poc_fails'], $results['gate1_not_harness_err'],
               $results['gate1_service_healthy'], $results['gate2_solvable'],
               $results['gate3_sabotage'])
+
+    # Gate 4 counts WHENEVER IT WAS ACTUALLY EVALUATED.
+    #
+    # It is excluded when no fixture exists (recorded as
+    # NOT-APPLICABLE-OR-MISSING), because a remediation with no service to
+    # leave unrestarted cannot fail it. But when the fixture DOES exist and the
+    # gate returns $false, the check passed on a config-only fix -- it is
+    # reading configuration rather than exercising the running service, which
+    # is the single most common defect in this suite.
+    #
+    # The previous version scored only gates 1-3, so scenarios 12 and 13 were
+    # reported Validated=True while failing gate 4 outright. Reporting success
+    # that was not earned, in the tool built to detect exactly that.
+    if ($results['gate4_not_restarted'] -is [bool]) {
+        $hard += $results['gate4_not_restarted']
+    }
+
     $failedCount = @($hard | Where-Object { $_ -isnot [bool] -or -not $_ }).Count
     $validated = ($failedCount -eq 0)
 

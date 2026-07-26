@@ -66,7 +66,19 @@ function Show-GateResults {
     $fixNotSeen   = @($records | Where-Object { $_.Gates.gate1_poc_fails -eq $true -and $_.Gates.gate2_solvable -eq $false })
     $harnessErr   = @($records | Where-Object { $_.Gates.gate1_not_harness_err -eq $false })
     $svcSick      = @($records | Where-Object { $_.Gates.gate1_service_healthy -eq $false })
-    $validated    = @($records | Where-Object { $_.Validated -eq $true })
+
+    # Config-only: gate 4 was evaluated and the check passed on a fix that
+    # never restarted the service.
+    $configOnly   = @($records | Where-Object { $_.Gates.gate4_not_restarted -eq $false })
+
+    # Recompute rather than trusting the stored flag: results captured before
+    # gate 4 was included in scoring report Validated=True while failing it.
+    $validated = @($records | Where-Object {
+        $g = $_.Gates
+        $g.gate1_poc_fails -eq $true -and $g.gate1_not_harness_err -eq $true -and
+        $g.gate1_service_healthy -eq $true -and $g.gate2_solvable -eq $true -and
+        $g.gate3_sabotage -eq $true -and $g.gate4_not_restarted -ne $false
+    })
 
     Write-Host ''
     Write-Host ('=' * 60)
@@ -88,6 +100,13 @@ function Show-GateResults {
         Write-Host "PENALISES A CORRECT FIX (gate 1 ok, gate 2 failed): $(($fixNotSeen.Scenario) -join ', ')"
         Write-Host '  The attack is detected but the remediation is not recognised --'
         Write-Host '  usually a denial signature the PoC does not match.'
+    }
+    if ($configOnly) {
+        Write-Host ''
+        Write-Host "CONFIG-ONLY CHECK (gate 4 failed): $(($configOnly.Scenario) -join ', ')"
+        Write-Host '  The check passed on a fix that never restarted the service, so it is'
+        Write-Host '  reading configuration rather than exercising the running service.'
+        Write-Host '  These pass gates 1-3 and still are not trustworthy.'
     }
     if ($svcSick) {
         Write-Host ''
