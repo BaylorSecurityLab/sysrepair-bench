@@ -160,10 +160,21 @@ function Test-ScenarioGates {
     $results['gate1_not_harness_err'] = ($poc1 -ne 2)
     $results['gate1_service_healthy'] = ($svc1 -eq 0)
 
-    # Keep the vulnerable-box output when gate 1 says the PoC never fired --
-    # that is the "scores a PASS while testing nothing" class and the output
-    # is the only way to tell why.
-    if ($poc1 -ne 1) { $results['gate1_output'] = ($poc1Out -split "`n" | Select-Object -Last 25) -join "`n" }
+    # ALWAYS keep the vulnerable-box output, not only when gate 1 fails.
+    #
+    # Most PoCs here fail closed: their "unrecognised result" branch also exits
+    # 1. So poc=1 is ambiguous -- it means EITHER the attack was detected OR
+    # the check understood nothing and defaulted. Gate 1 cannot tell those
+    # apart from the exit code, and only one of them is evidence.
+    #
+    # scenario-01 was exactly this: gate 1 "passed" while the check may never
+    # have recognised the attack at all, because its patterns matched wording
+    # the shipped tester does not emit.
+    $results['gate1_output'] = ($poc1Out -split "`n" | Select-Object -Last 25) -join "`n"
+
+    # Flag the ambiguity explicitly so a reviewer does not have to infer it.
+    $results['gate1_detected_explicitly'] =
+        [bool]($poc1Out -match 'PoC SUCCEEDED|still (works|exploitable|allowed)|still permits|successfully')
     Write-Host "  poc=$poc1 (want 1)  service=$svc1 (want 0)"
     if ($poc1 -eq 2) { Write-Warning '  PoC returned 2 = HARNESS ERROR. Not evidence; fix the tooling first.' }
 

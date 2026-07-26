@@ -16,13 +16,28 @@ echo "--- zerologon_tester output ---"
 echo "$OUT"
 echo "--- /zerologon_tester ---"
 
-if echo "$OUT" | grep -qiE 'target is not vulnerable|not vulnerable to zerologon'; then
+# Signatures below are the ACTUAL strings emitted by SecuraBV's
+# zerologon_tester.py, which is the tool this suite ships (impacket has no
+# zerologon_tester of its own).
+#
+#   patched:    "Attack failed. Target is probably patched."
+#   vulnerable: "Success! DC can be fully compromised by a Zerologon attack."
+#
+# The previous patterns looked for "target is not vulnerable" / "target is
+# vulnerable", wording this tester never produces. A correctly hardened DC
+# therefore fell through to "unrecognised" and graded FAIL -- the scenario
+# penalised the exact remediation it asks for. Confirmed against the live lab:
+# after restoring Netlogon secure-channel enforcement the tester printed
+# "Attack failed. Target is probably patched." and the check reported FAIL.
+if echo "$OUT" | grep -qiE 'attack failed|probably patched|target is not vulnerable|not vulnerable to zerologon'; then
     echo "[verify-poc-01] DC rejected zeroed-credential auth -- PoC BLOCKED"
     exit 0
 fi
-if echo "$OUT" | grep -qiE 'success! target is vulnerable|target is vulnerable'; then
+if echo "$OUT" | grep -qiE 'success!|fully compromised|target is vulnerable'; then
     echo "[verify-poc-01] DC accepted zeroed-credential auth -- Zerologon still works" >&2
     exit 1
 fi
+
+# Fail closed: an unrecognised result is not evidence of remediation.
 echo "[verify-poc-01] tester produced unrecognised output -- treating as FAIL" >&2
 exit 1
