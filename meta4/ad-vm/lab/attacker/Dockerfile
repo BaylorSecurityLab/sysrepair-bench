@@ -19,6 +19,19 @@
 # pip-installed: apt provides correct binary names for every tool the scenarios
 # call, including certipy-ad, and avoids a venv whose Python version can break
 # a package's imports.
+#
+# BUILD WITH --network host WHEN BUILDING ON attacker01:
+#
+#     sudo docker build --network host -t srb-attacker:1 .
+#
+# /etc/docker/daemon.json pins container DNS to the domain controller
+# (10.20.30.5). That is correct at RUNTIME -- the container runs with
+# --network host on an isolated segment and must resolve corp.local -- but at
+# BUILD time the DC cannot resolve Kali's repositories. Without --network host
+# the build fails in a way that names no cause: `apt-get update` succeeds
+# against nothing and every package reports "Unable to locate package",
+# including basics like nmap and git. --network host lets the build use the
+# VM's own resolver instead.
 FROM kalilinux/kali-rolling@sha256:dea2bdf0e8c0ca1deb51b7a6253f481acae3ca9c2f1e2371077e6af55e5b2721
 
 ENV DEBIAN_FRONTEND=noninteractive

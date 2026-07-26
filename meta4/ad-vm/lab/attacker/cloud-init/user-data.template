@@ -55,17 +55,20 @@ write_files:
   # the guest unreachable: cloud-init ran (the hostname applied) but the
   # static address never came up.
 
-  # The tooling container runs with --network host. On Ubuntu, systemd-resolved
-  # listens on a 127.0.0.53 stub and Docker refuses to pass a loopback resolver
-  # into a container -- it substitutes a public one, unreachable on an isolated
-  # segment. Pin the DC explicitly.
-  - path: /etc/docker/daemon.json
-    permissions: '0644'
-    content: |
-      {
-        "dns": ["10.20.30.5"],
-        "dns-search": ["corp.local"]
-      }
+  # NOTE: /etc/docker/daemon.json deliberately does NOT pin DNS.
+  #
+  # Pinning "dns": ["10.20.30.5"] there was tried and broke image builds. A
+  # daemon-level DNS pin applies to BUILD containers too -- and even to
+  # `docker build --network host`, because Docker still injects its own
+  # resolv.conf. The DC cannot resolve http.kali.org, so every build failed
+  # with "Temporary failure resolving 'http.kali.org'" and then a wall of
+  # "Unable to locate package" for basics like nmap and git.
+  #
+  # DNS for the tooling container is supplied per-run instead:
+  #   docker run --network host --dns 10.20.30.5 --dns-search corp.local ...
+  # which is what LabReadiness.psm1's Test-AttackerReady and the scenario
+  # runner both do. That gives the container the DC at runtime on the isolated
+  # segment while leaving builds able to reach the internet.
 
   # defer: true is REQUIRED. write_files runs before the users module, so
   # without it cloud-init fails the whole write_files stage with:
