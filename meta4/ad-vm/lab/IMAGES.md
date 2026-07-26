@@ -13,16 +13,22 @@ Test-ImageChecksums -ManifestPath .\IMAGES.md -ImageDir 'C:\LabSources\ISOs'
 
 | File | Alg | Hash |
 |---|---|---|
-| en-us_windows_server_2019_updated_x64_dvd.iso | SHA256 | RECORD-ON-DOWNLOAD |
-| ubuntu-24.04-live-server-amd64.iso | SHA256 | RECORD-ON-DOWNLOAD |
+| 17763.3650.221105-1748.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso | SHA256 | 6DAE072E7F78F4CCAB74A45341DE0D6E2D45C39BE25F1F5920A2AB4F51D7BCBB |
+| ubuntu-24.04.2-live-server-amd64.iso | SHA256 | D6DAB0C3A657988501B4BD76F1297C053DF710E06E0C3AECE60DEAD24F270B4D |
 
-`RECORD-ON-DOWNLOAD` is not a placeholder to be ignored — `Test-ImageChecksums`
-rejects any manifest with no valid 64-hex rows, so the build cannot proceed
-until real hashes are recorded here. Get them with:
+Windows Server 2019 build 17763.3650 (rs5_release_svc_refresh, 2022-11-05),
+Ubuntu Server 24.04.2 LTS. Regenerate with:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 'C:\LabSources\ISOs\<file>.iso' | Format-List
+Get-ChildItem C:\LabSources\ISOs\*.iso | Get-FileHash -Algorithm SHA256
 ```
+
+**Edition string.** `Install-Lab` exact-matches `-OperatingSystem` against
+`Get-LabAvailableOperatingSystem`. The evaluation media reports
+`Windows Server 2019 Datacenter Evaluation (Desktop Experience)` — note
+"Evaluation", which the retail spelling omits. A different ISO may report a
+different string; the preflight in `SysRepairLab.ps1` prints the available
+list when it does not match.
 
 Windows Server 2019 is a 180-day evaluation image from the Microsoft Evaluation
 Center. **The evaluation licence gives this artifact a hard expiry.** Reviewers

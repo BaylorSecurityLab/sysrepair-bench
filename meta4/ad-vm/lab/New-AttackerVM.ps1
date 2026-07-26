@@ -57,10 +57,18 @@ function New-CloudInitSeedIso {
         [string] $PublicKeyPath = (Join-Path $HOME '.ssh\srb_attacker.pub')
     )
 
-    $oscdimg = Get-Command oscdimg.exe -ErrorAction SilentlyContinue
-    if (-not $oscdimg) {
-        throw 'New-CloudInitSeedIso: oscdimg.exe not found. Install the Windows ADK Deployment Tools.'
+    # The ADK does not add oscdimg to PATH, so Get-Command alone finds it only
+    # if the operator added it by hand. Fall back to the standard ADK layout.
+    $oscdimgPath = (Get-Command oscdimg.exe -ErrorAction SilentlyContinue).Source
+    if (-not $oscdimgPath) {
+        $oscdimgPath = Get-ChildItem 'C:\Program Files (x86)\Windows Kits' -Recurse -Filter 'oscdimg.exe' -ErrorAction SilentlyContinue |
+            Where-Object FullName -like '*amd64*' |
+            Select-Object -First 1 -ExpandProperty FullName
     }
+    if (-not $oscdimgPath) {
+        throw 'New-CloudInitSeedIso: oscdimg.exe not found on PATH or under the Windows Kits directory. Install the Windows ADK "Deployment Tools" feature.'
+    }
+    Write-Verbose "[attacker] using oscdimg at $oscdimgPath"
     if (-not (Test-Path $PublicKeyPath)) {
         throw "New-CloudInitSeedIso: $PublicKeyPath not found. Run New-AttackerSshKey first."
     }
@@ -78,7 +86,7 @@ function New-CloudInitSeedIso {
         Set-Content -LiteralPath (Join-Path $staging 'user-data') -Value $rendered -Encoding utf8 -NoNewline
         Copy-Item -LiteralPath (Join-Path $CloudInitDir 'meta-data') -Destination $staging
 
-        & $oscdimg.Source -lCIDATA -n $staging $OutputIsoPath
+        & $oscdimgPath -lCIDATA -n $staging $OutputIsoPath
         if ($LASTEXITCODE -ne 0) {
             throw "New-CloudInitSeedIso: oscdimg failed with exit code $LASTEXITCODE"
         }

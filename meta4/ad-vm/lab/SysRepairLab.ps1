@@ -32,7 +32,11 @@ $labName    = 'SysRepairBench'
 $domainName = 'corp.local'
 $adminUser  = 'Administrator'
 $adminPass  = 'Password1!'
-$osName     = 'Windows Server 2019 Datacenter (Desktop Experience)'
+# Exact string, verified against Get-LabAvailableOperatingSystem on the real
+# ISO. Note "Evaluation": the eval media's edition names differ from retail,
+# and Install-Lab exact-matches this, so 'Windows Server 2019 Datacenter
+# (Desktop Experience)' -- the retail spelling -- throws.
+$osName     = 'Windows Server 2019 Datacenter Evaluation (Desktop Experience)'
 
 # --- 0. LabSources preflight ----------------------------------------------
 # Missing entirely from the first draft of this plan, and the single most
