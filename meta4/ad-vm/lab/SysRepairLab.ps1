@@ -101,8 +101,8 @@ if (Test-Path $repairModule) {
     . $repairModule
     $vmRoot = 'E:\AutomatedLab-VMs'
     if (Test-Path $vmRoot) {
-        Write-Host '[lab] stripping any persisted drive letters from base images'
-        Clear-LabBaseImageDriveLetters -VMPath $vmRoot
+        Write-Host '[lab] normalising base-image drive letters'
+        Set-LabBaseImageDriveLetters -VMPath $vmRoot
     }
 }
 

@@ -189,6 +189,96 @@ re-run this, then re-run Install-Lab.
     return $results
 }
 
+function Set-LabBaseImageDriveLetters {
+    <#
+    .SYNOPSIS
+    Puts a base image into the exact drive-letter state AutomatedLab requires:
+    a letter on the NTFS "System" volume, and on nothing else.
+
+    .DESCRIPTION
+    AutomatedLabWorker locates the volume to copy its modules into with:
+
+        $drive = $mountedosdisk | Get-Disk | Get-Partition | Get-Volume |
+                 Where { $_.DriveLetter -and $_.FileSystemLabel -eq 'System' }
+
+    then builds a path as "$($drive.DriveLetter):\Program Files\...". Two
+    distinct ways to break that, and this project hit both:
+
+      NO LETTER   -> $drive is null, the path becomes ":\Program Files\..." and
+                     Copy-Item fails with "The given path's format is not
+                     supported."
+
+      TWO LETTERS -> PowerShell's -eq is CASE-INSENSITIVE, and a Windows image
+                     carries BOTH a FAT32 EFI volume labelled "SYSTEM" and the
+                     NTFS OS volume labelled "System". Letter them both and the
+                     filter returns two volumes; "$($drive.DriveLetter)"
+                     stringifies the array to "S F" and Copy-Item fails with
+                     "Cannot find drive. A drive with the name 'S F' does not
+                     exist."
+
+    Windows does not reliably auto-assign a letter to a freshly mounted VHDX
+    volume, so the letter is set explicitly here and inherited by every
+    differencing child.
+    #>
+    [CmdletBinding()]
+    param(
+        [string] $VMPath = 'E:\AutomatedLab-VMs',
+        [string] $Path,
+        [char]   $Letter = 'V'
+    )
+
+    $targets = if ($Path) { @(Get-Item -LiteralPath $Path -ErrorAction Stop) }
+               else { @(Get-ChildItem -LiteralPath $VMPath -Filter 'BASE_*.vhdx' -ErrorAction Stop) }
+
+    foreach ($t in $targets) {
+        $mounted = $null
+        try {
+            $mounted = Mount-VHD -Path $t.FullName -PassThru -ErrorAction Stop
+            Start-Sleep -Seconds 4
+            $parts = $mounted | Get-Disk | Get-Partition
+
+            # 1. strip letters from everything that is not the OS volume
+            foreach ($p in ($parts | Where-Object DriveLetter)) {
+                $vol = $p | Get-Volume -ErrorAction SilentlyContinue
+                $isOsVolume = $vol -and $vol.FileSystemType -eq 'NTFS' -and $vol.FileSystemLabel -ceq 'System'
+                if (-not $isOsVolume) {
+                    try {
+                        Remove-PartitionAccessPath -DiskNumber $mounted.DiskNumber `
+                            -PartitionNumber $p.PartitionNumber -AccessPath "$($p.DriveLetter):\" -ErrorAction Stop
+                        Write-Host "[letters] $($t.Name): removed $($p.DriveLetter): from partition $($p.PartitionNumber) (label '$($vol.FileSystemLabel)')"
+                    } catch {
+                        Write-Warning "[letters] could not remove $($p.DriveLetter): -- $($_.Exception.Message.Split([char]10)[0])"
+                    }
+                }
+            }
+
+            # 2. ensure the OS volume HAS one. -ceq so the FAT32 'SYSTEM' ESP
+            #    is not mistaken for the NTFS 'System' OS volume.
+            $osPart = $parts | Where-Object {
+                $v = $_ | Get-Volume -ErrorAction SilentlyContinue
+                $v -and $v.FileSystemType -eq 'NTFS' -and $v.FileSystemLabel -ceq 'System'
+            } | Select-Object -First 1
+
+            if (-not $osPart) {
+                Write-Warning "[letters] $($t.Name): no NTFS volume labelled 'System' found; AutomatedLab will not be able to locate it"
+                continue
+            }
+
+            if ($osPart.DriveLetter) {
+                Write-Host "[letters] $($t.Name): OS volume already has $($osPart.DriveLetter):"
+            }
+            else {
+                $osPart | Set-Partition -NewDriveLetter $Letter -ErrorAction Stop
+                Start-Sleep -Seconds 2
+                Write-Host "[letters] $($t.Name): assigned ${Letter}: to the OS volume (partition $($osPart.PartitionNumber))"
+            }
+        }
+        finally {
+            if ($mounted) { Dismount-VHD -Path $t.FullName -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
 function Clear-LabBaseImageDriveLetters {
     <#
     .SYNOPSIS
