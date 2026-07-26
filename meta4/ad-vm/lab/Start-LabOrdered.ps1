@@ -54,25 +54,55 @@ function Sync-LabClocks {
     }
 
     # --- verify ---
+    #
+    # An UNREADABLE clock is a different fault from a SKEWED one and must not
+    # be reported as skew. The first version computed NaN when the guest could
+    # not be reached, and `NaN -le tolerance` is false, so it threw "clock skew
+    # outside 1 min -- corp-ws01=NaNmin" when the actual problem was that
+    # PowerShell Direct returned nothing. That misdiagnosis aborted a
+    # diagnostic run.
+    #
+    # Reading a just-booted guest can also fail transiently, so retry before
+    # concluding anything.
     $results = foreach ($vm in (@('corp-dc01') + $windowsMembers)) {
-        $guestUtc = try {
-            Invoke-Command -VMName $vm -Credential $script:LabCred -ScriptBlock {
-                [datetime]::UtcNow
-            } -ErrorAction Stop
-        } catch { $null }
+        $guestUtc = $null
+        for ($attempt = 1; $attempt -le 3 -and -not $guestUtc; $attempt++) {
+            try {
+                $guestUtc = Invoke-Command -VMName $vm -Credential $script:LabCred -ScriptBlock {
+                    [datetime]::UtcNow
+                } -ErrorAction Stop
+            } catch {
+                if ($attempt -lt 3) { Start-Sleep -Seconds 10 }
+            }
+        }
 
-        $skew = if ($guestUtc) { [math]::Abs(($guestUtc - [datetime]::UtcNow).TotalMinutes) } else { [double]::NaN }
-
-        [pscustomobject]@{
-            Machine     = $vm
-            SkewMinutes = $skew
-            InTolerance = ($skew -le $ToleranceMinutes)
+        if ($guestUtc) {
+            $skew = [math]::Abs(($guestUtc - [datetime]::UtcNow).TotalMinutes)
+            [pscustomobject]@{
+                Machine     = $vm
+                SkewMinutes = [math]::Round($skew, 2)
+                Readable    = $true
+                InTolerance = ($skew -le $ToleranceMinutes)
+            }
+        }
+        else {
+            [pscustomobject]@{
+                Machine     = $vm
+                SkewMinutes = $null
+                Readable    = $false
+                InTolerance = $false
+            }
         }
     }
 
-    $bad = $results | Where-Object { -not $_.InTolerance }
-    if ($bad) {
-        throw "Sync-LabClocks: clock skew outside $ToleranceMinutes min after resync -- $(($bad | ForEach-Object { "$($_.Machine)=$([math]::Round($_.SkewMinutes,2))min" }) -join ', '). Kerberos will fail and PoCs will grade as false passes."
+    $unreadable = @($results | Where-Object { -not $_.Readable })
+    $skewed     = @($results | Where-Object { $_.Readable -and -not $_.InTolerance })
+
+    if ($unreadable) {
+        throw "Sync-LabClocks: could not read the clock on $(($unreadable.Machine) -join ', ') after 3 attempts. This is a REACHABILITY failure, not clock skew -- PowerShell Direct returned nothing."
+    }
+    if ($skewed) {
+        throw "Sync-LabClocks: clock skew outside $ToleranceMinutes min after resync -- $(($skewed | ForEach-Object { "$($_.Machine)=$($_.SkewMinutes)min" }) -join ', '). Kerberos will fail and PoCs will grade as false passes."
     }
 
     Write-Host "[clock] all guests within $ToleranceMinutes min of host UTC"
