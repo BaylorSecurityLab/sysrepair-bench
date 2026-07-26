@@ -30,5 +30,6 @@ if echo "$REQ" | grep -qiE 'access_denied|enrollment.*denied|invalid.*request|de
     echo "[verify-poc-10] CA rejected SAN override -- BLOCKED"
     exit 0
 fi
-echo "[verify-poc-10] no admin PFX, no NT hash -- treating as BLOCKED"
-exit 0
+echo "[verify-poc-10] no admin PFX and no recognised denial - INCONCLUSIVE, grading FAIL" >&2
+echo "[verify-poc-10] an inconclusive probe is not evidence that the SAN override was blocked" >&2
+exit 1

@@ -1,0 +1,65 @@
+#cloud-config
+# Template. New-AttackerVM.ps1 substitutes __SSH_PUBKEY__ and writes the real
+# user-data next to this file before packing the NoCloud seed ISO.
+#
+# The key matters: every host-side probe (Test-AttackerReady, Sync-LabClocks,
+# Test-LabEgress) shells out to ssh non-interactively with -o BatchMode=yes.
+# Password-only auth would make each of them hang at a prompt forever.
+
+users:
+  - name: vagrant
+    plain_text_passwd: vagrant
+    lock_passwd: false
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+
+ssh_pwauth: true
+
+write_files:
+  # Static address on the AD segment. Note this is applied AFTER the build
+  # network is detached -- see New-AttackerVM.ps1.
+  - path: /etc/netplan/60-srb.yaml
+    permissions: '0600'
+    content: |
+      network:
+        version: 2
+        ethernets:
+          eth0:
+            dhcp4: false
+            addresses: [10.20.30.10/24]
+            nameservers:
+              search: [corp.local]
+              addresses: [10.20.30.5]
+
+  - path: /home/vagrant/creds.txt
+    owner: vagrant:vagrant
+    permissions: '0600'
+    content: |
+      # Seed credentials for meta4/ad-vm scenarios
+      corp\alice:Password1!
+
+  # The tooling container runs with --network host. On Ubuntu, systemd-resolved
+  # listens on a 127.0.0.53 stub, and Docker refuses to pass a loopback
+  # resolver into a container -- it substitutes a public one, which is
+  # unreachable on an isolated segment. Pinning the DC explicitly here means
+  # `docker run --dns 10.20.30.5` has something consistent to agree with.
+  - path: /etc/docker/daemon.json
+    permissions: '0644'
+    content: |
+      {
+        "dns": ["10.20.30.5"],
+        "dns-search": ["corp.local"]
+      }
+
+packages:
+  - docker.io
+  - curl
+  - chrony
+
+runcmd:
+  - systemctl enable --now docker
+  - usermod -aG docker vagrant
+  - install -d -m 755 /opt/meta4
+  - netplan apply

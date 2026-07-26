@@ -37,8 +37,9 @@ fi
 # If we got here with no pfx and no denial signature, treat as blocked only
 # if certipy exited with an error AND no pfx. Otherwise FAIL.
 if [ ! -f administrator.pfx ]; then
-    echo "[verify-poc-08] no PFX issued - treating as BLOCKED"
-    exit 0
+    echo "[verify-poc-08] no PFX and no recognised denial - INCONCLUSIVE, grading FAIL" >&2
+    echo "[verify-poc-08] an inconclusive probe is not evidence of remediation" >&2
+    exit 1
 fi
 
 echo "[verify-poc-08] unrecognised result - treating as FAIL" >&2

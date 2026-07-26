@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # meta4/ad-vm/run-scenario.sh
+#
+# Scorer entry point, preserved as the dispatch contract documented in
+# lib/harness-schema.md. The implementation now delegates to the PowerShell
+# lab layer -- Hyper-V and AutomatedLab are PowerShell-native, so host-side
+# orchestration lives there. This file exists so the contract does not change.
+#
 # Usage:
-#   ./run-scenario.sh NN                 # restore→inject→handoff
-#   ./run-scenario.sh NN --verify-only   # run verify-poc.sh + verify-service.ps1, exit 0 iff both pass
+#   ./run-scenario.sh NN                 # restore -> inject -> handoff
+#   ./run-scenario.sh NN --verify-only   # grade; exits 0 iff both gates pass
 #
 # NN is a two-digit scenario id (e.g. 01, 13, 20).
+#
+# NOTE: PowerShell must run elevated. Hyper-V cmdlets and PowerShell Direct
+# both require it.
 
 set -euo pipefail
-
-# MSYS/Git-bash on Windows auto-converts unix-style paths (/opt/foo) in command
-# arguments to host-rooted Windows paths (C:/Users/.../scoop/.../opt/foo). That
-# breaks vagrant upload/vagrant ssh -c when the destination path is a guest
-# POSIX path. Disable the conversion for this script.
-export MSYS_NO_PATHCONV=1
-export MSYS2_ARG_CONV_EXCL='*'
 
 cd "$(dirname "$0")"
 
@@ -25,76 +27,31 @@ if [[ ! "$NN" =~ ^[0-9]{2}$ ]]; then
     exit 2
 fi
 
-SCENARIO_DIR="scenario-$NN"
-if [ ! -d "$SCENARIO_DIR" ]; then
-    echo "ERROR: $SCENARIO_DIR not found" >&2
+# MODE is validated rather than defaulted-and-compared. The previous version
+# treated anything that was not exactly "--verify-only" as "run", so a typo
+# such as `--verify` silently triggered a destructive full reset and destroyed
+# an in-flight agent's work.
+case "$MODE" in
+    run|--verify-only) ;;
+    *)
+        echo "ERROR: unknown mode '$MODE'. Expected nothing, 'run', or '--verify-only'." >&2
+        echo "Refusing to guess -- an unrecognised mode used to trigger a full reset." >&2
+        exit 2
+        ;;
+esac
+
+if ! command -v powershell.exe >/dev/null 2>&1 && ! command -v pwsh >/dev/null 2>&1; then
+    echo "ERROR: no PowerShell found. This harness runs on a Hyper-V host." >&2
     exit 2
 fi
 
-HARNESS="$SCENARIO_DIR/harness.json"
-if [ ! -f "$HARNESS" ]; then
-    echo "ERROR: $HARNESS missing" >&2
-    exit 2
-fi
-
-# Parse harness.json (requires jq).
-INJECT_TARGET=$(jq -r '.inject.target'         "$HARNESS")
-VERIFY_SVC_TGT=$(jq -r '.verify_service.target' "$HARNESS")
-
-run_verify() {
-    local poc_rc=0
-    local svc_rc=0
-
-    echo "[run-scenario] verify-poc on attacker"
-    vagrant ssh attacker -c "bash /opt/meta4/$SCENARIO_DIR/verify-poc.sh" || poc_rc=$?
-
-    echo "[run-scenario] verify-service on $VERIFY_SVC_TGT"
-    vagrant winrm "$VERIFY_SVC_TGT" -s powershell \
-        -c "C:\\meta4\\$SCENARIO_DIR\\verify-service.ps1" || svc_rc=$?
-
-    if [ "$poc_rc" -eq 0 ] && [ "$svc_rc" -eq 0 ]; then
-        echo "[run-scenario] PASS (poc=$poc_rc, service=$svc_rc)"
-        return 0
-    else
-        echo "[run-scenario] FAIL (poc=$poc_rc, service=$svc_rc)" >&2
-        return 1
-    fi
-}
+PS=$(command -v powershell.exe || command -v pwsh)
 
 if [ "$MODE" = "--verify-only" ]; then
-    run_verify
+    "$PS" -NoProfile -ExecutionPolicy Bypass -Command \
+        ". ./lab/Invoke-Scenario.ps1; \$r = Invoke-ScenarioVerify -ScenarioId '$NN'; if (-not \$r.Passed) { exit 1 }"
     exit $?
 fi
 
-# --- full lifecycle ---
-
-echo "[run-scenario] reset all VMs to baseline"
-./reset.sh
-
-echo "[run-scenario] copy scenario into VMs"
-# DC + CA get Windows paths; attacker gets POSIX.
-vagrant winrm "$INJECT_TARGET" -s powershell \
-    -c "New-Item -ItemType Directory -Path C:\\meta4\\$SCENARIO_DIR -Force | Out-Null"
-vagrant upload "$SCENARIO_DIR/inject.ps1"         "C:\\meta4\\$SCENARIO_DIR\\inject.ps1"         "$INJECT_TARGET"
-vagrant upload "$SCENARIO_DIR/verify-service.ps1" "C:\\meta4\\$SCENARIO_DIR\\verify-service.ps1" "$VERIFY_SVC_TGT"
-
-# vagrant upload uses scp as the vagrant user, which can't write /opt/meta4
-# directly. Stage in /tmp first, then sudo-move into /opt/meta4 with x bit.
-vagrant ssh attacker -c "sudo install -d -m 755 /opt/meta4/$SCENARIO_DIR"
-vagrant upload "$SCENARIO_DIR/verify-poc.sh" "/tmp/verify-poc-$NN.sh"  attacker
-vagrant upload "$SCENARIO_DIR/threat.md"     "/home/vagrant/threat.md" attacker
-vagrant ssh attacker -c "sudo install -m 755 /tmp/verify-poc-$NN.sh /opt/meta4/$SCENARIO_DIR/verify-poc.sh && rm -f /tmp/verify-poc-$NN.sh"
-
-echo "[run-scenario] injecting on $INJECT_TARGET"
-vagrant winrm "$INJECT_TARGET" -s powershell \
-    -c "C:\\meta4\\$SCENARIO_DIR\\inject.ps1"
-
-echo ""
-echo "========================================================================"
-echo " Scenario $NN ready. Agent workspace:"
-echo "   ssh vagrant@10.20.30.10      (password: vagrant)"
-echo "   threat.md and creds.txt in \$HOME on attacker"
-echo ""
-echo " When the agent finishes, scorer runs:"
-echo "   $0 $NN --verify-only"
-echo "========================================================================"
+"$PS" -NoProfile -ExecutionPolicy Bypass -Command \
+    ". ./lab/Invoke-Scenario.ps1; Invoke-ScenarioInject -ScenarioId '$NN'"

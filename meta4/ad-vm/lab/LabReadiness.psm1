@@ -1,0 +1,183 @@
+<#
+.SYNOPSIS
+Per-machine readiness probes for the SysRepairBench lab.
+
+.DESCRIPTION
+TCP reachability is never treated as readiness. On a cold-booted DC the WinRM
+listener binds minutes before NTDS, DNS, KDC and SYSVOL are serving, so a TCP
+check reports success while the directory is still starting. Injection then
+races AD startup, and because the scenarios' terminal branches fail open, the
+resulting failure grades as a false PASS.
+
+Windows probes run over PowerShell Direct (VMBus) rather than the network, so
+they work before networking settles and need no host route.
+#>
+
+$script:LabCred = New-Object System.Management.Automation.PSCredential(
+    'CORP\Administrator',
+    (ConvertTo-SecureString 'Password1!' -AsPlainText -Force))
+
+$script:MachineMap = @{
+    dc       = 'corp-dc01'
+    ca       = 'corp-ca01'
+    ws       = 'corp-ws01'
+    attacker = 'attacker01'
+}
+
+$script:AttackerIP   = '10.20.30.10'
+$script:AttackerUser = 'vagrant'
+$script:AttackerKey  = Join-Path $HOME '.ssh\srb_attacker'
+
+function Test-DcReady {
+    param([string] $VMName)
+
+    Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
+        foreach ($svc in 'NTDS', 'Netlogon', 'DNS', 'KDC') {
+            $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+            if (-not $s -or $s.Status -ne 'Running') { return "service:$svc" }
+        }
+
+        try { Import-Module ActiveDirectory -ErrorAction Stop } catch { return 'ad-module' }
+        try {
+            if ((Get-ADDomain -ErrorAction Stop).DNSRoot -ne 'corp.local') { return 'domain-mismatch' }
+        } catch { return 'ad-ws' }
+
+        foreach ($share in 'SYSVOL', 'NETLOGON') {
+            if (-not (Get-SmbShare -Name $share -ErrorAction SilentlyContinue)) { return "share:$share" }
+        }
+
+        # RID POOL. Hyper-V exposes VM-Generation ID, which VirtualBox does
+        # not, so every checkpoint restore triggers an invocation-ID reset and
+        # RID-pool invalidation. Get-ADDomain and the SYSVOL share can all pass
+        # before a RID pool exists, and any inject that creates an object would
+        # then fail with "directory service has exhausted the pool of RIDs".
+        #
+        # Probed by actually creating and deleting an object rather than by
+        # `dcdiag /test:RidManager`: under Invoke-Command, a native command's
+        # stderr is wrapped in ErrorRecords, so any incidental stderr noise
+        # would pin this probe at 'rid-pool' permanently.
+        $probeName = "srb-ridprobe-$PID"
+        try {
+            New-ADUser -Name $probeName -SamAccountName $probeName `
+                -AccountPassword (ConvertTo-SecureString 'Rid!Probe123' -AsPlainText -Force) `
+                -Enabled $false -ErrorAction Stop
+            Remove-ADUser -Identity $probeName -Confirm:$false -ErrorAction SilentlyContinue
+        } catch {
+            Remove-ADUser -Identity $probeName -Confirm:$false -ErrorAction SilentlyContinue
+            return 'rid-pool'
+        }
+
+        return $null
+    }
+}
+
+function Test-CaReady {
+    param([string] $VMName)
+
+    Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
+        $s = Get-Service -Name CertSvc -ErrorAction SilentlyContinue
+        if (-not $s -or $s.Status -ne 'Running') { return 'service:CertSvc' }
+
+        certutil -ping | Out-Null
+        if ($LASTEXITCODE -ne 0) { return 'certutil-ping' }
+
+        if (-not (Test-ComputerSecureChannel)) { return 'secure-channel' }
+        return $null
+    }
+}
+
+function Test-WsReady {
+    param([string] $VMName)
+
+    Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
+        if (-not (Test-ComputerSecureChannel)) { return 'secure-channel' }
+        if (-not (Resolve-DnsName -Name 'corp.local' -ErrorAction SilentlyContinue)) { return 'dns' }
+        return $null
+    }
+}
+
+function Test-AttackerReady {
+    # NOTE: this param block is required. Wait-LabMachineReady invokes every
+    # probe as `& $probe -VMName $vmName`; without it the call throws on every
+    # poll and the attacker never reports ready.
+    param([string] $VMName)
+
+    $probe = @'
+docker ps >/dev/null 2>&1 || { echo "docker"; exit 0; }
+docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local \
+    srb-attacker:1 getent hosts corp-dc01.corp.local >/dev/null 2>&1 \
+    || { echo "container-dns"; exit 0; }
+echo ""
+'@
+
+    $out = ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes `
+        -i $script:AttackerKey "$($script:AttackerUser)@$($script:AttackerIP)" $probe 2>&1 | Out-String
+
+    if ($LASTEXITCODE -ne 0) { return 'ssh' }
+
+    $t = $out.Trim()
+    if ($t) { return $t }
+    return $null
+}
+
+function Wait-LabMachineReady {
+    <#
+    .SYNOPSIS
+    Blocks until a machine is genuinely serving, or the timeout expires.
+
+    .OUTPUTS
+    [pscustomobject] Machine, Ready, ElapsedSeconds, FailedProbe
+
+    .NOTES
+    ElapsedSeconds is a DOUBLE, not an int. Truncating a 0.4s probe to 0 makes
+    the "did the probe actually block?" assertion flaky and meaningless.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('dc', 'ca', 'ws', 'attacker')] [string] $Machine,
+        [int] $TimeoutSeconds = 600,
+        [int] $PollSeconds = 10
+    )
+
+    $vmName = $script:MachineMap[$Machine]
+    $probe  = switch ($Machine) {
+        'dc'       { ${function:Test-DcReady} }
+        'ca'       { ${function:Test-CaReady} }
+        'ws'       { ${function:Test-WsReady} }
+        'attacker' { ${function:Test-AttackerReady} }
+    }
+
+    $sw       = [System.Diagnostics.Stopwatch]::StartNew()
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $last     = 'not-started'
+
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $last = & $probe -VMName $vmName
+            if ($null -eq $last) {
+                $sw.Stop()
+                Write-Host ("[ready] {0} after {1:N1}s" -f $Machine, $sw.Elapsed.TotalSeconds)
+                return [pscustomobject]@{
+                    Machine        = $Machine
+                    Ready          = $true
+                    ElapsedSeconds = $sw.Elapsed.TotalSeconds
+                    FailedProbe    = $null
+                }
+            }
+        } catch {
+            $last = "unreachable: $($_.Exception.Message -replace '\s+', ' ')"
+        }
+        Start-Sleep -Seconds $PollSeconds
+    }
+
+    $sw.Stop()
+    Write-Warning ("[ready] {0} NOT ready after {1:N1}s (last: {2})" -f $Machine, $sw.Elapsed.TotalSeconds, $last)
+    return [pscustomobject]@{
+        Machine        = $Machine
+        Ready          = $false
+        ElapsedSeconds = $sw.Elapsed.TotalSeconds
+        FailedProbe    = $last
+    }
+}
+
+Export-ModuleMember -Function Wait-LabMachineReady, Test-DcReady, Test-CaReady, Test-WsReady, Test-AttackerReady
