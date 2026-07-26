@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with an idle keepalive.
+#
+# The harness runs the image CMD so services actually boot. The CMD is
+# PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * the ManageEngine Apache + Notification Server components are started via
+#     Start-Service, and dc-run.bat is launched in the BACKGROUND via
+#     Start-Process -NoNewWindow, so none of them is PID 1;
+#   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# Consequence for solutions: ManageEngine Desktop Central is ALREADY RUNNING
+# with the vulnerable config, so a fix must restart the affected component
+# (safe now - it is not PID 1) for the live checks to pass. Restarting a
+# service can never kill the container.

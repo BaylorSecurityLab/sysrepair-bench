@@ -3,7 +3,7 @@
 # Exit 2 = server rejected SMB1 dialect (REMEDIATED)
 # Exit 1 = probe error (TCP failure, timeout, short read)
 param(
-    [string]$Host = '127.0.0.1',
+    [string]$TargetHost = '127.0.0.1',
     [int]$Port = 445,
     [int]$TimeoutMs = 3000
 )
@@ -46,7 +46,7 @@ try {
     $client = New-Object System.Net.Sockets.TcpClient
     $client.ReceiveTimeout = $TimeoutMs
     $client.SendTimeout    = $TimeoutMs
-    $client.Connect($Host, $Port)
+    $client.Connect($TargetHost, $Port)
     $stream = $client.GetStream()
     $stream.Write($buf, 0, $buf.Length)
     $stream.Flush()

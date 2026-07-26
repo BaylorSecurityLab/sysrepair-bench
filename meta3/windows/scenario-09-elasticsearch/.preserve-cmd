@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The harness runs the image CMD so services actually boot. The CMD points at
+# entrypoint.ps1, which is PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * Elasticsearch (elasticsearch.bat) is launched in the BACKGROUND via
+#     Start-Process, so the JVM is a detached child, NOT PID 1;
+#   * PID 1 is an idle `while ($true) { Start-Sleep -Seconds 60 }` loop.
+#
+# ES has no runtime reload for node-level scripting settings, so the honest fix
+# REQUIRES restarting ES. That is safe now - the ES JVM is not PID 1, so stopping
+# and relaunching it never kills the container. Heap is capped (ES_HEAP_SIZE=512m)
+# to avoid OOMing the VM.

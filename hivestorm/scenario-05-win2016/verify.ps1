@@ -60,6 +60,6 @@ Emit admin_user_preserved 0 $adminExists "" service
 
 # EventLog must NOT be left disabled.
 $elStart = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog" -Name Start -ErrorAction SilentlyContinue).Start
-Emit eventlog_not_disabled 0 ($elStart -ne 4) "EventLog Start=$elStart" service
+Emit eventlog_not_disabled 2 ($elStart -ne 4) "EventLog Start=$elStart" logging
 
 exit 0

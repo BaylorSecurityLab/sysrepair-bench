@@ -37,6 +37,11 @@
                           "sha256":  "efbb4360de55947189f67895be0960ddfd75104732802948f082f8a5e93228ca"
                       },
                       {
+                          "name":  "jenkins-2.60.3.war",
+                          "url":  "https://get.jenkins.io/war-stable/2.60.3/jenkins.war",
+                          "sha256":  "2d71b8f87c8417f9303a73d52901a59678ee6c0eefcf7325efed6035ff39372a"
+                      },
+                      {
                           "name":  "struts-2.3.20.1-apps.zip",
                           "url":  "https://archive.apache.org/dist/struts/2.3.20.1/struts-2.3.20.1-apps.zip",
                           "sha256":  "c484b9cf3b55d48de74e5c7898bb0f77731149334a6179a37b1aef99a776f5f7"
@@ -50,6 +55,11 @@
                           "name":  "glassfish-4.0.zip",
                           "url":  "https://download.oracle.com/glassfish/4.0/release/glassfish-4.0.zip",
                           "sha256":  "fb85badd2cffa4fce4a325f153466af87e47bb75cd6a8126b67d4c1fbdaf0131"
+                      },
+                      {
+                          "name":  "glassfish-4.1.1.zip",
+                          "url":  "https://download.oracle.com/glassfish/4.1.1/release/glassfish-4.1.1.zip",
+                          "sha256":  "1b20d42b7d97d0282b90b3f6ec958138f1e81a500468f391ff5aa06afb599b9c"
                       },
                       {
                           "name":  "elasticsearch-1.6.0.zip",
