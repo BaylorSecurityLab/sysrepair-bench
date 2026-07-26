@@ -12,39 +12,16 @@ from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import Solver
 from inspect_ai.util import SandboxEnvironmentSpec
-from inspect_ai.util._sandbox.compose import (
-    ComposeBuild,
-    ComposeConfig,
-    ComposeService,
-)
+from inspect_ai.util._sandbox.compose import ComposeBuild
 
 from .category_table import classify_threat
+# Defined in _compose so the inspect_ai entry point (_sandbox_ext) can import
+# them without pulling in this module's scenario-discovery graph.
+from ._compose import SysRepairComposeConfig as _SysRepairComposeConfig
+from ._compose import SysRepairService as _SysRepairService
 from .rate_limiter import init_rate_limiter
 from .scorer import dispatch_scorer
 from .solvers import get_solver
-
-
-class _SysRepairService(ComposeService):
-    """ComposeService extended with cap_add, privileged, isolation, and
-    security_opt so scenarios that need firewall state (iptables/nftables),
-    full kernel access (k3s), Hyper-V isolation (Windows), or specific Docker
-    security profiles (seccomp/AppArmor) work.
-
-    extra_hosts is used by the FreeBSD bridge container to resolve
-    host.docker.internal → the Docker host, where Vagrant forwards port 2222."""
-
-    cap_add: list[str] | None = None
-    privileged: bool | None = None
-    isolation: str | None = None
-    security_opt: list[str] | None = None
-    extra_hosts: list[str] | None = None
-
-
-class _SysRepairComposeConfig(ComposeConfig):
-    """ComposeConfig with a typed ``services`` dict of _SysRepairService so the
-    cap_add field survives Pydantic's polymorphic dump (declared-type wins)."""
-
-    services: dict[str, _SysRepairService]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARKS = ("meta2", "vulnhub", "ccdc")

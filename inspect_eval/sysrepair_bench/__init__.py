@@ -4,6 +4,7 @@
 # exec layer on top. Both are import-side-effect modules.
 from . import _inspect_compat  # noqa: F401  shield log_sample / compose_down / faster kill
 from . import _docker_compat   # noqa: F401  Windows DockerSandboxEnvironment.exec
+from . import _sandbox_ext     # noqa: F401  config_deserialize for log round-trip
 from .task import sysrepair_bench
 
 __all__ = ["sysrepair_bench"]

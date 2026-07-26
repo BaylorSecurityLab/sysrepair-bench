@@ -15,6 +15,14 @@ dependencies = [
     "anthropic>=0.97.0",
 ]
 
+# NOTE: an [project.entry-points.inspect_ai] hook does NOT work for this.
+# registry_find (_util/registry.py:236-238) only calls ensure_entry_points()
+# when a lookup returns empty; the built-in docker sandbox is always already
+# registered, so extensions never load and our config_deserialize patch never
+# applies. Use `python -m sysrepair_bench.view` instead of bare `inspect`.
+[project.scripts]
+sysrepair-view = "sysrepair_bench.view:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

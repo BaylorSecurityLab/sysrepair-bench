@@ -14,7 +14,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from inspect_ai.agent import Agent, AgentState, agent, as_solver, react
+from inspect_ai.agent import (
+    Agent,
+    AgentAttempts,
+    AgentState,
+    agent,
+    as_solver,
+    react,
+)
 from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageSystem,
@@ -22,6 +29,7 @@ from inspect_ai.model import (
     GenerateConfig,
     get_model,
 )
+from inspect_ai.scorer import score as score_state, value_to_float
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.tool import ToolDef, bash, text_editor, think, tool
 from inspect_ai.util import sandbox, store
@@ -368,6 +376,17 @@ def _windows_text_editor(timeout: int = 180):
     return text_editor()
 
 
+async def _quiet_exec(sb, argv: list[str], timeout: int = 30) -> None:
+    """Best-effort cleanup exec. Never raises, so a failing cleanup cannot mask
+    the result we are in the middle of returning. (Duplicated in scorer.py
+    rather than shared — scorer.py already imports from this module and the
+    reverse import would be circular.)"""
+    try:
+        await sb.exec(argv, timeout=timeout)
+    except Exception:
+        pass
+
+
 def _bridge_ssh_prefix_from_store() -> str:
     """Build an SSH command prefix using bridge metadata stored by _prime_os."""
     host = store().get("bridge_target_host", "host.docker.internal")
@@ -413,6 +432,16 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                         timeout=verify_timeout)
                 except TimeoutError:
                     return "Score check timed out."
+                finally:
+                    # The agent may call this tool at will and has root SSH to
+                    # the VM. Without cleanup one call would leave roles.json —
+                    # the answer key — readable for the rest of the session,
+                    # defeating the same cleanup in scorer.py::_run_verify.
+                    await _quiet_exec(sb, ["sh", "-c",
+                        "rm -f /tmp/verify_progress.sh /tmp/eval_config.json"])
+                    await _quiet_exec(sb, ["sh", "-c",
+                        f"{ssh} 'sudo rm -f /tmp/verify_progress.sh "
+                        f"/root/.sysrepair/config'"])
             elif os_name == "windows" and store().get("bridge_target_host"):
                 # Bridge → Windows VM via SSH + powershell.exe.
                 ssh = _bridge_ssh_prefix_from_store()
@@ -439,6 +468,17 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                         timeout=verify_timeout)
                 except TimeoutError:
                     return "Score check timed out."
+                finally:
+                    # Same reasoning as the FreeBSD branch: the agent is a local
+                    # Administrator on the VM, so roles.json must not outlive
+                    # this call.
+                    await _quiet_exec(sb, ["sh", "-c",
+                        "rm -f /tmp/verify_progress.ps1 /tmp/eval_config.json"])
+                    await _quiet_exec(sb, ["sh", "-c",
+                        f"{ssh} 'powershell.exe -NoProfile -Command "
+                        f"\"Remove-Item -Force -ErrorAction SilentlyContinue "
+                        f"C:\\ProgramData\\sysrepair\\verify.ps1,"
+                        f"C:\\ProgramData\\sysrepair\\roles.json\"'"])
             elif os_name == "windows":
                 src_file = sp / "verify.ps1"
                 if not src_file.exists():
@@ -454,6 +494,12 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                     result = await sb.exec(argv, timeout=verify_timeout)
                 except TimeoutError:
                     return "Score check timed out."
+                finally:
+                    await _quiet_exec(sb, [
+                        "powershell.exe", "-NoProfile", "-Command",
+                        "Remove-Item -Force -ErrorAction SilentlyContinue "
+                        "'C:/verify_progress.ps1'",
+                    ], timeout=10)
             else:
                 try:
                     await sb.write_file("/tmp/verify_progress.sh",
@@ -461,6 +507,21 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                     await sb.exec(["chmod", "+x", "/tmp/verify_progress.sh"])
                 except RuntimeError as e:
                     return f"Score check unavailable: {e}"
+                # seed.sh deletes /etc/sysrepair/roles.json from the image, and
+                # verify.sh refuses to score without it ("tamper detected;
+                # scoring 0"). Re-inject the pristine copy for the duration of
+                # this check exactly as scorer.py::_run_verify does, then erase
+                # it again. Without this the tool returns "No checks passing
+                # yet." on every call, on every Linux hivestorm scenario.
+                roles_build = sp / "build" / "roles.json"
+                injected_roles = False
+                if roles_build.exists():
+                    await sb.exec(["mkdir", "-p", "/etc/sysrepair"])
+                    await sb.write_file(
+                        "/etc/sysrepair/roles.json",
+                        roles_build.read_text(encoding="utf-8"),
+                    )
+                    injected_roles = True
                 argv = ["bash", "/tmp/verify_progress.sh"]
                 try:
                     result = await sb.exec(argv, timeout=verify_timeout)
@@ -468,6 +529,11 @@ def _score_progress_tool(scenario_path: str, verify_timeout: int = 300):
                     return "Score check timed out."
                 except RuntimeError as e:
                     return f"Score check unavailable: {e}"
+                finally:
+                    await _quiet_exec(sb, ["rm", "-f", "/tmp/verify_progress.sh"])
+                    if injected_roles:
+                        await _quiet_exec(
+                            sb, ["rm", "-f", "/etc/sysrepair/roles.json"])
             passed = []
             total_earned = 0
             for line in (result.stdout or "").splitlines():
@@ -607,6 +673,90 @@ def _shell_exec_argv(os_name: str, command: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Attempt metering
+# ---------------------------------------------------------------------------
+# One attempt = one full solver episode followed by ONE grading call. That is
+# what `submit` costs in react, and every other solver is held to the same
+# meter so pass@k means the same thing across the registry.
+#
+# INVARIANT (passk.py depends on it): only attempt-boundary grading goes
+# through inspect_ai.scorer.score(). Every in-episode oracle call — hivestorm's
+# score_progress tool, LATS's in-search verify — uses raw sandbox().exec() and
+# therefore emits no ScoreEvent. Routing either through score() would inflate
+# the intermediate-event count and corrupt every extracted pass@j.
+
+# Deliberately carries ONE bit: the submission was not accepted. It names no
+# failure mode, no check, no score. Anything more would leak the grader and turn
+# pass@k into a measure of iterating against verify.sh rather than of
+# independent repair attempts. The binary signal itself is unavoidable —
+# without it a retry is not a retry — and matches inspect's stock react default
+# (agent/_types.py:77-79).
+ATTEMPT_INCORRECT_MESSAGE = (
+    "Your submission was incorrect. Please continue working and call submit() "
+    "again when you believe the task is complete."
+)
+
+
+def _with_attempts(inner: Solver, attempts: int) -> Solver:
+    """Meter `inner`'s grading calls at `attempts`.
+
+    Mirrors inspect's react control flow exactly (_react.py:261-269): the loop
+    breaks *before* grading the final attempt, so a k-attempt run emits exactly
+    k-1 intermediate ScoreEvents and the k-th outcome comes from the
+    end-of-sample scorer. passk.py reconstructs the curve from that shape.
+    """
+    if attempts <= 1:
+        return inner
+
+    @solver
+    def _metered_attempts() -> Solver:
+        async def solve(state: TaskState, generate: Generate) -> TaskState:
+            to_float = value_to_float()
+            for i in range(attempts):
+                state = await inner(state, generate)
+                if i >= attempts - 1:
+                    break  # end-of-sample scorer grades the final attempt
+                scores = await score_state(state)
+                if scores and to_float(scores[0].value) == 1.0:
+                    state.output.completion = "REMEDIATION_COMPLETE"
+                    break
+                state.messages.append(
+                    ChatMessageUser(content=ATTEMPT_INCORRECT_MESSAGE)
+                )
+                # plan_and_solve and lats rebuild their prompts from
+                # state.input_text each episode and never read state.messages,
+                # so the message above alone would leave them resampling
+                # blindly. Record the SAME binary signal where they can reach it.
+                #
+                # Deliberately does NOT include scores[0].explanation. That field
+                # is the raw verifier output (scorer.py:195 —
+                # result.stdout + result.stderr; the full JSONL check list for
+                # hivestorm). Feeding it back would hand the model the grader and
+                # turn pass@k into "iterate against verify.sh" instead of a
+                # measure of independent repair attempts.
+                state.metadata.setdefault("attempt_feedback", []).append(
+                    f"Attempt {i + 1} was graded and did NOT pass."
+                )
+                state.completed = False  # re-arm; solvers set this on submit
+            return state
+        return solve
+
+    return _metered_attempts()
+
+
+def _attempt_context(state: TaskState) -> str:
+    """Prior-attempt feedback, for solvers that rebuild prompts from scratch."""
+    feedback = (state.metadata or {}).get("attempt_feedback") or []
+    if not feedback:
+        return ""
+    return (
+        "\n\n## Previous attempts (this container, already graded)\n"
+        + "\n\n".join(feedback)
+        + "\n\nDo not repeat what already failed. Change your approach."
+    )
+
+
+# ---------------------------------------------------------------------------
 # 1. ReAct (built-in)
 # ---------------------------------------------------------------------------
 
@@ -634,9 +784,22 @@ def _react_solver(
                 await rl.acquire()
                 return await generate(state, **kwargs)
 
+            # react's native attempts loop already implements the metering
+            # contract (_react.py:261-269): it breaks before grading the final
+            # attempt, so it emits k-1 intermediate ScoreEvents via score().
+            # Left native rather than routed through _with_attempts — same
+            # observable contract, no re-entry risk.
             inner = as_solver(react(
                 tools=tools,
-                attempts=max_attempts,
+                # Same score-free message every solver uses, so the between-
+                # attempt signal is identical across the registry. Inspect's
+                # default is also static, but differently worded — pinning it
+                # keeps cross-solver pass@k comparable. A callable here would
+                # receive the scores; deliberately not used.
+                attempts=AgentAttempts(
+                    attempts=max_attempts,
+                    incorrect_message=ATTEMPT_INCORRECT_MESSAGE,
+                ),
                 on_continue=(
                     "Please proceed with the next remediation step. "
                     "If you believe the vulnerability is fully fixed and the service "
@@ -686,11 +849,11 @@ def reflexion_solver(
 ) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         _prime_os(state)
-        scenario_path = state.metadata["scenario_path"]
         os_name = state.metadata.get("os", "linux")
         original_input = state.input_text
         correction = ""
         model = get_model()
+        to_float = value_to_float()
 
         for cycle in range(max_cycles):
             sys_prompt = original_input
@@ -710,12 +873,16 @@ def reflexion_solver(
             inner_state = await inner(inner_state)
             state.messages.extend(inner_state.messages[1:])  # skip dup system
 
-            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout, os_name=os_name):
+            # Break BEFORE grading the final cycle, matching react
+            # (_react.py:261-269), so the intermediate-event count is
+            # max_cycles-1 and passk.py sees the same shape for every solver.
+            if cycle >= max_cycles - 1:
+                break
+
+            scores = await score_state(state)
+            if scores and to_float(scores[0].value) == 1.0:
                 state.output.completion = "REMEDIATION_COMPLETE"
                 return state
-
-            if cycle == max_cycles - 1:
-                break
 
             trace = "\n".join(
                 f"- {m.role}: {str(m.content)[:300]}"
@@ -756,9 +923,9 @@ def plan_and_solve_solver(
 ) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         _prime_os(state)
-        scenario_path = state.metadata["scenario_path"]
         os_name = state.metadata.get("os", "linux")
         model = get_model()
+        sys_text = state.input_text + _attempt_context(state)
 
         plan_prompt = (
             "Produce a remediation plan as JSON only, no prose:\n"
@@ -820,7 +987,7 @@ def plan_and_solve_solver(
                 await get_rate_limiter().acquire()
                 fix_resp = await model.generate(
                     input=[
-                        ChatMessageSystem(content=state.input_text),
+                        ChatMessageSystem(content=sys_text),
                         ChatMessageUser(content=fix_prompt),
                     ]
                 )
@@ -828,10 +995,10 @@ def plan_and_solve_solver(
                 if cmd.startswith("bash\n"):
                     cmd = cmd[5:]
 
-            if await _verify_in_sandbox(scenario_path, timeout=verify_timeout, os_name=os_name):
-                state.output.completion = "REMEDIATION_COMPLETE"
-                return state
-
+        # No per-step grading: one attempt = plan -> execute the whole plan ->
+        # one grade at the episode boundary (applied by _with_attempts). The
+        # old per-step _verify_in_sandbox gave this solver uncapped oracle
+        # access that react never had.
         return state
 
     return solve
@@ -884,6 +1051,7 @@ def lats_solver(
         os_name = state.metadata.get("os", "linux")
         shell_word = "PowerShell" if os_name == "windows" else "bash"
         model = get_model()
+        sys_text = state.input_text + _attempt_context(state)
         root = _Node(command="", parent=None, depth=0)
         rollout_count = 0
         executed = 0
@@ -974,7 +1142,7 @@ def lats_solver(
                 await get_rate_limiter().acquire()
                 resp = await model.generate(
                     input=[
-                        ChatMessageSystem(content=state.input_text),
+                        ChatMessageSystem(content=sys_text),
                         ChatMessageUser(content=score_prompt),
                     ]
                 )
@@ -1031,26 +1199,45 @@ def get_solver(
 ) -> Solver:
     name = name.lower()
     if name == "react":
+        # Drives its own attempt loop natively (_react.py:261-269).
         return _react_solver(message_limit, max_attempts, bash_timeout, verify_timeout)
     if name == "basic":
-        return basic_solver(message_limit=message_limit, bash_timeout=bash_timeout)
+        return _with_attempts(
+            basic_solver(message_limit=message_limit, bash_timeout=bash_timeout),
+            max_attempts,
+        )
     if name == "reflexion":
+        # Its reflect-and-retry cycle IS the attempt loop, so meter it there
+        # rather than wrapping. Previously pinned at 3 cycles regardless of k.
         return reflexion_solver(
             message_limit=message_limit,
+            max_cycles=max_attempts,
             bash_timeout=bash_timeout,
             verify_timeout=verify_timeout,
         )
     if name in ("plan_and_solve", "plan-and-solve", "pas"):
-        return plan_and_solve_solver(
-            message_limit=message_limit,
-            bash_timeout=bash_timeout,
-            verify_timeout=verify_timeout,
+        return _with_attempts(
+            plan_and_solve_solver(
+                message_limit=message_limit,
+                bash_timeout=bash_timeout,
+                verify_timeout=verify_timeout,
+            ),
+            max_attempts,
         )
     if name == "lats":
-        return lats_solver(
-            message_limit=message_limit,
-            bash_timeout=bash_timeout,
-            verify_timeout=verify_timeout,
+        # One attempt = one full search. Its in-search _verify_in_sandbox stays
+        # uncapped by design: that is the algorithm's terminal reward feeding
+        # backprop/UCB, not a submission. It uses raw sandbox exec, so it emits
+        # no ScoreEvent and cannot corrupt the extracted pass@j curve. LATS
+        # therefore gets more oracle access per attempt than any other solver —
+        # documented, not silently ranked against react on pass@1.
+        return _with_attempts(
+            lats_solver(
+                message_limit=message_limit,
+                bash_timeout=bash_timeout,
+                verify_timeout=verify_timeout,
+            ),
+            max_attempts,
         )
     raise ValueError(
         f"Unknown solver '{name}'. "

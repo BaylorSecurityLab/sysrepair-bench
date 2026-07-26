@@ -81,6 +81,15 @@ _BENCHMARK_BASE: list[tuple[str, str]] = [
 ]
 
 
+def _wants_hivestorm(cfg: dict) -> bool:
+    """True if this preset selects any hivestorm scenario."""
+    benchmarks = cfg.get("benchmarks") or []
+    scenarios = cfg.get("scenarios") or []
+    return any(
+        b == "hivestorm" or b.startswith("hivestorm/") for b in benchmarks
+    ) or any(s.startswith("hivestorm/") for s in scenarios)
+
+
 def _ensure_hivestorm_roles(cfg: dict) -> None:
     """Generate hivestorm build/roles.json for any selected hivestorm scenario.
 
@@ -96,12 +105,7 @@ def _ensure_hivestorm_roles(cfg: dict) -> None:
     installation.md documents running prepare.sh by hand before each session;
     doing it here means a fresh clone just works.
     """
-    benchmarks = cfg.get("benchmarks") or []
-    scenarios = cfg.get("scenarios") or []
-    wants_hivestorm = any(
-        b == "hivestorm" or b.startswith("hivestorm/") for b in benchmarks
-    ) or any(s.startswith("hivestorm/") for s in scenarios)
-    if not wants_hivestorm:
+    if not _wants_hivestorm(cfg):
         return
 
     hivestorm_dir = REPO_ROOT / "hivestorm"
@@ -485,6 +489,38 @@ def _run_preset(runs_path: Path, preset_name: str, *,
         cfg["time_limit"] = time_limit
     if working_limit is not None:
         cfg["working_limit"] = working_limit
+
+    # Resolve seeds -> list of max_attempts values.
+    #   seeds: 5      -> [5]
+    #   seeds: [1, 5] -> [1, 5]  (two separate runs per model/solver/mode)
+    #   absent        -> [max_attempts value, default 1]
+    # Done before any setup work so a bad config aborts instantly, rather than
+    # after prepare.sh, a base-image build and a preflight API call.
+    raw_seeds = cfg.get("seeds", cfg.get("max_attempts", 1))
+    seeds_list: list[int] = raw_seeds if isinstance(raw_seeds, list) else [raw_seeds]
+
+    # Hivestorm is scored on a continuous 0..1 scale (hivestorm_weighted).
+    # react's attempt loop only stops on an exact 1.0 (_react.py:268), which a
+    # partial score never reaches, so every sample would burn all k attempts for
+    # no added signal — and hivestorm has no pass@k axis anyway. Keep it at 1.
+    if _wants_hivestorm(cfg) and max(seeds_list) > 1:
+        raise SystemExit(
+            f"[config] Preset '{preset_name}' selects hivestorm scenarios with "
+            f"seeds={raw_seeds}. Hivestorm must run at seeds: 1 — it is scored "
+            f"on a continuous 0..1 scale, so the attempt loop never registers a "
+            f"pass and would silently burn every attempt. The agent already gets "
+            f"in-run feedback from the score_progress tool."
+        )
+
+    if len(seeds_list) > 1:
+        print(
+            f"[config] seeds={raw_seeds} launches {len(seeds_list)} full runs. "
+            f"This is no longer needed for a pass@k curve — run once at "
+            f"seeds={max(seeds_list)} and extract every k with:\n"
+            f"           uv run python -m sysrepair_bench.passk "
+            f"{cfg.get('log_dir', './logs')}"
+        )
+
     _ensure_vagrant_docker_host(cfg)
     _ensure_hivestorm_roles(cfg)
     _ensure_base_images(cfg)
@@ -501,9 +537,6 @@ def _run_preset(runs_path: Path, preset_name: str, *,
     # seeds: 5        → [5]
     # seeds: [1, 5]   → [1, 5]  (two separate runs per model/solver/mode)
     # absent          → [max_attempts value, default 1]
-    raw_seeds = cfg.get("seeds", cfg.get("max_attempts", 1))
-    seeds_list: list[int] = raw_seeds if isinstance(raw_seeds, list) else [raw_seeds]
-
     # Fields passed to sysrepair_bench() task function (max_attempts set per seed below)
     TASK_KEYS = (
         "benchmarks", "scenarios", "exclude",

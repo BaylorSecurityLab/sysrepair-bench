@@ -5,10 +5,16 @@ Usage:
     uv run python -m sysrepair_bench.summarize ./logs --by benchmark
     uv run python -m sysrepair_bench.summarize ./logs --heatmap out.png
 
-When the log directory contains runs with different ``max_attempts`` values
-(produced by ``seeds: [1, 5]`` in runs.yaml), the table automatically shows
-one success@K column per unique K value found, e.g. success@1 and success@5.
-Otherwise it shows raw accuracy.
+This reports final-score accuracy per model x solver.
+
+For the pass@1..pass@k curve use ``sysrepair_bench.passk`` instead. A single
+k-attempt run records every attempt's outcome, so the whole curve comes out of
+one log and ``seeds: [1, 5]`` is no longer needed::
+
+    uv run python -m sysrepair_bench.passk ./logs
+
+The success@K columns below only separate runs that used different
+``max_attempts`` values; they do not reconstruct the curve.
 """
 
 from __future__ import annotations
