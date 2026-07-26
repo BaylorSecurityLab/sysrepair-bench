@@ -49,6 +49,16 @@ function Invoke-GateDiagnostics {
             ForEach-Object { $_.Scenario -replace 'scenario-', '' })
     }
 
+    # NORMALISE to two digits.
+    #
+    # `-ScenarioId 01,07` at a PowerShell prompt parses those as INTEGERS, so
+    # 01 arrives as "1" and the harness looks for scenario-1, which does not
+    # exist. Test-ScenarioGates' ValidatePattern rejects it correctly, but the
+    # per-scenario try/catch below then records that usage error as a scenario
+    # RESULT -- so a mis-invocation reads as "the scenario failed". Pad here,
+    # and classify usage errors distinctly below.
+    $ScenarioId = @($ScenarioId | ForEach-Object { '{0:D2}' -f [int]$_ })
+
     if (-not $ScenarioId) {
         Write-Host '[diag] nothing failed -- nothing to diagnose'
         return
@@ -76,12 +86,22 @@ function Invoke-GateDiagnostics {
             })
         }
         catch {
+            $msg = $_.Exception.Message.Split([char]10)[0]
+
+            # A usage error is NOT a scenario result. Recording it as one makes
+            # a bad invocation look like a failing scenario, which is how the
+            # first diagnostic pass silently produced two meaningless records.
+            if ($msg -match 'Cannot validate argument|does not match the|Parameter set cannot be resolved|not found') {
+                Write-Error "Invoke-GateDiagnostics: usage error for '$id' -- $msg"
+                throw "aborting: '$id' is not a runnable scenario id"
+            }
+
             $diag.Add([pscustomobject]@{
                 Scenario    = "scenario-$id"
                 Validated   = $false
                 Gate1Output = $null
                 Gate2Output = $null
-                Gates       = @{ error = $_.Exception.Message.Split([char]10)[0] }
+                Gates       = @{ error = $msg }
             })
         }
 
