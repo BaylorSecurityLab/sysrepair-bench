@@ -234,7 +234,11 @@ uv run python -m sysrepair_bench.run hivestorm_windows   # or your preset of cho
 
 ## Host C — VirtualBox + Vagrant (Hyper-V OFF)
 
-Runs every VM-backed scenario: `meta4/kernel-vm/`, `meta4/ad-vm/`, hivestorm
+> **`meta4/ad-vm/` no longer belongs here.** The Active Directory lab was ported
+> to Hyper-V + AutomatedLab — see [Host D](#host-d--active-directory-lab-on-hyper-v-hyper-v-on).
+> Host C still covers `meta4/kernel-vm/` and hivestorm 13/14 until those move too.
+
+Runs the remaining VM-backed scenarios: `meta4/kernel-vm/` and hivestorm
 scenarios 13 and 14. Can be a Windows or Linux machine; we describe both.
 
 ### C1. Disable Hyper-V (Windows hosts only)
@@ -349,6 +353,250 @@ If you want to drive the VMs from this same host, install `uv` + run
 `uv sync` in `inspect_eval/` exactly as in [Host A step A2–A3](#a2-uv-for-the-inspect-ai-harness).
 
 ---
+
+## Host D — Active Directory lab on Hyper-V (Hyper-V ON)
+
+Runs `meta4/ad-vm/` — 20 Active Directory scenarios on a four-machine lab.
+This replaces the Vagrant/VirtualBox path described in Host C.
+
+Because Hyper-V must be **on** here and **off** for Host C, these two cannot be
+the same machine until `kernel-vm` and hivestorm 14 are also ported. Host D can
+share a machine with Host B (Windows containers), which also wants Hyper-V on.
+
+Every step below is elevated PowerShell unless noted. Versions are the ones
+this was built and verified against.
+
+### D1. Enable Hyper-V
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All
+# reboot
+Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All | Select-Object State
+# Expect: Enabled
+```
+
+Requires Windows 10/11 **Pro**, Enterprise or Education. Home does not ship
+Hyper-V.
+
+### D2. PowerShell modules
+
+```powershell
+Install-Module Pester       -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+Install-Module AutomatedLab -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck
+```
+
+Verified against **Pester 6.0.1** and **AutomatedLab 5.61.0**. Record the
+AutomatedLab version in `meta4/ad-vm/lab/IMAGES.md` — the lab definition uses
+its role API, which does change between majors.
+
+### D3. Windows ADK — Deployment Tools only
+
+Provides `oscdimg`, used to build the cloud-init seed ISO for the attacker VM.
+
+Download the ADK from
+<https://learn.microsoft.com/windows-hardware/get-started/adk-install>, and in
+the feature list **untick everything except "Deployment Tools"** — roughly a
+100 MB install instead of several GB.
+
+```powershell
+# The ADK does not add oscdimg to PATH. Confirm it landed:
+Get-ChildItem 'C:\Program Files (x86)\Windows Kits' -Recurse -Filter oscdimg.exe |
+    Where-Object FullName -like '*amd64*' | Select-Object -ExpandProperty FullName
+```
+
+The harness locates it under Windows Kits automatically; you do not need to
+add it to PATH.
+
+### D4. LabSources — create this BEFORE importing AutomatedLab
+
+```powershell
+$base = 'C:\LabSources'
+foreach ($d in 'ISOs','OSUpdates','PostInstallationActivities','Tools',
+                'SoftwarePackages','CustomRoles','LabScripts') {
+    New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null
+}
+Import-Module AutomatedLab
+Get-LabSourcesLocation      # Expect: C:\LabSources
+```
+
+**Order matters.** `Import-Module AutomatedLab` resolves its LabSources
+location during import and fails with *"Cannot bind argument to parameter
+'Path' because it is null"* when the folder is absent — so you cannot use
+`New-LabSourcesFolder` to create it. `lab/SysRepairLab.ps1` does this for you;
+the manual form is here for diagnosis.
+
+### D5. Installation media
+
+Place both ISOs in `C:\LabSources\ISOs\`:
+
+| ISO | Source | Size |
+|---|---|---|
+| Windows Server 2019 evaluation | <https://www.microsoft.com/evalcenter/download-windows-server-2019> — choose **ISO**, 64-bit English | ~5.3 GB |
+| Ubuntu Server 24.04 LTS | <https://releases.ubuntu.com/24.04/> — `*-live-server-amd64.iso` | ~3.0 GB |
+
+Then verify against the recorded hashes:
+
+```powershell
+cd meta4\ad-vm
+. .\lab\Test-ImageChecksums.ps1
+Test-ImageChecksums -ManifestPath .\lab\IMAGES.md -ImageDir 'C:\LabSources\ISOs'
+```
+
+If you obtained different builds, update `lab/IMAGES.md` with your own hashes
+from `Get-ChildItem C:\LabSources\ISOs\*.iso | Get-FileHash -Algorithm SHA256`.
+
+**Edition string.** `Install-Lab` exact-matches `-OperatingSystem`. The
+evaluation media reports `Windows Server 2019 Datacenter Evaluation (Desktop
+Experience)` — note *Evaluation*, which the retail spelling omits. Check yours:
+
+```powershell
+Get-LabAvailableOperatingSystem -Path C:\LabSources\ISOs |
+    Select-Object OperatingSystemName, Version
+```
+
+and set `$osName` in `lab/SysRepairLab.ps1` to match. The script's preflight
+prints the available list if it does not.
+
+### D6. Host WinRM remoting — read before running
+
+AutomatedLab **requires** `TrustedHosts = '*'` and CredSSP delegation to
+`WSMAN/*`. This is not configurable: `AutomatedLabCore.psm1` throws
+*"TrustedHosts need to be set to '*' in order to be able to connect to the new
+VMs"*, and a subnet-scoped TrustedHosts list does not satisfy its precheck.
+
+Understand what this changes before accepting it:
+
+- **`TrustedHosts = '*'`** — the host will authenticate to *any* WinRM endpoint
+  over NTLM without mutual authentication.
+- **CredSSP client auth with fresh-credential delegation to `WSMAN/*`** — your
+  credentials can be delegated to any host you connect to.
+
+On a dedicated lab machine this is normal. On a machine you also use for other
+work, weigh it.
+
+```powershell
+Enable-LabHostRemoting -Force
+Test-LabHostRemoting          # Expect: True
+```
+
+To revert afterwards:
+
+```powershell
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value '' -Force
+Set-Item WSMan:\localhost\Client\Auth\CredSSP -Value $false -Force
+Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation' -Recurse -Force
+```
+
+### D7. Docker, for the attacker tooling image
+
+Docker Desktop in **Linux containers** mode. Verified against 29.4.0.
+
+```powershell
+cd meta4\ad-vm
+docker build -t srb-attacker:1 .\lab\attacker
+# Expect: tool gate: all 16 scenario dependencies resolve AND execute
+```
+
+The build fails loudly if any tool a `verify-poc.sh` invokes is missing or
+cannot run. That gate is deliberate — a missing grader tool used to be graded
+as "attack blocked", i.e. a pass on a vulnerable box.
+
+### D8. Virtual switches
+
+```powershell
+cd meta4\ad-vm
+. .\lab\New-LabSwitches.ps1
+
+# Internal switches only, if the host's sole live adapter is the one you are
+# working over -- creating an External switch on it briefly drops connectivity.
+New-LabSwitches -SkipExternal
+
+Get-LabSwitchHealth      # SRB-Lab 10.20.30.1, SRB-Kernel 10.20.40.1, both Private
+Test-NoLabNatCollision   # Hyper-V allows one NAT prefix per host; WSL2 usually owns it
+```
+
+`SRB-Build` (External) is only needed while baking the attacker VM. Create it
+then, naming the adapter explicitly:
+
+```powershell
+Get-NetAdapter -Physical | Where-Object Status -eq 'Up'
+New-LabSwitches -ExternalAdapterName '<adapter>'
+```
+
+### D9. Build the lab
+
+```powershell
+cd meta4\ad-vm
+powershell -ExecutionPolicy Bypass -File .\lab\SysRepairLab.ps1   # 45-90 min
+
+. .\lab\Protect-ParentDisk.ps1
+Set-LabVMHardening -VMName corp-dc01,corp-ca01,corp-ws01
+Protect-ParentDisk -ParentVhdxPath (Get-LabParentDiskPath -VMName corp-dc01)
+```
+
+`Set-LabVMHardening` is not optional. It disables automatic checkpoints — which
+client Hyper-V takes on *every VM start*, reintroducing exactly the live-state
+DC snapshot the cold-baseline model exists to avoid — switches checkpoint type
+to Standard, and pins fixed memory on the DC and attacker.
+
+### D10. Attacker VM
+
+```powershell
+. .\lab\New-AttackerVM.ps1
+
+New-AttackerSshKey                       # host-side probes use key auth, not passwords
+New-CloudInitSeedIso -CloudInitDir .\lab\attacker\cloud-init -OutputIsoPath C:\srb\seed.iso
+New-AttackerVM -UbuntuIsoPath C:\LabSources\ISOs\ubuntu-24.04.2-live-server-amd64.iso `
+               -VhdxPath      C:\srb\attacker01.vhdx `
+               -SeedIsoPath   C:\srb\seed.iso
+
+Start-VM attacker01
+# Complete the Ubuntu install. The VM sits on SRB-Build (internet) on purpose:
+# cloud-init installs docker.io. Note its DHCP address from the console.
+
+Install-AttackerTooling -BuildHost <dhcp-address>
+Move-AttackerToLabNetwork
+Start-VM attacker01
+```
+
+### D11. Provision, baseline, verify
+
+```powershell
+$cred = New-Object System.Management.Automation.PSCredential('CORP\Administrator',
+    (ConvertTo-SecureString 'Password1!' -AsPlainText -Force))
+
+Invoke-Command -VMName corp-dc01 -Credential $cred -FilePath .\provision\seed-directory.ps1
+Invoke-Command -VMName corp-ca01 -Credential $cred -FilePath .\provision\ca-postinstall.ps1
+
+Import-Module .\lab\LabReadiness.psm1 -Force
+. .\lab\Start-LabOrdered.ps1
+. .\lab\Save-LabBaseline.ps1
+. .\lab\Test-LabEgress.ps1
+
+Start-LabOrdered      # ordered boot, clocks verified
+Test-LabEgress        # must confirm NO internet reachable from attacker01
+Save-LabBaseline      # atomic across all four machines
+
+Invoke-Pester .\tests -Output Detailed
+```
+
+### D12. Run a scenario
+
+```bash
+./run-scenario.sh 13                    # restore -> inject -> handoff
+./run-scenario.sh 13 --verify-only      # grade; exits 0 iff both gates pass
+```
+
+### Known gotchas
+
+| Symptom | Cause |
+|---|---|
+| `Import-Module AutomatedLab` throws *"Cannot bind argument to parameter 'Path'"* | `C:\LabSources` does not exist. See D4 — create it first. |
+| `Install-Lab`: *"could not be found in the available operating systems"* | `$osName` does not exactly match the ISO's edition string. See D5. |
+| `Install-Lab` dies with *"PromptForChoice ... Object reference not set"* | AutomatedLab is trying to prompt from a non-interactive host. Run `Enable-LabHostRemoting -Force` first (D6). |
+| `New-CloudInitSeedIso`: *"oscdimg.exe not found"* | ADK Deployment Tools not installed, or installed without that feature. See D3. |
+| Attacker VM boots with no SSH key and no static IP; every probe times out | Seed ISO built without Joliet, so cloud-init saw `USER-DATA` rather than `user-data`. The harness passes `-j1`; if building by hand, do the same. |
+| `docker build` fails at the tool gate | A tool some `verify-poc.sh` invokes is missing. That is the gate working — fix the image, do not remove the check. |
 
 ## Model provider credentials
 
