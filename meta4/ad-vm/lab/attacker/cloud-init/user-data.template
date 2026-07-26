@@ -2,24 +2,52 @@
 # Template. New-CloudInitSeedIso substitutes the public-key placeholder below
 # and packs the rendered result into the NoCloud seed ISO.
 #
-# The key matters: every host-side probe (Test-AttackerReady, Sync-LabClocks,
-# Test-LabEgress) shells out to ssh non-interactively with -o BatchMode=yes.
-# Password-only auth would make each of them hang at a prompt forever.
+# THIS IS PLAIN CLOUD-CONFIG, FOR THE UBUNTU CLOUD IMAGE.
+#
+# It is deliberately NOT an `autoinstall:` document. Two different artifacts
+# are involved and they take different input:
+#
+#   cloud image (.img -> VHDX)   already installed; boots straight into
+#                                cloud-init, which consumes this file. No
+#                                installer, no prompts. THIS IS WHAT WE USE.
+#
+#   live-server ISO              runs the subiquity installer, which only acts
+#                                on an `autoinstall:` document AND requires
+#                                `autoinstall` on the kernel command line.
+#                                Canonical's own quickstart: "To skip the need
+#                                for a confirmation, interrupt the booting
+#                                process, and add the autoinstall parameter to
+#                                the kernel command line." A NoCloud seed alone
+#                                never suppresses that prompt, so the ISO route
+#                                cannot be made unattended without remastering.
+#
+# The SSH key matters: every host-side probe (Test-AttackerReady,
+# Sync-LabClocks, Test-LabEgress) shells out to ssh with -o BatchMode=yes.
+# Password-only auth would make each of them hang at a prompt.
+
+hostname: attacker01
+fqdn: attacker01.corp.local
+prefer_fqdn_over_hostname: false
 
 users:
   - name: vagrant
-    plain_text_passwd: vagrant
-    lock_passwd: false
+    gecos: SysRepair-Bench attacker
+    groups: [sudo, docker]
     shell: /bin/bash
+    lock_passwd: false
+    # sha512-crypt of "vagrant" -- the credential the 20 scenarios expect.
+    passwd: "$6$cU3Wj3YsR.0N9IMA$lEhW7f5Fh8kWvRT4OIfF8wxAA08WuMdvwo6tVnRYIW4Z3/vKh0k4Vi2Q.vKKDKLOF6PldFuF/Z8UvyoU6eyle1"
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - __SSH_PUBKEY__
 
 ssh_pwauth: true
+disable_root: true
 
 write_files:
-  # Static address on the AD segment. Note this is applied AFTER the build
-  # network is detached -- see New-AttackerVM.ps1.
+  # Static address on the AD segment. dhcp4 stays on so the VM still works on
+  # SRB-Build during the bake, where it needs internet for docker.io; the
+  # explicit address is what it uses once moved to SRB-Lab.
   - path: /etc/netplan/60-srb.yaml
     permissions: '0600'
     content: |
@@ -27,24 +55,16 @@ write_files:
         version: 2
         ethernets:
           eth0:
-            dhcp4: false
+            dhcp4: true
             addresses: [10.20.30.10/24]
             nameservers:
               search: [corp.local]
               addresses: [10.20.30.5]
 
-  - path: /home/vagrant/creds.txt
-    owner: vagrant:vagrant
-    permissions: '0600'
-    content: |
-      # Seed credentials for meta4/ad-vm scenarios
-      corp\alice:Password1!
-
   # The tooling container runs with --network host. On Ubuntu, systemd-resolved
-  # listens on a 127.0.0.53 stub, and Docker refuses to pass a loopback
-  # resolver into a container -- it substitutes a public one, which is
-  # unreachable on an isolated segment. Pinning the DC explicitly here means
-  # `docker run --dns 10.20.30.5` has something consistent to agree with.
+  # listens on a 127.0.0.53 stub and Docker refuses to pass a loopback resolver
+  # into a container -- it substitutes a public one, unreachable on an isolated
+  # segment. Pin the DC explicitly.
   - path: /etc/docker/daemon.json
     permissions: '0644'
     content: |
@@ -53,13 +73,23 @@ write_files:
         "dns-search": ["corp.local"]
       }
 
+  - path: /home/vagrant/creds.txt
+    owner: vagrant:vagrant
+    permissions: '0600'
+    content: |
+      # Seed credentials for meta4/ad-vm scenarios
+      corp\alice:Password1!
+
 packages:
   - docker.io
   - curl
   - chrony
+
+package_update: true
 
 runcmd:
   - systemctl enable --now docker
   - usermod -aG docker vagrant
   - install -d -m 755 /opt/meta4
   - netplan apply
+  - [ sh, -c, "echo cloud-init finished > /var/log/srb-ready" ]

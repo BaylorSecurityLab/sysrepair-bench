@@ -108,6 +108,99 @@ function New-CloudInitSeedIso {
     }
 }
 
+function Convert-CloudImageToVhdx {
+    <#
+    .SYNOPSIS
+    Converts an Ubuntu cloud image (.img, qcow2) to a dynamic VHDX.
+
+    .DESCRIPTION
+    Canonical publishes noble as qcow2 only -- no .vhd under
+    cloud-images.ubuntu.com/releases/noble/release/ -- so a conversion step is
+    unavoidable on Hyper-V. qemu-img comes from `scoop install qemu`.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ImagePath,
+        [Parameter(Mandatory)] [string] $VhdxPath,
+        [uint64] $ResizeToBytes = 40GB
+    )
+
+    $qemu = (Get-Command qemu-img -ErrorAction SilentlyContinue).Source
+    if (-not $qemu) {
+        $qemu = Join-Path $HOME 'scoop\apps\qemu\current\qemu-img.exe'
+    }
+    if (-not (Test-Path $qemu)) {
+        throw 'Convert-CloudImageToVhdx: qemu-img not found. Install it with: scoop install qemu'
+    }
+
+    if (Test-Path -LiteralPath $VhdxPath) {
+        Remove-Item -LiteralPath $VhdxPath -Force
+    }
+
+    Write-Host "[attacker] converting cloud image -> VHDX (this takes a minute)"
+    & $qemu convert -f qcow2 -O vhdx -o subformat=dynamic $ImagePath $VhdxPath
+    if ($LASTEXITCODE -ne 0) { throw "Convert-CloudImageToVhdx: qemu-img convert failed ($LASTEXITCODE)" }
+
+    # Cloud images ship ~3.5 GB; grow so there is room for the tooling image.
+    Resize-VHD -Path $VhdxPath -SizeBytes $ResizeToBytes -ErrorAction SilentlyContinue
+    Write-Host "[attacker] VHDX ready: $([math]::Round((Get-Item $VhdxPath).Length/1GB,2)) GB on disk"
+}
+
+function New-AttackerVMFromCloudImage {
+    <#
+    .SYNOPSIS
+    Builds attacker01 from a converted Ubuntu cloud image. No installer.
+
+    .DESCRIPTION
+    Preferred over the live-server ISO route. A cloud image is already
+    installed and boots straight into cloud-init, which consumes the NoCloud
+    seed with no prompts.
+
+    The ISO route cannot be made unattended without remastering: subiquity
+    requires `autoinstall` on the KERNEL COMMAND LINE, and per Canonical's
+    quickstart the only ways to supply it are interrupting boot to edit GRUB or
+    rebuilding the ISO. A NoCloud seed alone always leaves the installer
+    waiting at its confirmation prompt -- which from the host looks exactly
+    like a hung VM: Running, 0% CPU, heartbeat OK, zero bytes written.
+
+    Created on SRB-Build because cloud-init installs docker.io and needs
+    internet; Move-AttackerToLabNetwork puts it on the isolated segment after.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $VhdxPath,
+        [Parameter(Mandatory)] [string] $SeedIsoPath,
+        [string] $VMName = 'attacker01'
+    )
+
+    if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
+        throw "New-AttackerVMFromCloudImage: $VMName already exists. Remove it first."
+    }
+
+    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes 3GB `
+        -VHDPath $VhdxPath -SwitchName 'SRB-Build' | Out-Null
+
+    Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes 3GB
+    Set-VMProcessor -VMName $VMName -Count 2
+
+    # Ubuntu is signed under the Microsoft UEFI CA, not the Windows template
+    # Hyper-V defaults Gen2 VMs to.
+    Set-VMFirmware -VMName $VMName -SecureBootTemplate 'MicrosoftUEFICertificateAuthority'
+
+    # NoCloud seed as a DVD; cloud-init finds it by the CIDATA volume label.
+    Add-VMDvdDrive -VMName $VMName -Path $SeedIsoPath
+
+    # Boot from the VHDX, not the seed.
+    $osDisk = Get-VMHardDiskDrive -VMName $VMName | Select-Object -First 1
+    Set-VMFirmware -VMName $VMName -FirstBootDevice $osDisk
+
+    Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false `
+        -CheckpointType Standard `
+        -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
+
+    Write-Host "[attacker] $VMName created from cloud image on SRB-Build"
+}
+
 function New-AttackerVM {
     [CmdletBinding()]
     param(
