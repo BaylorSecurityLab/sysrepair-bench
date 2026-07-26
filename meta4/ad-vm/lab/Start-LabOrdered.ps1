@@ -155,9 +155,51 @@ function Start-LabOrdered {
     $memberVMs = @{ ca = 'corp-ca01'; ws = 'corp-ws01'; attacker = 'attacker01' }
 
     if (-not $SkipStart -and $Members) {
-        $names = $Members | ForEach-Object { $memberVMs[$_] }
+        $names = @($Members | ForEach-Object { $memberVMs[$_] })
         Write-Host "[boot] starting $($names -join ', ')"
-        Start-VM -Name $names -ErrorAction SilentlyContinue | Out-Null
+
+        # Start each VM individually and REPORT failures.
+        #
+        # `Start-VM -ErrorAction SilentlyContinue` hides the most common
+        # real-world failure on a single-host lab: not enough free RAM. The VM
+        # stays Off, the readiness probe times out, and the run reports a
+        # readiness or clock problem -- pointing at entirely the wrong
+        # subsystem. Observed here: corp-ws01 and attacker01 silently failed to
+        # start with 1.2 GB free, and the visible symptom was
+        # "could not read the clock on corp-ws01".
+        $failedToStart = @()
+        foreach ($n in $names) {
+            $vm = Get-VM -Name $n -ErrorAction SilentlyContinue
+            if (-not $vm) { $failedToStart += "$n (not found)"; continue }
+            if ($vm.State -eq 'Running') { continue }
+            try { Start-VM -Name $n -ErrorAction Stop | Out-Null }
+            catch { $failedToStart += "$n ($($_.Exception.Message.Split([char]10)[0]))" }
+        }
+
+        if ($failedToStart) {
+            $os   = Get-CimInstance Win32_OperatingSystem
+            $freeGb = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+            $need = 0
+            foreach ($n in $names) {
+                $m = Get-VMMemory -VMName $n -ErrorAction SilentlyContinue
+                if ($m -and (Get-VM -Name $n).State -ne 'Running') { $need += $m.Startup }
+            }
+            $needGb = [math]::Round($need / 1GB, 1)
+
+            $hogs = (Get-Process | Sort-Object WorkingSet64 -Descending |
+                     Select-Object -First 3 |
+                     ForEach-Object { "$($_.ProcessName) $([math]::Round($_.WorkingSet64/1GB,1))GB" }) -join ', '
+
+            throw @"
+Start-LabOrdered: VM(s) failed to start: $($failedToStart -join '; ')
+
+Host has ${freeGb} GB free; these VMs need about ${needGb} GB to start.
+Largest processes: $hogs
+
+This is a host memory constraint, not a lab fault. Close memory-heavy
+applications, or run the lab with fewer machines via -Members.
+"@
+        }
     }
 
     # Members need a few seconds of uptime before PowerShell Direct answers;
