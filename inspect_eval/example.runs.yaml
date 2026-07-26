@@ -2,10 +2,16 @@
 #   uv run python -m sysrepair_bench.run <preset>
 #   uv run python -m sysrepair_bench.run <preset> --runs path/to/file.yaml
 #
-# seeds   — submit() chances per scenario (same container).
+# seeds   — graded submit() chances per scenario (same container). One attempt
+#           is consumed per grading call; every solver honours this.
 #           Integer: seeds: 5  → one run, model gets 5 chances.
-#           Array:   seeds: [1, 5]  → two separate runs (success@1 then success@5).
-#           CLI override: --seeds 1 5
+#           CLI override: --seeds 5
+#
+#           Do NOT use the array form to get a curve. `seeds: [1, 5]` launches
+#           two full runs, and it is unnecessary — a single k=5 run records
+#           every attempt's outcome. Extract the whole curve with:
+#               uv run python -m sysrepair_bench.passk ./logs
+#           Hivestorm must stay at seeds: 1 (continuous scoring, no pass@k).
 # epochs  — independent re-runs of the whole experiment for variance estimation.
 #           CLI override: --epochs 3
 #
@@ -110,7 +116,7 @@ presets:
   linux_all:
     <<: [*srv_vllm_9b, *scope_linux]
     solvers: *solvers_react
-    seeds: [1, 5]
+    seeds: 5
     epochs: 1
     max_connections: 10
     modes: ["day1", "zero_day"]
@@ -118,7 +124,7 @@ presets:
   linux_all_minimax:
     <<: [*srv_minimax, *scope_linux]
     solvers: *solvers_all
-    seeds: [1, 5]
+    seeds: 5
     epochs: 1
     max_connections: 5
     modes: ["day1", "zero_day"]
@@ -127,7 +133,7 @@ presets:
   windows_all:
     <<: [*srv_vllm_9b, *scope_windows]
     solvers: *solvers_all
-    seeds: [1, 5]
+    seeds: 5
     epochs: 1
     max_connections: 5
     modes: ["day1", "zero_day"]
@@ -135,7 +141,7 @@ presets:
   windows_all_minimax:
     <<: [*srv_minimax, *scope_windows]
     solvers: *solvers_all
-    seeds: [1, 5]
+    seeds: 5
     epochs: 1
     max_connections: 2
     modes: ["day1", "zero_day"]
@@ -155,7 +161,10 @@ presets:
 
   hivestorm_windows:
     <<: [*srv_vllm_9b, *scope_hivestorm_windows]
-    solvers: *solvers_all
+    # react only: HIVESTORM_TEMPLATE advertises the score_progress tool, which
+    # is wired solely into the react solver. The other solvers would be told to
+    # call a tool they do not have.
+    solvers: *solvers_react
     epochs: 1
     max_connections: 5
     modes: ["day1", "zero_day"]
