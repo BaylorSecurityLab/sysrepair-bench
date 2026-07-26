@@ -34,18 +34,36 @@ certutil -setreg CA\CRLDeltaPeriodUnits 0  | Out-Null
 
 Write-Host '[ca] restarting CertSvc to apply CRL settings'
 Restart-Service CertSvc -Force
-$deadline = (Get-Date).AddSeconds(120)
+
+# Service status is NOT readiness. CertSvc reports Running well before its RPC
+# interface accepts calls, so certutil fails with 0x800706BA
+# (RPC_S_SERVER_UNAVAILABLE, -2147023174) if we proceed on Status alone.
+# Poll the interface itself.
+$deadline = (Get-Date).AddSeconds(180)
+$ready = $false
 while ((Get-Date) -lt $deadline) {
-    if ((Get-Service CertSvc).Status -eq 'Running') { break }
+    if ((Get-Service CertSvc).Status -eq 'Running') {
+        certutil -ping 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+    }
     Start-Sleep -Seconds 5
 }
-if ((Get-Service CertSvc).Status -ne 'Running') {
-    throw '[ca] CertSvc did not return to Running within 120s'
+if (-not $ready) {
+    throw '[ca] CertSvc did not answer certutil -ping within 180s of restarting'
 }
+Write-Host '[ca] CertSvc RPC interface is answering'
 
 Write-Host '[ca] publishing a fresh CRL'
-certutil -CRL | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "[ca] certutil -CRL failed with exit code $LASTEXITCODE" }
+# Retry: the first CRL publish immediately after a restart can still race the
+# CA's own initialisation even once ping answers.
+$published = $false
+for ($i = 1; $i -le 6; $i++) {
+    certutil -CRL 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { $published = $true; break }
+    Write-Host "[ca] CRL publish attempt $i returned $LASTEXITCODE; retrying"
+    Start-Sleep -Seconds 10
+}
+if (-not $published) { throw "[ca] certutil -CRL failed after 6 attempts (last exit code $LASTEXITCODE)" }
 
 Write-Host '[ca] verifying the CRL period actually took'
 $unitsRaw = (certutil -getreg CA\CRLPeriodUnits | Out-String)
