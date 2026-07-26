@@ -23,10 +23,18 @@ if the switch is absent but 10.20.30.1 is already bound, AL errors.
 function New-LabSwitches {
     [CmdletBinding()]
     param(
-        # Mandatory by design: on a laptop the only physical adapter is often
-        # Wi-Fi, and an External switch over a wireless NIC works only via
-        # ARP-proxy bridging and is fragile. Make the operator choose.
-        [Parameter(Mandatory)] [string] $ExternalAdapterName
+        # Not mandatory, but required unless -SkipExternal is passed. On a
+        # laptop the only physical adapter is often Wi-Fi, and an External
+        # switch over a wireless NIC works only via ARP-proxy bridging and is
+        # fragile. Make the operator choose rather than guessing.
+        [string] $ExternalAdapterName,
+
+        # SRB-Build is only needed while baking attacker01 (cloud-init has to
+        # reach the internet for docker.io). The Internal switches are enough
+        # to stand up the Windows lab, and creating an External switch on the
+        # host's only live adapter briefly drops its connectivity -- so defer
+        # it when that adapter is the one you are working over.
+        [switch] $SkipExternal
     )
 
     $internal = @(
@@ -64,11 +72,26 @@ function New-LabSwitches {
         }
     }
 
+    if ($SkipExternal) {
+        Write-Host '[switch] SRB-Build skipped. Create it before baking attacker01:'
+        Write-Host "[switch]   New-LabSwitches -ExternalAdapterName '<adapter>'"
+        return
+    }
+
     if (-not (Get-VMSwitch -Name 'SRB-Build' -ErrorAction SilentlyContinue)) {
+        if (-not $ExternalAdapterName) {
+            throw "New-LabSwitches: -ExternalAdapterName is required unless -SkipExternal is passed. Available: $((Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Select-Object -ExpandProperty Name) -join ', ')"
+        }
+
         $adapter = Get-NetAdapter -Name $ExternalAdapterName -ErrorAction SilentlyContinue
         if (-not $adapter) {
             throw "New-LabSwitches: adapter '$ExternalAdapterName' not found. Available: $((Get-NetAdapter -Physical | Select-Object -ExpandProperty Name) -join ', ')"
         }
+        if ($adapter.Status -ne 'Up') {
+            throw "New-LabSwitches: adapter '$ExternalAdapterName' is $($adapter.Status). Binding an External switch to a down adapter yields a switch with no connectivity."
+        }
+
+        Write-Warning "[switch] binding an External switch to '$ExternalAdapterName' will briefly drop host connectivity on that adapter."
         New-VMSwitch -Name 'SRB-Build' -NetAdapterName $ExternalAdapterName `
             -AllowManagementOS $true | Out-Null
         Write-Host "[switch] created SRB-Build (External via $ExternalAdapterName)"
