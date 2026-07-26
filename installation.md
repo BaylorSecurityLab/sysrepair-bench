@@ -470,6 +470,11 @@ Understand what this changes before accepting it:
   over NTLM without mutual authentication.
 - **CredSSP client auth with fresh-credential delegation to `WSMAN/*`** — your
   credentials can be delegated to any host you connect to.
+- **`AllowEncryptionOracle = 2`** — this one is easy to miss because
+  `Enable-LabHostRemoting` sets it without calling attention to it. It relaxes
+  the CVE-2018-0886 CredSSP encryption-oracle mitigation to "Vulnerable",
+  permitting CredSSP connections to unpatched servers. It is the most
+  security-relevant of the three.
 
 On a dedicated lab machine this is normal. On a machine you also use for other
 work, weigh it.
@@ -485,7 +490,15 @@ To revert afterwards:
 Set-Item WSMan:\localhost\Client\TrustedHosts -Value '' -Force
 Set-Item WSMan:\localhost\Client\Auth\CredSSP -Value $false -Force
 Remove-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation' -Recurse -Force
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\CredSSP\Parameters' `
+                    -Name 'AllowEncryptionOracle' -ErrorAction SilentlyContinue
+gpupdate /force
 ```
+
+Per-scenario runs do **not** need any of this: `Invoke-Scenario.ps1` reaches
+the guests over PowerShell Direct (VMBus), which needs no network path and no
+TrustedHosts entry. Only `Install-Lab` and the initial provisioning require it,
+so reverting after the baseline is captured is viable.
 
 ### D7. Docker, for the attacker tooling image
 
