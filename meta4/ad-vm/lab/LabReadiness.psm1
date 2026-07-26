@@ -102,22 +102,28 @@ function Test-AttackerReady {
     # poll and the attacker never reports ready.
     param([string] $VMName)
 
-    $probe = @'
-docker ps >/dev/null 2>&1 || { echo "docker"; exit 0; }
-docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local \
-    srb-attacker:1 getent hosts corp-dc01.corp.local >/dev/null 2>&1 \
-    || { echo "container-dns"; exit 0; }
-echo ""
-'@
+    # SINGLE LINE, deliberately. A multi-line here-string does not survive
+    # PowerShell's argument passing to ssh -- the remote command arrives
+    # mangled, ssh exits non-zero, and the probe reports 'ssh' even though the
+    # port is open and key auth works fine. Keep this on one line.
+    #
+    # `sudo` is used for docker because group membership added by cloud-init
+    # is not guaranteed to be active in every non-interactive session, and a
+    # permission error here would masquerade as a docker outage.
+    $probe = 'sudo docker ps >/dev/null 2>&1 || { echo docker; exit 0; }; ' +
+             'sudo docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local ' +
+             'srb-attacker:1 getent hosts corp-dc01.corp.local >/dev/null 2>&1 || { echo container-dns; exit 0; }; ' +
+             'echo OK'
 
-    $out = ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes `
+    $out = ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes `
         -i $script:AttackerKey "$($script:AttackerUser)@$($script:AttackerIP)" $probe 2>&1 | Out-String
 
-    if ($LASTEXITCODE -ne 0) { return 'ssh' }
+    if ($LASTEXITCODE -ne 0) { return "ssh (rc=$LASTEXITCODE): $($out.Trim() -replace '\s+', ' ')" }
 
     $t = $out.Trim()
+    if ($t -eq 'OK') { return $null }
     if ($t) { return $t }
-    return $null
+    return 'empty-probe-output'
 }
 
 function Wait-LabMachineReady {

@@ -87,8 +87,25 @@ function Invoke-PocGate {
         $local "vagrant@$($script:AttackerIP):$guest" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { return 2 }
 
+    # RUN INSIDE THE TOOLING CONTAINER, not on the VM host.
+    #
+    # The attacker VM is a bare Ubuntu cloud image: impacket, certipy, nmap and
+    # the rest live ONLY in srb-attacker:1. Running the PoC on the host means
+    # every tool is missing, the script falls through to its "unrecognised
+    # result" branch, and exits 1 -- which this harness would read as "the
+    # attack succeeded", passing gate 1 for entirely the wrong reason.
+    #
+    # That is the same missing-tool false signal the scenarios themselves had,
+    # reproduced in the validator. Observed on scenario-06: gate 1 reported
+    # poc=1 with no impacket present at all.
+    #
+    # --dns is required because the daemon-level DNS pin was removed (it broke
+    # image builds); the container gets the DC's resolver per-run instead.
+    $runner = "sudo docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local " +
+              "-v ${guest}:/verify-poc.sh srb-attacker:1 bash /verify-poc.sh"
+
     ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
-        "vagrant@$($script:AttackerIP)" "chmod +x $guest; $guest >/dev/null 2>&1; rc=`$?; rm -f $guest; exit `$rc" 2>&1 | Out-Null
+        "vagrant@$($script:AttackerIP)" "$runner >/dev/null 2>&1; rc=`$?; rm -f $guest; exit `$rc" 2>&1 | Out-Null
     return $LASTEXITCODE
 }
 
@@ -96,7 +113,11 @@ function Test-ScenarioGates {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidatePattern('^\d{2}$')] [string] $ScenarioId,
-        [switch] $SkipRestore
+        [switch] $SkipRestore,
+
+        # Upper bound on how long a remediation may take to become observable
+        # from the attacker. Polled, not slept -- see gate 2.
+        [int] $FixSettleSeconds = 90
     )
 
     $root = Split-Path $PSScriptRoot -Parent
@@ -140,8 +161,23 @@ function Test-ScenarioGates {
     }
     else {
         Invoke-GuestScript -Target $injectTarget -ScriptPath $fixScript | Out-Null
-        Start-Sleep -Seconds 10
-        $poc2 = Invoke-PocGate -ScenarioDir $dir
+
+        # Directory changes are not instantaneous from the attacker's point of
+        # view. Removing alice's replication ACEs took longer than 10 seconds
+        # to be reflected on the DRSUAPI path -- the PoC still succeeded at
+        # 10s and correctly reported BLOCKED at ~30s, so a fixed short sleep
+        # made gate 2 fail against a fix that genuinely worked.
+        #
+        # Poll for the expected outcome rather than sleeping a fixed duration
+        # and checking once; bail out early as soon as it holds.
+        $poc2 = 1
+        $deadline = (Get-Date).AddSeconds($FixSettleSeconds)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 10
+            $poc2 = Invoke-PocGate -ScenarioDir $dir
+            if ($poc2 -eq 0) { break }
+        }
+
         $svc2 = Invoke-GuestScript -Target $serviceTarget -ScriptPath $serviceScript
         $results['gate2_solvable'] = ($poc2 -eq 0 -and $svc2 -eq 0)
         Write-Host "  poc=$poc2 (want 0)  service=$svc2 (want 0)"
@@ -178,10 +214,20 @@ function Test-ScenarioGates {
         Write-Host "  poc=$poc4 (want 1 -- config-only fix must NOT pass)"
     }
 
+    # COUNT the failures; do not negate a filtered pipeline.
+    #
+    # The previous form was:
+    #     $validated = -not ($hard | Where-Object { $_ -ne $true })
+    # Where-Object emits the offending ELEMENT, so a single failing gate makes
+    # the pipeline emit $false -- and `-not $false` is $true. The expression
+    # therefore reported Validated=True precisely when a gate had failed,
+    # which is the exact failure mode this harness exists to catch. Observed
+    # on scenario-06: gate2_solvable=False, Validated=True.
     $hard = @($results['gate1_poc_fails'], $results['gate1_not_harness_err'],
               $results['gate1_service_healthy'], $results['gate2_solvable'],
               $results['gate3_sabotage'])
-    $validated = -not ($hard | Where-Object { $_ -ne $true })
+    $failedCount = @($hard | Where-Object { $_ -isnot [bool] -or -not $_ }).Count
+    $validated = ($failedCount -eq 0)
 
     [pscustomobject]@{
         Scenario  = "scenario-$ScenarioId"
