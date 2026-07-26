@@ -56,16 +56,23 @@ if (Test-Path $sshdCap) {
     $binFixed = $true
 }
 if (-not $binFixed -and (Test-Path $sshdLeg)) {
-    $v = (Get-Item $sshdLeg).VersionInfo.ProductVersion
-    if ($v -match '^(\d+)\.') {
-        $major = [int]$matches[1]
+    # Win32-OpenSSH stamps the marketing string in ProductVersion
+    # ("OpenSSH_9.5p1 for Windows") and the numeric build in FileVersion
+    # ("9.5.0.0"). Parse the major version from whichever field carries a dotted
+    # numeric token (FileVersion first — it is reliably numeric).
+    $vi = (Get-Item $sshdLeg).VersionInfo
+    $v  = $vi.ProductVersion
+    $verStr = "$($vi.FileVersion) $($vi.ProductVersion)"
+    $m = [regex]::Match($verStr, '(\d+)\.(\d+)')
+    if ($m.Success) {
+        $major = [int]$m.Groups[1].Value
         if ($major -ge 9) {
-            Write-Host "INFO [PoC]: legacy-path sshd.exe upgraded to $v."
+            Write-Host "INFO [PoC]: legacy-path sshd.exe upgraded to $v (FileVersion $($vi.FileVersion))."
             $binFixed = $true
         }
     }
     if (-not $binFixed) {
-        Write-Host "FAIL [PoC]: legacy Win32-OpenSSH still at $v (needs replacement or upgrade to 9.x+)."
+        Write-Host "FAIL [PoC]: legacy Win32-OpenSSH still at $v (FileVersion $($vi.FileVersion)); needs replacement or upgrade to 9.x+."
         exit 1
     }
 }

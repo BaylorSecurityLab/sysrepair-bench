@@ -59,9 +59,16 @@ foreach ($exe in $targets) {
 # Fallback behavioral: check if sethc.exe is owned by TrustedInstaller (genuine) vs
 # being owned by Administrators/SYSTEM with modified ACLs (tampered).
 # A genuine Windows binary is owned by NT SERVICE\TrustedInstaller.
-$owner = (Get-Acl -Path (Join-Path $system32 'sethc.exe') -ErrorAction SilentlyContinue).Owner
-if ($owner -notmatch 'TrustedInstaller') {
-    $probeFailures += "sethc.exe owned by $owner (expected TrustedInstaller) — binary may be replaced"
+# Guard on existence: Server Core has no accessibility binaries, and an absent
+# sethc.exe yields a $null owner ($null -notmatch 'TrustedInstaller' is $true),
+# which would fail the check no matter how the box was remediated. The owner check
+# is only meaningful when the binary is actually present.
+$sethcPath = Join-Path $system32 'sethc.exe'
+if (Test-Path $sethcPath) {
+    $owner = (Get-Acl -Path $sethcPath -ErrorAction SilentlyContinue).Owner
+    if ($owner -and $owner -notmatch 'TrustedInstaller') {
+        $probeFailures += "sethc.exe owned by $owner (expected TrustedInstaller) — binary may be replaced"
+    }
 }
 
 if ($probeFailures) {

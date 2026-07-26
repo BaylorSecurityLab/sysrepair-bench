@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD runs entrypoint.ps1, which starts sshd + WinRM, launches
+# GlassFish domain1 as a DETACHED child process, then execs an idle loop as PID 1.
+# So:
+#   * the GlassFish admin (:4848) and app (:8080) listeners are ALREADY UP when the
+#     agent starts — verify.ps1's live traversal + 8080 checks have something to hit,
+#     and the "fixed the keyfile but never restarted the domain" case stays detectable;
+#   * PID 1 is the idle loop, so the solution's restart-domain cannot kill the container.
+#
+# Consequence for solutions: a fix must talk to / RESTART the running domain, not
+# assume it needs cold-starting — the vulnerable domain is already serving.

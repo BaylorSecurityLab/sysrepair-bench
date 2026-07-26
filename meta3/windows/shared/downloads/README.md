@@ -36,16 +36,18 @@ upstream, mirror the file somewhere reachable and update `manifest.json`.
 
 | File | Source | Used by |
 |---|---|---|
-| `OpenSSH-Win64-v9.5.0.0p1-Beta.zip` | github.com/PowerShell/Win32-OpenSSH releases (v9.5.0.0p1-Beta) | `base/` |
+| `OpenSSH-Win64-v9.5.0.0p1-Beta.zip` | github.com/PowerShell/Win32-OpenSSH releases (v9.5.0.0p1-Beta) | `base/`, `scenario-21-ssh-defaults/` (staged fixed build for the solution) |
 | `OpenSSH-Win64-v7.7.2.0p1-Beta.zip` | github.com/PowerShell/Win32-OpenSSH releases (v7.7.2.0p1-Beta) | `scenario-21-ssh-defaults/` |
 | `OpenJDK8U-jre_x64_windows_hotspot_8u402b06.zip` | github.com/adoptium/temurin8-binaries (8u402-b06) | scenarios 04, 05, 06, 08 |
 | `OpenJDK8U-jdk_x64_windows_hotspot_8u402b06.zip` | github.com/adoptium/temurin8-binaries (8u402-b06, JDK build) | `scenario-07-glassfish/` |
 | `OpenJDK8U-jre_x64_windows_hotspot_8u312b07.zip` | github.com/adoptium/temurin8-binaries (8u312-b07, last build that doesn't break ES 1.x JNI) | `scenario-09-elasticsearch/` |
 | `apache-tomcat-8.0.33-windows-x64.zip` | archive.apache.org/dist/tomcat/tomcat-8/v8.0.33 | scenarios 04, 05, 08 |
-| `jenkins-war-2.32.1.war` | repo.jenkins-ci.org (Artifactory mirror — archives.jenkins.io dropped 2.32.x weeklies) | `scenario-06-jenkins/` |
+| `jenkins-war-2.32.1.war` | repo.jenkins-ci.org (Artifactory mirror — archives.jenkins.io dropped 2.32.x weeklies) | `scenario-06-jenkins/` (baseline vulnerable WAR) |
+| `jenkins-2.60.3.war` | get.jenkins.io/war-stable/2.60.3 (first LTS past the CVE-2017-1000353 fix) | `scenario-06-jenkins/` (staged fixed WAR for the solution) |
 | `struts-2.3.20.1-apps.zip` | archive.apache.org/dist/struts/2.3.20.1 (oldest still-published version in the CVE-2017-5638 range) | `scenario-05-struts/` |
 | `axis2-1.6.0-war.zip` | archive.apache.org/dist/axis/axis2/java/core/1.6.0 | `scenario-08-axis2/` |
-| `glassfish-4.0.zip` | download.oracle.com/glassfish/4.0/release | `scenario-07-glassfish/` |
+| `glassfish-4.0.zip` | download.oracle.com/glassfish/4.0/release | (superseded — see 4.1.1 below) |
+| `glassfish-4.1.1.zip` | download.oracle.com/glassfish/4.1.1/release | `scenario-07-glassfish/` (CVE-2017-1000028 canonical vulnerable build) |
 | `elasticsearch-1.6.0.zip` | repo1.maven.org/maven2/org/elasticsearch/elasticsearch/1.6.0 | `scenario-09-elasticsearch/` |
 | `vc_redist.x64.exe` | aka.ms/vs/17/release/vc_redist.x64.exe | `scenario-15-wamp-wordpress/` |
 | `php-7.4.33-nts-Win32-vc15-x64.zip` | windows.php.net/downloads/releases/archives | `scenario-15-wamp-wordpress/` |

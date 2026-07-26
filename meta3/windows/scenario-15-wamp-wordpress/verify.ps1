@@ -32,19 +32,19 @@ if (Test-Path $verFile) {
 
 if (-not $versionFixed) {
     # Live login attempt with admin:admin against wp-login.php
-    $body = @{ log = 'admin'; pwd = 'admin'; 'wp-submit' = 'Log In'; redirect_to = "$base/wordpress/wp-admin/"; testcookie = '1' }
+    $body = @{ log = 'admin'; pwd = 'admin'; 'wp-submit' = 'Log In'; redirect_to = "$base/wp-admin/"; testcookie = '1' }
     try {
         $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
         # Seed the test cookie WordPress requires
         $session.Cookies.Add((New-Object System.Net.Cookie('wordpress_test_cookie','WP+Cookie+check','/','localhost')))
-        $resp = Invoke-WebRequest -Uri "$base/wordpress/wp-login.php" -Method POST -Body $body `
+        $resp = Invoke-WebRequest -Uri "$base/wp-login.php" -Method POST -Body $body `
             -WebSession $session -MaximumRedirection 0 -UseBasicParsing -TimeoutSec 8 -ErrorAction SilentlyContinue
     } catch {
         $resp = $_.Exception.Response
     }
     $loginSucceeded = $false
     if ($session -and $session.Cookies) {
-        foreach ($c in $session.Cookies.GetCookies("$base/wordpress/").Cast[System.Net.Cookie]()) {
+        foreach ($c in $session.Cookies.GetCookies("$base/")) {
             if ($c.Name -like 'wordpress_logged_in*') { $loginSucceeded = $true }
         }
     }
@@ -56,15 +56,17 @@ if (-not $versionFixed) {
 }
 
 ###############################################################################
-# Regression Check: WordPress front page still serves HTTP 200 with WP markers
+# Regression Check: WordPress front page still serves HTTP 200 with WP markers.
+# The IIS Default Web Site physicalPath is the WordPress tree itself, so WordPress
+# is served at the site ROOT (http://localhost/), not under /wordpress/.
 ###############################################################################
 try {
-    $home = Invoke-WebRequest -Uri "$base/wordpress/" -UseBasicParsing -TimeoutSec 8
-    if ($home.StatusCode -ne 200) {
-        Write-Host "FAIL [Regression]: WordPress home returned HTTP $($home.StatusCode)."
+    $wpHome = Invoke-WebRequest -Uri "$base/" -UseBasicParsing -TimeoutSec 8
+    if ($wpHome.StatusCode -ne 200) {
+        Write-Host "FAIL [Regression]: WordPress home returned HTTP $($wpHome.StatusCode)."
         exit 1
     }
-    if ($home.Content -notmatch 'wp-content|WordPress') {
+    if ($wpHome.Content -notmatch 'wp-content|WordPress') {
         Write-Host "FAIL [Regression]: WordPress home does not look like WordPress anymore."
         exit 1
     }

@@ -24,6 +24,9 @@ RUN Expand-Archive 'C:\es.zip' -DestinationPath 'C:\' ; \
     Remove-Item 'C:\elasticsearch-1.6.0\lib\sigar\sigar-amd64-winnt.dll' -Force ; \
     Remove-Item 'C:\elasticsearch-1.6.0\lib\sigar\sigar-x86-winnt.dll' -Force
 ENV ES_HOME=C:\\elasticsearch-1.6.0
+# Cap the JVM heap so ES 1.x does not balloon and OOM the (5GB) VM under parallel
+# runs, which was a source of INJECT_FAIL. ES 1.x reads ES_HEAP_SIZE at startup.
+ENV ES_HEAP_SIZE=512m
 # Sigar's bundled Windows DLL crashes the JVM with EXCEPTION_ACCESS_VIOLATION inside
 # Server Core ltsc2019 containers. Deleting the native library forces Sigar into its
 # Java-only fallback (System.loadLibrary throws UnsatisfiedLinkError, which ES catches
@@ -34,5 +37,9 @@ ENV ES_HOME=C:\\elasticsearch-1.6.0
 COPY scenario-09-elasticsearch/elasticsearch.yml C:/elasticsearch-1.6.0/config/elasticsearch.yml
 
 
+# PID-1-safe boot: start sshd/WinRM, launch Elasticsearch in the background, hold
+# PID 1 with an idle loop so a config fix can restart ES without killing the container.
+COPY scenario-09-elasticsearch/entrypoint.ps1 C:/entrypoint.ps1
+
 EXPOSE 9200 9300 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\elasticsearch-1.6.0\\bin\\elasticsearch.bat"]
+CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\entrypoint.ps1"]

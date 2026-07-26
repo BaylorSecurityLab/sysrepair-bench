@@ -25,6 +25,13 @@ RUN Stop-Service sshd -ErrorAction SilentlyContinue ; \
     Remove-Item 'C:\ossh.zip' ; \
     powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\Program Files\OpenSSH\install-sshd.ps1'
 
+# --- Staged FIXED OpenSSH build (9.5.0.0p1-Beta) for the solution (hermetic) ---
+# Not active in the baseline. The OpenSSH.Server FoD (Add-WindowsCapability) is NOT
+# installable inside a Server Core container (DISM's feature-store services aren't
+# running at build time), so the solution installs sshd from this vendored zip instead.
+# Source URL: https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.5.0.0p1-Beta/OpenSSH-Win64.zip
+COPY shared/downloads/OpenSSH-Win64-v9.5.0.0p1-Beta.zip C:/ossh-fixed.zip
+
 # Re-assert vagrant:vagrant as a local admin (base image ships this user; make sure the
 # password matches the Rapid7 default and the account can log in remotely via sshd).
 # Relax password policy so the intentionally-weak 'vagrant' password can be set,

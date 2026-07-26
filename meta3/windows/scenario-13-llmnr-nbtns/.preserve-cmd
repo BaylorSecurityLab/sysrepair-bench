@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with an idle keepalive.
+#
+# The harness runs the image CMD so services actually boot. The CMD is
+# PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * the LLMNR / NBT-NS weakness lives in registry/adapter policy (no
+#     dedicated foreground service to run);
+#   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# Consequence for solutions: the vulnerable name-resolution policy is ALREADY
+# in effect, so a fix sets the DisableMulticast / NetBIOS-over-TCP policy; no
+# process runs as PID 1 that a restart could kill.

@@ -3,7 +3,7 @@
 # Exit 2 = server rejected plain RDP (REMEDIATED — TLS/CredSSP required)
 # Exit 1 = probe error (TCP failure, timeout, malformed response)
 param(
-    [string]$Host = '127.0.0.1',
+    [string]$TargetHost = '127.0.0.1',
     [int]$Port = 3389,
     [int]$TimeoutMs = 3000
 )
@@ -60,7 +60,7 @@ try {
     $client = New-Object System.Net.Sockets.TcpClient
     $client.ReceiveTimeout = $TimeoutMs
     $client.SendTimeout    = $TimeoutMs
-    $client.Connect($Host, $Port)
+    $client.Connect($TargetHost, $Port)
     $stream = $client.GetStream()
     $stream.Write($buf, 0, $buf.Length)
     $stream.Flush()

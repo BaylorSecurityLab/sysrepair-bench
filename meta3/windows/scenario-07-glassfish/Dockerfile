@@ -1,12 +1,16 @@
 # syntax=docker/dockerfile:1
-# meta3-win-07-glassfish — GlassFish 4.0 with admin traversal + weak admin realm
-# (CVE-2017-1000028 arbitrary file read; admin listener reachable on all interfaces)
+# meta3-win-07-glassfish — GlassFish 4.1.1 with admin traversal + empty admin password
+# (CVE-2017-1000028 arbitrary file read; admin listener plaintext on :4848)
 # Upstream: scripts/installs/setup_glassfish.bat + resources/glassfish/{admin-keyfile,domain.xml}
+#
+# Pinned to 4.1.1 (CVE-2017-1000028's canonical vulnerable build) rather than 4.0:
+# 4.1.1 is the reference target for the overlong-UTF-8 (%c0%ae) traversal on the
+# admin-console /theme/META-INF/ resource that verify.ps1 probes.
 FROM sysrepair/meta3-win-base:ltsc2019
 
 SHELL ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop';"]
 
-# --- JDK 8 (GlassFish 4.0 was released for JDK7 but runs on 8 with warnings) ---
+# --- JDK 8 (GlassFish 4.1.1 runs on JDK 8) ---
 # Source URL: https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jdk_x64_windows_hotspot_8u402b06.zip
 COPY shared/downloads/OpenJDK8U-jdk_x64_windows_hotspot_8u402b06.zip C:/jdk.zip
 RUN Expand-Archive 'C:\jdk.zip' -DestinationPath 'C:\Java' ; \
@@ -16,32 +20,30 @@ ENV AS_JAVA=C:\\Java\\jdk8u402-b06
 # Do not append to ${PATH} via ENV — Docker expansion yields an empty string on Windows
 # and wipes C:\Windows\System32 from PATH, breaking powershell for subsequent RUN steps.
 # GlassFish resolves java via AS_JAVA → JAVA_HOME. The domain launch process also needs
-# java on PATH, so the CMD prepends it at runtime.
+# java on PATH, so the entrypoint prepends it at runtime.
 
-# --- GlassFish 4.0 ---
-# Source URL: https://download.oracle.com/glassfish/4.0/release/glassfish-4.0.zip
-COPY shared/downloads/glassfish-4.0.zip C:/gf.zip
+# --- GlassFish 4.1.1 ---
+# Source URL: https://download.oracle.com/glassfish/4.1.1/release/glassfish-4.1.1.zip
+COPY shared/downloads/glassfish-4.1.1.zip C:/gf.zip
 RUN Expand-Archive 'C:\gf.zip' -DestinationPath 'C:\' ; \
     Remove-Item 'C:\gf.zip'
 ENV GLASSFISH_HOME=C:\\glassfish4\\glassfish
 
-# --- Misconfiguration: enable secure admin with an empty admin password ---
-# GlassFish 4.0 enable-secure-admin refuses an empty password, and once secure-admin
-# is configured it also refuses changing back to empty via change-admin-password.
-# Workaround: backup admin-keyfile (empty-password hash) before the temp password is
-# set, run enable-secure-admin, stop the domain (still using temp password), then
-# restore the backup — domain.xml retains the 0.0.0.0 binding, keyfile has empty pw.
-RUN & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin start-domain domain1 ; \
-    Start-Sleep -Seconds 10 ; \
-    Set-Content -Path 'C:\pf_temp'    -Value 'AS_ADMIN_PASSWORD=TempAdmin1!' -Encoding ASCII ; \
-    Set-Content -Path 'C:\pf_to_temp' -Value "AS_ADMIN_PASSWORD=`nAS_ADMIN_NEWPASSWORD=TempAdmin1!" -Encoding ASCII ; \
-    Copy-Item 'C:\glassfish4\glassfish\domains\domain1\config\admin-keyfile' 'C:\admin-keyfile.bak' ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_to_temp' change-admin-password ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_temp'    enable-secure-admin ; \
-    & "$env:GLASSFISH_HOME\bin\asadmin.bat" --user admin --passwordfile 'C:\pf_temp'    stop-domain domain1 ; \
-    Copy-Item 'C:\admin-keyfile.bak' 'C:\glassfish4\glassfish\domains\domain1\config\admin-keyfile' -Force ; \
-    Remove-Item 'C:\pf_temp', 'C:\pf_to_temp', 'C:\admin-keyfile.bak'
+# --- Ship the genuinely-vulnerable default state ---
+# The stock domain1 admin-keyfile stores the SSHA256 hash of the *empty* password
+# (admin;{SSHA256}...;asadmin). That non-empty hash field would make verify.ps1's
+# PoC-1 (empty-hash check) read as already-remediated even though the password is
+# empty. Overwrite the admin line with the canonical empty-password form so the
+# baseline is honestly vulnerable: empty password + plaintext admin listener.
+# secure-admin is left DISABLED (default), so :4848 stays plaintext HTTP and the
+# %c0%ae traversal probe can reach the admin console.
+RUN Set-Content -Path 'C:\glassfish4\glassfish\domains\domain1\config\admin-keyfile' \
+        -Value 'admin;;asadmin' -Encoding ASCII
 
+COPY scenario-07-glassfish/entrypoint.ps1 C:/entrypoint.ps1
 
 EXPOSE 4848 8080 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; $env:Path = 'C:\\Java\\jdk8u402-b06\\bin;' + $env:Path; & C:\\glassfish4\\glassfish\\bin\\asadmin.bat start-domain --verbose domain1"]
+# PID 1 is a powershell idle loop; the domain is started as a detached child so that
+# the solution's restart-domain cannot kill the container. Paired with .preserve-cmd
+# so the harness boots this CMD instead of `sleep infinity`.
+CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\entrypoint.ps1"]

@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with an idle keepalive.
+#
+# The harness runs the image CMD so services actually boot. The CMD is
+# PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * the vulnerability is a registry ImagePath (unquoted service path) on a
+#     planted service - a config weakness, not a foreground process;
+#   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# Consequence for solutions: the vulnerable service registration is ALREADY
+# present, so a fix must quote the ImagePath (and/or remove the hijack binary);
+# no process runs as PID 1 that a restart could kill.

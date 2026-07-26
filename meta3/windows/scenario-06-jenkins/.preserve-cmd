@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD runs entrypoint.ps1, which starts sshd + WinRM, launches the
+# vulnerable Jenkins 2.32.1 WAR as a DETACHED child java process, then execs an idle
+# loop as PID 1. So:
+#   * Jenkins is ALREADY serving on :8080 when the agent starts — verify.ps1's live
+#     probes and 8080 regression have a running instance to hit, and the
+#     "swapped the WAR on disk but never restarted" case stays detectable;
+#   * PID 1 is the idle loop, so stopping/restarting java cannot kill the container.
+#
+# Consequence for solutions: a fix must replace the WAR AND restart the running java
+# process (not merely stage a new WAR on disk) — the vulnerable instance is already up.

@@ -31,7 +31,13 @@ try {
     $resp = Invoke-WebRequest -Uri 'http://localhost:8080/axis2/axis2-admin/login' `
         -Method POST -Body $body -ContentType 'application/x-www-form-urlencoded' `
         -UseBasicParsing -TimeoutSec 5 -MaximumRedirection 0 -ErrorAction SilentlyContinue
-    if ($resp.Content -match '(?i)welcome|logout|admin options') {
+    # NB: the Axis2 admin LOGIN page itself carries the banner "Welcome to Axis2 Web Admin
+    # Module" and, on a rejected login, the "invalid auth ... Login" error — so matching
+    # "welcome"/"login" false-positives on a FAILED login. The admin CONSOLE shown only
+    # after a SUCCESSFUL login is what proves the creds worked: it lists the deployed
+    # services and a Logout link ("Available Services", "Upload Service", "Logout",
+    # "admin options"). Discriminate on those success-only markers.
+    if ($resp.Content -match '(?i)logout|admin options|available services|upload service') {
         Write-Host "FAIL [PoC]: Default admin/axis2 still authenticates against axis2-admin/login."
         exit 1
     }
