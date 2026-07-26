@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD (/opt/start.sh) boots the Apache (Cacti sim) backend on
+# 0.0.0.0:8080 and then execs `sleep infinity`, so the vulnerable
+# remote_agent.php command-injection surface is ALREADY REACHABLE on the public
+# interface when the agent starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must rebind Apache to loopback and put an
+# nginx proxy in front that denies remote_agent.php, then (re)start both.

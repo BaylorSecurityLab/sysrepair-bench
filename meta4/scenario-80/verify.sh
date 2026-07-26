@@ -4,6 +4,13 @@ set -u
 
 POLICY_ARN="arn:aws:iam::000000000000:policy/AppManagedPolicy"
 
+# Wait for the LIVE LocalStack endpoint + IAM provisioning before probing, so
+# the check never races container startup.
+for i in $(seq 1 60); do
+  awslocal iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1 && break
+  sleep 2
+done
+
 ###############################################################################
 # PoC: no non-default policy version may grant "*:*"
 ###############################################################################

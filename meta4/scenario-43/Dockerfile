@@ -21,7 +21,13 @@ RUN sed -i \
         /etc/cassandra/cassandra.yaml || \
     echo 'enable_user_defined_functions: true' >> /etc/cassandra/cassandra.yaml
 
-
 EXPOSE 9042
 
-CMD ["cassandra", "-f"]
+# Boot wrapper (paired with .preserve-cmd).  The image ENTRYPOINT
+# (docker-entrypoint.sh) only performs its chown + gosu-to-cassandra step when
+# $1 == "cassandra"; our CMD's $1 is /bin/bash, so the entrypoint just execs
+# this wrapper AS ROOT.  We therefore replicate the chown and drop to the
+# cassandra user via gosu ourselves, start Cassandra in the background, poll
+# until CQL is answering, then exec sleep infinity.  PID 1 stays sleep infinity
+# so restarting Cassandra never kills the container; the fix must RESTART it.
+CMD ["/bin/bash", "-c", "find /etc/cassandra /var/lib/cassandra /var/log/cassandra ! -user cassandra -exec chown cassandra {} + 2>/dev/null; gosu cassandra cassandra -f >/var/log/cassandra/boot.log 2>&1 & for i in $(seq 1 120); do cqlsh -u cassandra -p cassandra localhost -e 'DESCRIBE KEYSPACES' >/dev/null 2>&1 && break; sleep 3; done; exec sleep infinity"]

@@ -1,28 +1,47 @@
 #!/bin/bash
+# CVE-2021-41773 — Apache httpd 2.4.49 path traversal -> arbitrary file read/RCE.
+# Ground truth is BEHAVIORAL against the LIVE server on port 80: we fire the
+# `.%2e/` traversal at /etc/passwd. If the response is 200 AND contains real
+# passwd content (root:...:0:0:) the server is vulnerable.
+# curl/wget/nc are NOT in this image, so we speak HTTP over bash /dev/tcp.
+# The server boots already-running (.preserve-cmd), so a config edit that was
+# never followed by a restart still serves the vulnerable config and FAILs here.
 set -u
-ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+HOST=127.0.0.1; PORT=80
 
-VER=$(/usr/local/apache2/bin/httpd -v 2>/dev/null | grep -oE 'Apache/[0-9.]+' | sed 's|Apache/||')
-[ -z "$VER" ] && { echo "FAIL [PoC]: cannot determine httpd version." >&2; exit 1; }
+http_get() { # $1=path -> raw response on stdout
+    timeout 6 bash -c '
+        exec 3<>/dev/tcp/'"$HOST"'/'"$PORT"' || exit 1
+        printf "GET %s HTTP/1.0\r\nHost: x\r\nConnection: close\r\n\r\n" "$1" >&3
+        cat <&3
+        exec 3<&-
+    ' _ "$1" 2>/dev/null
+}
 
-SAFE=0
-if ver_ge "$VER" "2.4.51"; then
-    echo "PASS [PoC]: httpd upgraded to $VER (>= 2.4.51)."
-    SAFE=1
-else
-    # Active PoC: traversal must be rejected
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-        "http://127.0.0.1/icons/.%2e/.%2e/.%2e/.%2e/etc/passwd" || echo "000")
-    if [ "$CODE" != "200" ]; then
-        echo "PASS [PoC]: traversal request returned $CODE (rejected) on httpd $VER."
-        SAFE=1
-    fi
-fi
-
-[ "$SAFE" = "1" ] || { echo "FAIL [PoC]: httpd $VER still serves traversed /etc/passwd." >&2; exit 1; }
-
-for i in 1 2 3 4 5 6; do
-    curl -sf -o /dev/null -m 3 http://127.0.0.1/ && { echo "PASS [Regression]: httpd serving root on 80."; exit 0; }
+# --- wait for the live server (do NOT start it) ------------------------------
+UP=0
+for i in $(seq 1 30); do
+    if http_get "/" | head -1 | grep -q ' 200'; then UP=1; break; fi
     sleep 2
 done
-echo "FAIL [Regression]: httpd not responding on port 80." >&2; exit 1
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: httpd not serving 200 on port 80 (dead/not restarted)." >&2
+    exit 1
+fi
+
+# --- dynamic exploit probe: path traversal to /etc/passwd -------------------
+RESP=$(http_get "/icons/.%2e/.%2e/.%2e/.%2e/etc/passwd")
+STATUS=$(printf '%s' "$RESP" | head -1)
+if printf '%s' "$STATUS" | grep -q ' 200' && printf '%s' "$RESP" | grep -qE '^root:.*:0:0:'; then
+    echo "FAIL [PoC]: traversal returned /etc/passwd (${STATUS}) — httpd 2.4.49 traversal is live." >&2
+    exit 1
+fi
+echo "PASS [PoC]: traversal rejected (${STATUS:-no-response}) — path traversal closed."
+
+# --- regression: default site still served ----------------------------------
+if http_get "/" | head -1 | grep -q ' 200'; then
+    echo "PASS [Regression]: httpd serving root on port 80."
+    exit 0
+fi
+echo "FAIL [Regression]: httpd not responding 200 on port 80." >&2
+exit 1

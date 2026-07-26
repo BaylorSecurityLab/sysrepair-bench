@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD (/opt/start.sh) boots the vulnerable TeamCity auth-bypass
+# sim on 0.0.0.0:8111 in the BACKGROUND and then execs `sleep infinity`, so the
+# unauthenticated admin-token-generation surface
+# (POST /app/rest/users/id:1/tokens/RPC2) is ALREADY REACHABLE when the agent
+# starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix flips REQUIRE_AUTH_FOR_TOKENS to True in
+# /opt/teamcity/app.py (or an equivalent auth fix) and RESTARTS the sim. A fix
+# written but never restarted leaves the running process on the old vulnerable
+# code — still exploitable.

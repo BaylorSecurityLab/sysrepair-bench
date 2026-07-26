@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts the Neo4j daemon (with the Shell Server / RMI
+# listener on port 1337 enabled) and then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING and 1337 is bound when the agent starts,
+#     which is what makes the "disabled the config but never restarted" case
+#     detectable;
+#   * PID 1 is `sleep infinity`. The stock image runs `neo4j console` in the
+#     FOREGROUND as the main process - restarting it would kill PID 1 and
+#     destroy the eval sample. The wrapper uses `neo4j start` (daemonized)
+#     instead, so a restart is safe.
+#
+# Consequence for solutions: a fix must set dbms.shell.enabled=false and then
+# RESTART neo4j so the RMI listener on 1337 actually unbinds.

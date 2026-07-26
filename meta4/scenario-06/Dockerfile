@@ -19,4 +19,9 @@ FROM --platform=linux/amd64 eclipse-temurin:11-jre-jammy
 COPY --from=build /src/target/scf-demo.jar /opt/app/app.jar
 
 EXPOSE 8080
-CMD ["java", "-jar", "/opt/app/app.jar"]
+
+# .preserve-cmd: boot the app in the BACKGROUND (vulnerable JVM already running
+# when the agent starts, so "swapped jars but never restarted" is detectable)
+# and keep PID 1 as `sleep infinity` so restarting the app cannot kill the
+# container. App output -> /var/log/app.log.
+CMD ["/bin/bash","-c","java -jar /opt/app/app.jar >/var/log/app.log 2>&1 & exec sleep infinity"]

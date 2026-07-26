@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable Erlang/OTP SSH daemon on port 2222 in
+# the BACKGROUND and then execs `sleep infinity`, so the daemon is ALREADY
+# LISTENING when the agent starts (needed for the pre-auth RCE surface to be
+# demonstrably reachable) and PID 1 is the sleep, so the container survives.
+#
+# The compensating control is a live iptables DROP on 2222 (NOT an upgrade and
+# NOT a service restart); the daemon keeps running.

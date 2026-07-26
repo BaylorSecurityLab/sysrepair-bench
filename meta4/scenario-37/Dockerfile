@@ -24,7 +24,10 @@ redis-cli SET "argocd:app:guestbook" \
     '{"name":"guestbook","namespace":"default","status":"Healthy"}' \
     >/dev/null 2>&1
 
-wait $REDIS_PID
+# Boot wrapper (see .preserve-cmd): Redis (no requirepass) stays running in the
+# background with the ArgoCD data seeded, and PID 1 becomes `sleep infinity` so a
+# solution that restarts Redis cannot kill the container / destroy the sample.
+exec sleep infinity
 BASH
 RUN chmod +x /start.sh
 

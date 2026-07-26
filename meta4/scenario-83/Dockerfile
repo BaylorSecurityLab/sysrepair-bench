@@ -10,5 +10,11 @@ USER root
 COPY init-sns-open-topic.sh /etc/localstack/init/ready.d/init.sh
 RUN chmod +x /etc/localstack/init/ready.d/init.sh
 
+COPY start.sh /opt/start.sh
+RUN chmod +x /opt/start.sh
 
 EXPOSE 4566
+
+# Boot LocalStack via a wrapper that keeps PID 1 as `sleep infinity`.
+ENTRYPOINT []
+CMD ["/opt/start.sh"]

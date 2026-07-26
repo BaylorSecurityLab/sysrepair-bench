@@ -1,7 +1,12 @@
 FROM --platform=linux/amd64 debian:bookworm-slim
 
-# PowerDNS Authoritative Server 4.8 with HTTP API enabled and empty api-key.
-# Any unauthenticated client can manage all DNS zones via the REST API.
+# PowerDNS Authoritative Server (bookworm ships 4.7.x) with the HTTP API
+# enabled and a WEAK, well-known api-key ("powerdns"). Any attacker who guesses
+# this trivial default can manage all DNS zones via the REST API.
+#
+# NOTE: an *empty* api-key does NOT open the API on this version - PowerDNS then
+# returns 401 to every request (API locked). The genuine, behaviourally
+# reproducible misconfiguration is a weak/guessable key, seeded below.
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -101,9 +106,9 @@ gsqlite3-database=/var/lib/powerdns/pdns.sqlite3
 local-address=0.0.0.0
 local-port=53
 
-# HTTP API — vulnerable: empty api-key allows unauthenticated access
+# HTTP API — vulnerable: weak, well-known api-key trivially guessable
 api=yes
-api-key=
+api-key=powerdns
 webserver=yes
 webserver-address=0.0.0.0
 webserver-port=8081
@@ -115,4 +120,7 @@ EOF
 
 EXPOSE 53/tcp 53/udp 8081/tcp
 
-CMD ["pdns_server", "--daemon=no"]
+# Boot wrapper: start pdns_server backgrounded, poll for the API on :8081, then
+# exec `sleep infinity` so PID 1 is stable and an agent restarting pdns_server
+# cannot kill the container. See .preserve-cmd.
+CMD ["/bin/bash", "-c", "pdns_server --daemon=no & for i in $(seq 1 30); do nc -z 127.0.0.1 8081 && break; sleep 1; done; exec sleep infinity"]

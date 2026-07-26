@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots ONLY the vulnerable Nacos 1.4.0 server (port 8848,
+# spoofable via User-Agent: Nacos-Server) and then execs `sleep infinity`. The
+# sanitising nginx proxy is NOT started at boot - standing it up on port 8080 is
+# the compensating-control fix. So:
+#   * Nacos is ALREADY RUNNING and spoofable when the agent starts;
+#   * the proxy is absent, making the "wrote proxy config but never started it"
+#     case detectable;
+#   * PID 1 is `sleep infinity`, so starting nginx cannot kill the container.
+#
+# Consequence for solutions: the fix must actually START the nginx sanitising
+# proxy (and restrict the direct Nacos port), not merely leave its config on disk.

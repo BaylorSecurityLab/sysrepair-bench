@@ -52,6 +52,38 @@ db  IN  A   10.0.0.3
 EOF
 
 
+# The base image ships its own /etc/bind/named.conf (with its own options{} block
+# and DoH/DoT listeners) that does NOT include our files. Overwrite it so named
+# actually loads the seeded (vulnerable) options and the local.test zone.
+RUN cat > /etc/bind/named.conf <<'EOF'
+include "/etc/bind/named.conf.options";
+include "/etc/bind/named.conf.local";
+EOF
+
+# BIND's directory-writability check requires the o+w bit on the cache dir, and a
+# control key is needed so the remediation can `rndc reload` the live daemon.
+RUN chmod 0777 /var/cache/bind && rndc-confgen -a
+
+# Boot wrapper (NOT a bare foreground CMD): start named in the BACKGROUND (drop
+# `-g`, so named self-daemonizes and is reparented to tini/PID 1), poll until :53
+# answers, then `exec sleep infinity`. Restarting/reloading named can never kill
+# the container. See .preserve-cmd.
+RUN cat > /boot.sh <<'EOF'
+#!/bin/sh
+named -c /etc/bind/named.conf
+i=0
+while [ "$i" -lt 30 ]; do
+    if dig +short +time=1 +tries=1 @127.0.0.1 local.test A 2>/dev/null | grep -q '10.0.0.1'; then
+        break
+    fi
+    i=$((i+1)); sleep 1
+done
+exec sleep infinity
+EOF
+RUN chmod +x /boot.sh
+
+
 EXPOSE 53/tcp 53/udp
 
-CMD ["named", "-g", "-c", "/etc/bind/named.conf"]
+ENTRYPOINT []
+CMD ["/bin/sh", "/boot.sh"]

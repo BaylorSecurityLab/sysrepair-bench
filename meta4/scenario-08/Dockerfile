@@ -34,4 +34,8 @@ EOF
 RUN mkdir -p /usr/local/apache2/cgi-bin
 
 EXPOSE 80
-CMD ["httpd-foreground"]
+# Boot wrapper (paired with .preserve-cmd): start httpd in the BACKGROUND then
+# exec `sleep infinity`, so PID 1 is the sleep and restarting httpd cannot kill
+# the container. This also makes the "fixed config but never restarted" case
+# detectable. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","/usr/local/apache2/bin/httpd -k start && exec sleep infinity"]

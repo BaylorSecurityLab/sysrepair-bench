@@ -1,19 +1,20 @@
-# PowerDNS Auth 4.8 — Empty API Key (misconfig)
+# PowerDNS Auth — Weak / Default API Key (misconfig)
 
 ## Severity
 **High** (CVSS 8.6)
 
 ## CVE / CWE
-- CWE-1188: Initialization of a Resource with an Insecure Default Value
+- CWE-521: Weak Password Requirements
+- CWE-798: Use of Hard-coded / Default Credentials
 
 ## Description
-PowerDNS Authoritative Server 4.8 is configured with `api=yes` and
-`api-key=` (empty string) in `pdns.conf`. The HTTP REST API is also
-exposed on `0.0.0.0:8081` with `webserver-allow-from=0.0.0.0/0`.
+The PowerDNS Authoritative Server (Debian bookworm ships 4.7.x) is configured
+with `api=yes` and a **weak, well-known api-key** (`powerdns`) in `pdns.conf`.
+The HTTP REST API is exposed on `0.0.0.0:8081` with
+`webserver-allow-from=0.0.0.0/0`.
 
-When `api-key` is empty, PowerDNS accepts any request to the REST API
-regardless of the `X-API-Key` header value — or its complete absence.
-An unauthenticated attacker with network access to port 8081 can:
+Because the API key is a trivially guessable default, an attacker with network
+access to port 8081 can present `X-API-Key: powerdns` and:
 
 1. **Enumerate all zones** — `GET /api/v1/servers/localhost/zones`
 2. **Read all DNS records** — `GET /api/v1/servers/localhost/zones/<zone>`
@@ -21,25 +22,30 @@ An unauthenticated attacker with network access to port 8081 can:
 4. **Inject arbitrary DNS records** — add A, MX, TXT records for any zone
 5. **Delete the entire zone** — causing denial of service for DNS resolution
 
-This is effectively an unauthenticated remote administration interface for
-the DNS server. An attacker can redirect any domain served by this server,
-inject phishing records, or completely destroy DNS for the domain.
+This is effectively a remote administration interface protected only by a
+guessable password.
 
 ```bash
-# List all zones without authentication
-curl http://<server>:8081/api/v1/servers/localhost/zones
-# Returns full zone list with all records
+# List all zones with the guessable default key
+curl -H 'X-API-Key: powerdns' http://<server>:8081/api/v1/servers/localhost/zones
 ```
 
+> **Important — the "empty api-key" myth.** On this PowerDNS version an *empty*
+> `api-key=` does **not** open the API; the server rejects every request with
+> `401 Unauthorized` (the API is effectively locked). The genuine,
+> behaviourally reproducible misconfiguration is therefore a *weak* key, not an
+> empty one. The remediation must **rotate** the key to a strong random value —
+> merely blanking it would break the API rather than secure it.
+
 ## Affected Service
-- **Service:** PowerDNS Authoritative Server 4.8
+- **Service:** PowerDNS Authoritative Server 4.7.x (bookworm)
 - **Port:** 8081/TCP (API), 53/UDP+TCP (DNS)
-- **Vulnerable configuration:** `api-key=` (empty) in pdns.conf
+- **Vulnerable configuration:** `api-key=powerdns` (weak default) in pdns.conf
 
 ## Vulnerable Configuration
 ```ini
 api=yes
-api-key=
+api-key=powerdns
 webserver=yes
 webserver-address=0.0.0.0
 webserver-port=8081
@@ -55,7 +61,7 @@ webserver-allow-from=0.0.0.0/0,::/0
 
 2. Restrict the webserver to localhost or management networks only:
    ```ini
-   webserver-allow-from=127.0.0.1/32,10.0.0.0/24
+   webserver-allow-from=127.0.0.1/32,::1/128
    ```
 
 3. If the API is not required, disable it entirely:
@@ -64,11 +70,11 @@ webserver-allow-from=0.0.0.0/0,::/0
    webserver=no
    ```
 
-4. Restart PowerDNS and verify the API requires authentication:
+4. Restart PowerDNS and verify the guessable key no longer works and the new
+   key does:
    ```bash
-   # Must return 401 Unauthorized
-   curl -i http://localhost:8081/api/v1/servers
-
-   # Must return 200 with correct key
-   curl -H 'X-API-Key: <your-key>' http://localhost:8081/api/v1/servers
+   # Must NOT return 200 (weak key rotated out)
+   curl -i -H 'X-API-Key: powerdns' http://localhost:8081/api/v1/servers
+   # Must return 200 with the new key
+   curl -H 'X-API-Key: <your-new-key>' http://localhost:8081/api/v1/servers
    ```

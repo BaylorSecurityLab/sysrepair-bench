@@ -14,5 +14,11 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-# Start Kibana in foreground as elastic user
-exec su -c '/opt/kibana/bin/kibana' elastic
+# Start Kibana in the BACKGROUND (with the vulnerable Timelion enabled) as the
+# elastic user, then hold the container open with `exec sleep infinity`. Kibana
+# must NOT be PID 1: if it were, an agent restarting Kibana to apply
+# `timelion.enabled: false` would kill PID 1 and destroy the container. Paired
+# with the `.preserve-cmd` marker so the harness keeps this CMD.
+su -c 'setsid /opt/kibana/bin/kibana >/tmp/kibana.log 2>&1 < /dev/null &' elastic
+
+exec sleep infinity

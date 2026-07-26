@@ -13,4 +13,9 @@ RUN apt-get update && \
 
 EXPOSE 27017
 
-CMD ["mongod", "--bind_ip_all"]
+# Boot wrapper (NOT a bare foreground CMD): start mongod WITHOUT --auth in the
+# background (--fork returns only once it is listening) and then
+# `exec sleep infinity` so PID 1 stays sleep infinity. This keeps the vulnerable
+# daemon running from boot (so "fixed config but never restarted" is testable)
+# while letting a solution restart mongod without killing the container.
+CMD ["/bin/bash","-c","mongod --dbpath /data/db --bind_ip_all --fork --logpath /var/log/mongod.log && exec sleep infinity"]

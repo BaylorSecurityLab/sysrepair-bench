@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Spring Cloud Function app (vulnerable
+# spring-cloud-function 3.2.2) in the background and execs `sleep infinity`, so
+# the daemon is already running when the agent starts (making "upgraded the jars
+# but never restarted" detectable) and PID 1 stays `sleep infinity`. Solutions
+# must RESTART the app after upgrading Spring Cloud Function.

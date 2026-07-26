@@ -29,8 +29,23 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Read key from environment — default is the well-known vulnerable value.
-ADMIN_KEY = os.environ.get("APISIX_ADMIN_KEY", "edd1c9f034335f136f87ad84b625c8f1")
+# Admin key is loaded ONCE at process start (like APISIX reading config.yaml):
+#   1) /opt/apisix/admin.key if present (the remediation writes a new key here),
+#   2) else APISIX_ADMIN_KEY env,
+#   3) else the well-known vulnerable default.
+# Because it is read at startup, changing the file requires a RESTART to take
+# effect — a config edit without a restart leaves the default key live.
+def _load_admin_key():
+    try:
+        with open("/opt/apisix/admin.key") as f:
+            k = f.read().strip()
+            if k:
+                return k
+    except Exception:
+        pass
+    return os.environ.get("APISIX_ADMIN_KEY", "edd1c9f034335f136f87ad84b625c8f1")
+
+ADMIN_KEY = _load_admin_key()
 
 def check_auth():
     return request.headers.get("X-API-KEY") == ADMIN_KEY
@@ -58,4 +73,8 @@ PYEOF
 
 EXPOSE 9080
 
-CMD ["python3", "/opt/apisix/server.py"]
+# Boot wrapper (paired with .preserve-cmd): start the admin API in the
+# BACKGROUND then exec `sleep infinity`, so PID 1 is the sleep, the service is
+# already running (with the default key) when the agent starts, and restarting
+# it cannot kill the container. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","python3 /opt/apisix/server.py >/var/log/apisix.log 2>&1 & exec sleep infinity"]

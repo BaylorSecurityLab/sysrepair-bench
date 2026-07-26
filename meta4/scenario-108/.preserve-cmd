@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable Langflow sim on 0.0.0.0:7860 in the
+# BACKGROUND (its /api/v1/run endpoint runs code with no auth) and then execs
+# `sleep infinity`, so the pre-auth RCE surface is ALREADY REACHABLE on the
+# public interface when the agent starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must rebind the backend to loopback and put
+# an authenticated nginx proxy in front, then RESTART both — a config file that
+# was written but never activated leaves the endpoint exposed.

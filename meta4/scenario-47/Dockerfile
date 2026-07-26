@@ -16,4 +16,9 @@ RUN mkdir -p /etc/rabbitmq && \
 
 EXPOSE 5672 15672
 
-CMD ["rabbitmq-server"]
+# Boot wrapper (paired with the .preserve-cmd marker). The image entrypoint ends
+# in `exec "$@"` and the container runs as root, so this runs rabbitmq-server as
+# root (as the stock CMD did). Start it in the background, wait for the
+# management API on 15672 to answer, then exec `sleep infinity` so PID 1 is
+# stable and rabbitmqctl actions cannot kill the container.
+CMD ["/bin/bash", "-c", "rabbitmq-server & for i in $(seq 1 90); do [ -n \"$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:15672/api/overview 2>/dev/null | grep -E '^(200|401)$')\" ] && break; sleep 1; done; exec sleep infinity"]

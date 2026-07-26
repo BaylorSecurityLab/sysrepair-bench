@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD (/opt/start.sh) boots the vulnerable Confluence
+# broken-access-control sim on 0.0.0.0:8090 in the BACKGROUND and then execs
+# `sleep infinity`, so the unauthenticated /setup/setupadministrator.action
+# privilege-escalation surface is ALREADY REACHABLE when the agent starts, and
+# PID 1 is the sleep.
+#
+# Consequence for solutions: the fix flips ENFORCE_SETUP_ACCESS_CONTROL to True
+# in /opt/confluence/app.py (or an equivalent access-control fix) and RESTARTS
+# the sim. A fix written but never restarted leaves the running process on the
+# old vulnerable code — still exploitable.

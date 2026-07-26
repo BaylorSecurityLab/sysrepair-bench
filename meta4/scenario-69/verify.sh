@@ -1,70 +1,87 @@
 #!/bin/bash
-# Scenario 69: Docker CAP_SYS_PTRACE — Process Injection (misconfig)
+# Scenario 69: file capability cap_sys_ptrace on a helper binary (CWE-250).
+#
+# Ground truth is the on-disk security.capability xattr (getcap) PLUS a live,
+# kernel-enforced probe: an unprivileged user (nobody) must NOT be able to use
+# any binary to read a root-owned process's memory map (/proc/1/maps). With the
+# file cap present, exec'ing the binary raises cap_sys_ptrace into the process's
+# effective set and the read succeeds; after `setcap -r` the kernel denies it.
+# The probe only READS /proc — it never mutates the container.
 set -u
 
-###############################################################################
-# PoC: CAP_SYS_PTRACE (bit 19 = 0x80000) must NOT be set in CapEff
-###############################################################################
+FAIL=0
 
-CAPEFF_HEX=$(grep '^CapEff:' /proc/self/status | awk '{print $2}')
-if [ -z "$CAPEFF_HEX" ]; then
-    echo "FAIL [PoC]: Could not read CapEff from /proc/self/status." >&2
-    exit 1
+###############################################################################
+# PoC (static, xattr ground truth): no binary may carry cap_sys_ptrace as a
+# file capability. getcap reads the actual kernel-enforced xattr, not config.
+###############################################################################
+CAPBINS=$(getcap -r / 2>/dev/null | grep -i 'cap_sys_ptrace' || true)
+if [ -n "$CAPBINS" ]; then
+    echo "FAIL [PoC]: binary carries the cap_sys_ptrace file capability:" >&2
+    echo "$CAPBINS" >&2
+    FAIL=1
+else
+    echo "PASS [PoC]: no binary carries a cap_sys_ptrace file capability."
 fi
 
-# Convert hex to decimal and check bit 19 (0x80000)
-PTRACE_BIT=$(python3 -c "v=int('$CAPEFF_HEX',16); print(1 if v & 0x80000 else 0)")
-if [ "$PTRACE_BIT" = "1" ]; then
-    echo "FAIL [PoC]: CAP_SYS_PTRACE is set in CapEff (0x$CAPEFF_HEX). Drop --cap-add SYS_PTRACE." >&2
-    exit 1
+###############################################################################
+# PoC (live, kernel-enforced): as unprivileged 'nobody', try to read a
+# root-owned process's memory map via each candidate binary. Success proves the
+# cap is live and exploitable. /proc/1/maps requires PTRACE_MODE_READ on the
+# target; without cap_sys_ptrace the kernel returns EACCES (empty output).
+###############################################################################
+probe_maps() {
+    # $1 = binary path. Prints the first map line iff the read is permitted.
+    timeout 6 su -s /bin/sh nobody -c "'$1' /proc/1/maps 2>/dev/null" 2>/dev/null | head -1
+}
+
+if id nobody >/dev/null 2>&1; then
+    CANDIDATES="/opt/ptrace-helper"
+    for b in $(printf '%s\n' "$CAPBINS" | awk '{print $1}'); do
+        CANDIDATES="$CANDIDATES $b"
+    done
+    LEAK=0
+    for b in $CANDIDATES; do
+        [ -x "$b" ] || continue
+        OUT=$(probe_maps "$b")
+        if [ -n "$OUT" ]; then
+            echo "FAIL [PoC-live]: unprivileged 'nobody' read /proc/1/maps via $b" \
+                 "(cap_sys_ptrace is live): $OUT" >&2
+            LEAK=1
+        fi
+    done
+    if [ "$LEAK" = "0" ]; then
+        echo "PASS [PoC-live]: unprivileged 'nobody' cannot read /proc/1/maps (ptrace denied)."
+    else
+        FAIL=1
+    fi
+else
+    echo "FAIL [PoC-live]: no 'nobody' user available to test the privilege drop." >&2
+    FAIL=1
 fi
-echo "PASS [PoC]: CAP_SYS_PTRACE is NOT set in CapEff (0x$CAPEFF_HEX)."
 
 ###############################################################################
-# PoC (behavioural): capsh --print reflects live kernel-enforced capability
-# state. Parse its "Current:" line and confirm cap_sys_ptrace is absent from
-# both the effective and permitted sets. This exercises runtime capability
-# enforcement, not just a grep of config.
+# Regression: basic tooling still works, and the helper (if kept) still works
+# as an ordinary utility (reading a world-readable file must succeed).
 ###############################################################################
-
-CAPSH_OUT=$(capsh --print 2>/dev/null || true)
-if [ -z "$CAPSH_OUT" ]; then
-    echo "FAIL [PoC-live]: capsh --print produced no output." >&2
-    exit 1
-fi
-
-if echo "$CAPSH_OUT" | grep -E '^Current:' | grep -q 'cap_sys_ptrace'; then
-    echo "FAIL [PoC-live]: capsh --print shows cap_sys_ptrace in the live capability set." >&2
-    echo "$CAPSH_OUT" | grep -E '^Current:' >&2
-    exit 1
-fi
-echo "PASS [PoC-live]: capsh --print confirms cap_sys_ptrace is NOT in the live capability set."
-
-# Additional behavioural probe: read PID 1's maps. Without CAP_SYS_PTRACE and
-# as a non-privileged-enough process, reading /proc/1/maps for a different
-# user's process would normally require the capability. Here we just confirm
-# /proc/1/status Uid line is readable (sanity) and that /proc/1/mem cannot be
-# opened for reading without ptrace permission.
-if dd if=/proc/1/mem of=/dev/null bs=1 count=1 2>/dev/null; then
-    echo "FAIL [PoC-live]: /proc/1/mem was readable — ptrace-class access granted." >&2
-    exit 1
-fi
-echo "PASS [PoC-live]: /proc/1/mem read was denied at runtime."
-
-###############################################################################
-# Regression: basic commands still work inside the container
-###############################################################################
-
 if ! ls /tmp >/dev/null 2>&1; then
     echo "FAIL [Regression]: 'ls /tmp' failed — container is broken." >&2
-    exit 1
+    FAIL=1
+else
+    echo "PASS [Regression]: basic file operations work normally."
 fi
-echo "PASS [Regression]: 'ls /tmp' works normally."
 
-if ! ps aux >/dev/null 2>&1; then
-    echo "FAIL [Regression]: 'ps aux' failed — container is broken." >&2
-    exit 1
+if [ -x /opt/ptrace-helper ]; then
+    if ! /opt/ptrace-helper /etc/hostname >/dev/null 2>&1; then
+        echo "FAIL [Regression]: /opt/ptrace-helper cannot read a normal file — broken." >&2
+        FAIL=1
+    else
+        echo "PASS [Regression]: helper still functions as a normal utility."
+    fi
 fi
-echo "PASS [Regression]: 'ps aux' works normally."
 
-exit 0
+if [ "$FAIL" = "0" ]; then
+    echo "All checks passed."
+    exit 0
+fi
+exit 1

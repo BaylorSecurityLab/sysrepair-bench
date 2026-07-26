@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Elasticsearch (backgrounded, as the elasticsearch
+# user) with X-Pack security disabled, then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING with an open, unauthenticated REST API when
+#     the agent starts, which makes the "enabled security in the config but
+#     never restarted" case detectable (the live node still answers 200 to
+#     anonymous requests);
+#   * PID 1 is still `sleep infinity`, so restarting ES cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must enable xpack.security, provision the
+# elastic user password, AND RESTART Elasticsearch.  ES boots in ~40s; wait for
+# readiness after restart.

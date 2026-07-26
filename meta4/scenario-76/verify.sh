@@ -35,15 +35,20 @@ if [ "$NP_COUNT" -lt 1 ]; then
 fi
 echo "PASS [PoC]: NetworkPolicy exists in namespace 'secure-middleware' ($NP_COUNT policy/policies found)."
 
-# Verify a default-deny policy (podSelector: {}) exists
-DENY_FOUND=$(kubectl get networkpolicy -n secure-middleware -o json 2>/dev/null | \
-    grep -c '"podSelector": {}' || echo 0)
+# Verify a default-deny policy (empty podSelector, applies to all pods) that
+# covers Ingress exists. Whitespace is stripped so the match does not depend on
+# kubectl's JSON indentation, and we read the LIVE API rather than any file.
+NP_JSON=$(kubectl get networkpolicy -n secure-middleware -o json 2>/dev/null | tr -d ' \t\n')
 
-if [ "$DENY_FOUND" -lt 1 ]; then
+if ! printf '%s' "$NP_JSON" | grep -q '"podSelector":{}'; then
     echo "FAIL [PoC]: No default-deny NetworkPolicy (empty podSelector) found in 'secure-middleware'." >&2
     exit 1
 fi
-echo "PASS [PoC]: Default-deny NetworkPolicy is present in 'secure-middleware'."
+if ! printf '%s' "$NP_JSON" | grep -q '"Ingress"'; then
+    echo "FAIL [PoC]: A NetworkPolicy exists but none applies an Ingress default-deny in 'secure-middleware'." >&2
+    exit 1
+fi
+echo "PASS [PoC]: Default-deny (Ingress, empty podSelector) NetworkPolicy is present in 'secure-middleware'."
 
 ###############################################################################
 # Regression: k3s API server must respond

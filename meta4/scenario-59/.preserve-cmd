@@ -1,0 +1,15 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is a boot wrapper (/boot.sh) that starts unbound in the
+# BACKGROUND (self-daemonized, no `-d`), polls until :53 answers, then execs
+# `sleep infinity`, so:
+#   * the resolver is ALREADY RUNNING as an open resolver with version disclosure
+#     when the agent starts, which is what makes the "edited unbound.conf but
+#     never restarted unbound" case detectable (unbound reads config only at
+#     startup);
+#   * PID 1 is `sleep infinity` (tini reaps unbound), so restarting unbound
+#     cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART unbound (kill + relaunch), not
+# merely start it if absent - it is already up with the vulnerable configuration.
+# Do NOT kill PID 1.

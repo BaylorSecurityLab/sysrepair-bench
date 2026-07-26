@@ -21,4 +21,9 @@ RUN mkdir -p /auth && \
 
 EXPOSE 5000
 
-# Default CMD inherited from registry:2 base image
+# Boot wrapper (see .preserve-cmd): start the registry with NO auth in the
+# BACKGROUND then exec `sleep infinity`, so PID 1 is the wrapper. This keeps the
+# unauthenticated registry live when the agent starts and lets a solution
+# restart the registry (with auth) without killing the container.
+ENTRYPOINT []
+CMD ["/bin/bash", "-c", "registry serve /etc/docker/registry/config.yml & exec sleep infinity"]

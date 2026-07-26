@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots DVGA (gevent server on :5013) in the background with
+# its default insecure posture and then execs `sleep infinity`, so:
+#   * DVGA is ALREADY RUNNING when the agent starts, making the "patched the
+#     source but never restarted the server" case detectable (gevent does not
+#     re-import core/middleware.py per request);
+#   * PID 1 is `sleep infinity`, so restarting DVGA cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART DVGA, not merely start it if
+# absent - it is already up with the vulnerable middleware loaded.

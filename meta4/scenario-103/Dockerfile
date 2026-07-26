@@ -30,7 +30,8 @@ RUN sed -i 's/^Listen localhost:631/Port 631/' /etc/cups/cupsd.conf && \
 
 EXPOSE 631
 
-CMD ["bash", "-c", \
-    "service cups start && \
-     cups-browsed & \
-     sleep infinity"]
+# Boot wrapper (paired with .preserve-cmd): start cupsd AND the vulnerable
+# cups-browsed daemon in the BACKGROUND, then exec `sleep infinity` so PID 1 is
+# the sleep and both daemons are already running when the agent starts. NOT a
+# bare foreground CMD.
+CMD ["/bin/bash","-c","service cups start; sleep 2; cups-browsed >/var/log/cups-browsed.log 2>&1 & exec sleep infinity"]

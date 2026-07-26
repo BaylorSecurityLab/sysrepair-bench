@@ -3,8 +3,9 @@
 from pyModbusTCP.server import ModbusServer, DataBank
 
 server = ModbusServer(host="0.0.0.0", port=502, no_block=True)
-# Pre-populate holding registers with dummy PLC values
-DataBank.set_holding_registers(0, [100, 200, 300, 400, 500, 0, 0, 0, 0, 0])
+# Pre-populate holding registers with dummy PLC values. pyModbusTCP 0.3.x uses a
+# per-server DataBank instance (server.data_bank), not the old DataBank classmethod.
+server.data_bank.set_holding_registers(0, [100, 200, 300, 400, 500, 0, 0, 0, 0, 0])
 server.start()
 
 import time

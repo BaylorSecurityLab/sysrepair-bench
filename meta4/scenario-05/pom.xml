@@ -19,6 +19,11 @@
 
   <properties>
     <java.version>11</java.version>
+    <!-- Spring Boot 2.6.6 ships Spring Framework 5.3.18 (the Spring4Shell FIX).
+         Pin the framework back to the vulnerable 5.3.17 so CVE-2022-22965 is
+         genuinely present in the built image. Maven Central artifacts are
+         immutable, so version-pinning is a hermetic, reproducible selection. -->
+    <spring-framework.version>5.3.17</spring-framework.version>
   </properties>
 
   <dependencies>

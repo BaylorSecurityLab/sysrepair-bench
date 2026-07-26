@@ -9,7 +9,7 @@ if [ -f "$SUDO" ] && [ ! -u "$SUDO" ]; then
     echo "PASS [PoC]: sudo setuid bit cleared."
     SAFE=1
 fi
-# Path B: version upgraded (upstream numbering, e.g. 1.9.5p2)
+# Path B: upstream source build upgraded (upstream numbering, e.g. 1.9.5p2)
 VER_UP=$("$SUDO" -V 2>/dev/null | awk '/Sudo version/{print $3; exit}')
 if [ -n "$VER_UP" ]; then
     NORM=$(echo "$VER_UP" | sed -E 's/p([0-9]+)/.\1/')
@@ -19,7 +19,19 @@ if [ -n "$VER_UP" ]; then
     fi
 fi
 
-[ "$SAFE" = "1" ] || { echo "FAIL [PoC]: sudo $VER_UP vulnerable and setuid bit intact." >&2; exit 1; }
+# Path B2: distro-backported fix. Debian/Ubuntu backport the CVE-2021-3156
+# patch WITHOUT bumping the upstream version, so `sudo -V` still reports the
+# old upstream string (e.g. 1.8.31) after a legitimate `apt install`. The real
+# ground truth for a distro package is the *package revision*: CVE-2021-3156
+# was fixed on Ubuntu 20.04 in sudo 1.8.31-1ubuntu1.2 (USN-4705-1). Without
+# this the Path B check above can NEVER see the documented apt remediation.
+DPKG_VER=$(dpkg-query -W -f='${Version}' sudo 2>/dev/null || true)
+if [ -n "$DPKG_VER" ] && dpkg --compare-versions "$DPKG_VER" ge "1.8.31-1ubuntu1.2"; then
+    echo "PASS [PoC]: sudo package patched ($DPKG_VER >= 1.8.31-1ubuntu1.2)."
+    SAFE=1
+fi
+
+[ "$SAFE" = "1" ] || { echo "FAIL [PoC]: sudo (upstream $VER_UP / pkg ${DPKG_VER:-none}) vulnerable and setuid bit intact." >&2; exit 1; }
 
 # PoC (behavioral): attempt CVE-2021-3156 trigger via sudoedit -s
 # A vulnerable sudo segfaults; a patched one reports an error cleanly.

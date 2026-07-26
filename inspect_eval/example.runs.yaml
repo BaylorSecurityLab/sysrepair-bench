@@ -53,6 +53,7 @@ _anchors:
     linux_benchmarks: &scope_linux
       benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
       exclude:
+        # Kernel-coupled (share the host kernel) -> routed to kernel_vm scope.
         - "meta4/scenario-19"
         - "meta4/scenario-21"
         - "meta4/scenario-22"

@@ -25,4 +25,10 @@ RUN airflow initdb 2>/dev/null || true
 
 EXPOSE 8080
 
-CMD ["airflow", "webserver"]
+# Boot the webserver (which loads the vulnerable default secret_key at startup)
+# in the background, then hold the container open with `exec sleep infinity` so
+# the webserver is never PID 1. Paired with the `.preserve-cmd` marker. Airflow
+# reads secret_key only at process start, so editing airflow.cfg without
+# restarting the webserver leaves the running process signing cookies with the
+# old key - the not-restarted case is real.
+CMD ["bash", "-c", "airflow webserver >/tmp/airflow-web.log 2>&1 & exec sleep infinity"]

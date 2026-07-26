@@ -1,67 +1,75 @@
 #!/bin/bash
 # Scenario 05: Spring4Shell (CVE-2022-22965)
+#
+# BEHAVIOURAL verifier. It does not grep the jar version. It fires the real
+# CVE-2022-22965 data-binder attack at the LIVE service: it walks the exact
+# malicious property chain
+#   class.module.classLoader.resources.context.parent.pipeline.first.*
+# to reconfigure Tomcat's AccessLogValve on the running server (setting
+# buffered=false so the change is observable immediately, and a unique marker
+# as the log pattern), then makes one probe request. If the class-loader
+# traversal binds - i.e. the CVE is live - the very next access-log line is
+# written in our injected pattern and the marker appears. On patched Spring
+# (>= 5.3.18) the traversal is refused, the pattern is unchanged, and the
+# marker never appears.
+#
+# NB: this is the same primitive that the public webshell-drop PoC abuses (it
+# just points the valve at a .jsp instead of a marker); demonstrating we can
+# rewrite the valve config through the class loader IS the vulnerability. On the
+# PASS path (patched) the binding is refused, so nothing is mutated.
+#
+# Truth table:
+#   Spring 5.3.17 running          -> marker appears -> FAIL
+#   Spring 5.3.18 + Tomcat restart -> no marker      -> PASS
+#   5.3.18 jars but NOT restarted  -> marker appears -> FAIL (old classes)
+#   nothing done                   -> marker appears -> FAIL
+
 set -u
-ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+URL=http://127.0.0.1:8080/app/greet
+P='class.module.classLoader.resources.context.parent.pipeline.first'
+MARKER="SP4SHELL_$$_$(date +%s)"
+LOGGLOB='/usr/local/tomcat/logs/localhost_access_log.*.txt'
 
-# After Tomcat unpacks the WAR, Spring jars are in WEB-INF/lib.
-APP_LIB="/usr/local/tomcat/webapps/app/WEB-INF/lib"
-
-# Wait for Tomcat to unpack the WAR
-for i in $(seq 1 30); do
-    [ -d "$APP_LIB" ] && break
+# The image CMD boots Tomcat (see .preserve-cmd); a live daemon is expected.
+# verify.sh must NOT start it - a dead service is a failure.
+UP=0
+for i in $(seq 1 40); do
+    if [ "$(curl -sf -m 3 "$URL?name=up" 2>/dev/null)" = "hello up" ]; then UP=1; break; fi
     sleep 2
 done
-
-# Also check Tomcat's shared lib (remediator may have placed jars there)
-for d in "$APP_LIB" "/usr/local/tomcat/lib"; do
-    JAR=$(ls "$d"/spring-core-*.jar 2>/dev/null | head -1)
-    [ -n "$JAR" ] && break
-done
-
-[ -z "${JAR:-}" ] && { echo "FAIL [PoC]: spring-core jar not found." >&2; exit 1; }
-
-VER=$(basename "$JAR" | sed -E 's/spring-core-([0-9.]+)\.jar/\1/')
-
-if ! ver_ge "$VER" "5.3.18"; then
-    echo "FAIL [PoC]: spring-core is $VER (need >= 5.3.18)." >&2
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: /app/greet not reachable - a dead service is a failure." >&2
     exit 1
 fi
 
-# All spring-* jars in the WAR must also be upgraded
-for j in "$APP_LIB"/spring-*.jar; do
-    [ -f "$j" ] || continue
-    v=$(basename "$j" | sed -E 's/^spring-[a-z]+-([0-9.]+)\.jar$/\1/')
-    [ "$v" = "$(basename "$j")" ] && continue
-    ver_ge "$v" "5.3.18" || { echo "FAIL [PoC]: $j still at $v." >&2; exit 1; }
-done
-echo "PASS [PoC]: spring-core upgraded to $VER (>= 5.3.18)."
+###############################################################################
+# PoC: drive the class-loader data-binding to rewrite the AccessLogValve.
+###############################################################################
+curl -s -o /dev/null -m 6 -G "$URL" \
+    --data-urlencode "$P.buffered=false" \
+    --data-urlencode "$P.pattern=$MARKER %s" 2>/dev/null
+# One probe request whose access-log line will carry the injected pattern iff
+# the traversal bound.
+curl -s -o /dev/null -m 6 "$URL?name=probe" 2>/dev/null
+sleep 2
 
-# PoC (behavioral): attempt the Spring4Shell class-loader parameter injection
-# A patched Spring Framework ignores the class.module chain; verify it does not
-# write a shell JSP (or return 400 for the invalid parameter).
-for i in $(seq 1 15); do
-    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/app/greet?name=test"; then
-        EXPLOIT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            "http://127.0.0.1:8080/app/greet?class.module.classLoader.resources.context.parent.pipeline.first.pattern=VERIFY_PROBE&class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp&class.module.classLoader.resources.context.parent.pipeline.first.directory=webapps/ROOT&class.module.classLoader.resources.context.parent.pipeline.first.prefix=verify_probe&class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=" \
-            2>/dev/null || echo "000")
-        # Check that the probe JSP was NOT written
-        PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 3 \
-            "http://127.0.0.1:8080/verify_probe.jsp" 2>/dev/null || echo "000")
-        if [ "$PROBE_CODE" = "200" ]; then
-            echo "FAIL [PoC]: Spring4Shell exploit wrote verify_probe.jsp — class-loader injection still works." >&2
-            exit 1
-        fi
-        echo "PASS [PoC]: Spring4Shell class-loader injection did not write a JSP (probe returned $PROBE_CODE)."
-        break
-    fi
-    sleep 2
-done
+if grep -hq "$MARKER" $LOGGLOB 2>/dev/null; then
+    echo "FAIL [PoC]: the class.module.classLoader data-binder rewrote Tomcat's" >&2
+    echo "            AccessLogValve on the live server - Spring4Shell" >&2
+    echo "            (CVE-2022-22965) is exploitable." >&2
+    exit 1
+fi
+echo "PASS [PoC]: class-loader property traversal was refused (no valve rewrite)."
 
-# Regression: /app/greet must still work
-for i in $(seq 1 30); do
-    R=$(curl -sf -m 3 "http://127.0.0.1:8080/app/greet?name=test" 2>/dev/null || true)
-    [ "$R" = "hello test" ] && { echo "PASS [Regression]: /app/greet returns expected body."; exit 0; }
-    sleep 2
-done
-echo "FAIL [Regression]: /app/greet did not return 'hello test'." >&2
-exit 1
+###############################################################################
+# Regression: the app must still serve normally.
+###############################################################################
+R=$(curl -sf -m 5 "$URL?name=test" 2>/dev/null || true)
+if [ "$R" != "hello test" ]; then
+    echo "FAIL [Regression]: /app/greet did not return 'hello test' (got '$R')." >&2
+    exit 1
+fi
+echo "PASS [Regression]: /app/greet returns 'hello test'."
+
+echo "All checks passed."
+exit 0

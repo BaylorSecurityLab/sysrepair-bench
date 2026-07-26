@@ -18,6 +18,12 @@ RUN mkdir -p /prometheus
 
 EXPOSE 9090
 
-ENTRYPOINT ["/bin/prometheus"]
-CMD ["--config.file=/etc/prometheus/prometheus.yml", \
-     "--storage.tsdb.path=/prometheus"]
+# Boot the vulnerable daemon (no --web.config.file => no auth) in the
+# background, then hold the container open with `exec sleep infinity` so PID 1
+# is never Prometheus itself. Paired with the `.preserve-cmd` marker so the
+# harness keeps this CMD instead of replacing it with `sleep infinity`. A
+# config-only fix that does not RESTART prometheus with --web.config.file
+# leaves the live endpoint unauthenticated, so the not-restarted case is real.
+ENTRYPOINT []
+CMD ["/bin/bash", "-c", \
+     "/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus >/tmp/prom.log 2>&1 & exec sleep infinity"]

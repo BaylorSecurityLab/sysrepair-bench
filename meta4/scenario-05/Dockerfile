@@ -26,4 +26,9 @@ COPY --from=build /src/target/spring4shell-demo.war \
      /usr/local/tomcat/webapps/app.war
 
 EXPOSE 8080
-CMD ["catalina.sh", "run"]
+
+# .preserve-cmd: boot Tomcat in the BACKGROUND (vulnerable Spring 5.3.17 WAR
+# already deployed and running when the agent starts, so "swapped the jars but
+# never restarted Tomcat" is detectable) and keep PID 1 as `sleep infinity` so
+# restarting Tomcat cannot kill the container.
+CMD ["/bin/bash","-c","/usr/local/tomcat/bin/catalina.sh start && exec sleep infinity"]

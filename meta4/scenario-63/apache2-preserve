@@ -1,0 +1,10 @@
+#!/bin/bash
+# preserve-cmd boot wrapper for the roundcube image.
+#
+# The image ENTRYPOINT (/docker-entrypoint.sh) only runs its first-boot docroot
+# setup when the command starts with "apache2" (`[[ "$1" == apache2* ]]`), then
+# `exec "$@"`. Naming this wrapper "apache2-preserve" keeps that setup running,
+# after which we start Apache in the BACKGROUND and exec `sleep infinity` so
+# PID 1 is this wrapper (restarting Apache cannot kill the container).
+apache2-foreground &
+exec sleep infinity

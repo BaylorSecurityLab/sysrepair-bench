@@ -1,4 +1,4 @@
-# Docker Image Secrets in ENV/Layers — Cleartext Storage (misconfig)
+# Plaintext Secret Shipped In A World-Readable File — CWE-312
 
 ## Severity
 **High** (CVSS 8.8)
@@ -7,44 +7,55 @@
 - CWE-312: Cleartext Storage of Sensitive Information
 
 ## Description
-Secrets (passwords, API keys, tokens) embedded in Docker `ENV` instructions are
-stored in cleartext in two places that persist beyond the running container:
+Baking a secret into an image as cleartext exposes it to anyone who can read the
+image or reach a low-privilege process inside the container. Here a database
+password and API key ship in `/etc/appsecrets/db.conf` as **world-readable
+plaintext** (mode 0644). They are readable by:
 
-1. **Image metadata:** Every `ENV` instruction is recorded in the image
-   manifest. Anyone who can pull the image can run `docker inspect <image>` and
-   read all environment variables, including secrets — no container execution
-   required.
-2. **Layer history:** `docker history --no-trunc <image>` exposes every
-   Dockerfile instruction, including `ENV DB_PASSWORD=SuperSecret123`.
-
-Additionally, the running container exposes secrets via:
-- `docker inspect <container>` → `Config.Env` array
-- `/proc/1/environ` inside the container (readable by any process in the
-  container's PID namespace)
-
-Unlike secrets in RUN commands (which can sometimes be scrubbed by squashing
-layers), `ENV` values cannot be removed from an image without rebuilding it
-from scratch without those instructions.
+- any unprivileged user or co-tenant process inside the container
+  (`cat /etc/appsecrets/db.conf`);
+- anyone who pulls the image or unpacks its layers — the value persists in every
+  copy pushed to a registry, shared in a tarball, or cached on a build host.
 
 ## Affected Service
-- **Image:** Any Docker image with `ENV` instructions containing secrets
-- **Exposed values:** `DB_PASSWORD=SuperSecret123`, `API_KEY=sk-live-abc123`
+- **Service:** Ubuntu 22.04 application container (`/usr/local/bin/appd.sh`)
+- **Vulnerable configuration:** `/etc/appsecrets/db.conf` (mode 0644) contains
+  `DB_PASSWORD=SuperSecret123` and `API_KEY=sk-live-abc123`, baked into the image
+  layers.
 
 ## Vulnerable Configuration
-- `ENV DB_PASSWORD=SuperSecret123` in Dockerfile
-- `ENV API_KEY=sk-live-abc123` in Dockerfile
-- Secrets present in `env` output inside the container and in `/proc/1/environ`
+- Secret stored in a world-readable file baked into the image
+- Any user/process in the container can read the credential without privileges
+
+> Design note: an earlier version of this scenario baked the secrets into image
+> `ENV` instructions (`ENV DB_PASSWORD=...`). A baked image `ENV` is injected by
+> Docker into every process environment and `/proc/1/environ` and **cannot be
+> removed by any in-container remediation** — only an image rebuild removes it —
+> which made the scenario unsolvable inside the running container. The
+> world-readable secret file models the same cleartext-storage weakness
+> (CWE-312) while being remediable at runtime (the same reframe applied to
+> meta4/scenario-88, with a distinct secret and path so the two scenarios remain
+> independent).
 
 ## Remediation Steps
-1. Remove all `ENV` secret instructions from the Dockerfile. Rebuild the image.
-2. Inject secrets at **runtime** using one of:
-   - `docker run -e DB_PASSWORD="$(secret_provider get db_password)"` — avoids
-     baking into the image but still exposes via `docker inspect`.
-   - **Docker Secrets** (Swarm mode): mount at `/run/secrets/<name>` and read
-     as a file — never appears in env or image metadata.
-   - **Kubernetes Secrets** mounted as volumes — same file-based pattern.
-   - A secrets manager sidecar (Vault Agent, AWS Secrets Manager CSI driver).
-3. If the image has already been pushed with baked secrets, rotate all exposed
-   credentials immediately, then rebuild and repush without secrets.
-4. Add a pre-commit hook or CI step using `trufflehog` or `detect-secrets` to
-   prevent secrets from entering Dockerfiles.
+The weakness is **cleartext storage in a file an unprivileged user can read** —
+it applies to **both** `DB_PASSWORD` and `API_KEY`. The fix is to make the
+secret unreadable to unprivileged users, either by removing the world-readable
+file or by restricting it to root only.
+
+1. Remove the plaintext secret from the world-readable image path
+   (`rm /etc/appsecrets/db.conf`), **or** restrict the file so unprivileged
+   users cannot read it (`chown root:root /etc/appsecrets/db.conf &&
+   chmod 600 /etc/appsecrets/db.conf`). This must cover every secret in the
+   file — `DB_PASSWORD` and `API_KEY` alike.
+2. Preferably serve the secrets from a restricted runtime source — a
+   Docker/BuildKit secret mount or a root-only file such as
+   `/run/secrets/db_password` (mode 0600, owned by root).
+3. Have the application read the password from that restricted source instead of
+   the world-readable file (`app.sh` already prefers `/run/secrets/db_password`).
+4. **Rotation alone does NOT remediate this.** Changing the secret *value* while
+   leaving it in a world/group-readable file (e.g.
+   `sed -i 's/OldSecret/NewSecret/' /etc/appsecrets/db.conf`) leaves a plaintext
+   credential readable by any unprivileged user — the CWE-312 weakness is
+   unchanged. Rotate the previously exposed credentials **in addition to**, never
+   instead of, restricting or removing the cleartext file.

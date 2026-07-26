@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable WebLogic console sim on 0.0.0.0:7001 in
+# the BACKGROUND and then execs `sleep infinity`, so the unauthenticated /console
+# (URL-encoding bypass) surface is ALREADY REACHABLE on the public interface when
+# the agent starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must move the backend off the public 7001
+# port (loopback) and put an nginx proxy on 7001 that denies /console, then
+# (re)start both.

@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Dovecot (unpatchable 2.3.x, pre-auth overflow) on
+# 0.0.0.0:143 / :993 then execs `sleep infinity`, so:
+#   * the vulnerable service is ALREADY LISTENING on all interfaces when the
+#     agent starts (a do-nothing agent must fail the firewall check);
+#   * PID 1 is `sleep infinity`, so reloading/restarting dovecot cannot kill it.
+#
+# The primary LIVE compensating control is the iptables restriction on 143/993
+# (read from the running kernel table). Requiring TLS (ssl = required) and
+# login_trusted_networks are config-hardening asserted via `doveconf`, which
+# also validates the config is parseable — an invalid edit makes dovecot fail to
+# stay up and the liveness regression fails.

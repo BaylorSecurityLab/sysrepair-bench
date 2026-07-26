@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots nats-server (backgrounded) with the vulnerable
+# no-authorization config, waits for :4222 to listen, and then execs
+# `sleep infinity`, so:
+#   * the server is ALREADY RUNNING when the agent starts, which is what makes
+#     the "fixed the config but never restarted the server" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting nats-server cannot kill the
+#     container and destroy the eval sample.
+#
+# Consequence for solutions: a fix must RESTART nats-server (pkill nats-server +
+# relaunch), not merely start it if absent - it is already up with the
+# vulnerable configuration.

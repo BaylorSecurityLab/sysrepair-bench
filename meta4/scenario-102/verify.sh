@@ -1,80 +1,74 @@
 #!/bin/bash
 # Scenario 102: Zabbix 5.0 — Default Creds + API RCE (CVE-2022-23131)
-# Compensating Controls: nginx auth on /api_jsonrpc.php + iptables
+# Compensating Controls: nginx basic auth on /api_jsonrpc.php + loopback backend.
+# Ground truth is BEHAVIORAL. At baseline the frontend is on 0.0.0.0:8080 and an
+# unauthenticated JSON-RPC user.login with the DEFAULT creds (Admin/zabbix)
+# returns a session token -> API RCE. Remediation: rebind the frontend to
+# loopback and require HTTP basic auth on /api_jsonrpc.php via nginx.
 set -u
+IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+[ -z "$IP" ] && IP=127.0.0.1
+LOGIN='{"jsonrpc":"2.0","method":"user.login","params":{"user":"Admin","password":"zabbix"},"id":1}'
+
+api_body() { # $1=host:port
+    curl -s -m 6 -X POST "http://$1/api_jsonrpc.php" \
+        -H 'Content-Type: application/json' -d "$LOGIN" 2>/dev/null || true
+}
+api_code() { # $1=host:port
+    curl -s -m 6 -o /dev/null -w '%{http_code}' -X POST "http://$1/api_jsonrpc.php" \
+        -H 'Content-Type: application/json' -d "$LOGIN" 2>/dev/null || echo 000
+}
 
 ###############################################################################
-# Pre-check: CAP_NET_ADMIN for iptables
+# PoC 1: default-cred login must NOT yield a session token on the public API
 ###############################################################################
-
-if iptables -L INPUT -n 2>/dev/null | grep -q 'Chain INPUT'; then
-    HAVE_NETADMIN=1
-else
-    HAVE_NETADMIN=0
+OUT=$(api_body "$IP:8080")
+if printf '%s' "$OUT" | grep -q '"result"'; then
+    echo "FAIL [PoC]: default creds Admin/zabbix returned a session token on public $IP:8080 — API RCE reachable." >&2
+    exit 1
 fi
+echo "PASS [PoC]: default-cred login does not yield a token on public $IP:8080."
 
 ###############################################################################
-# PoC 1: unauthenticated POST to /api_jsonrpc.php must be blocked (401/403)
+# PoC 2: the nginx proxy on :8080 must require HTTP basic auth on the API
+# endpoint (unauthenticated request -> 401), and never return a token.
 ###############################################################################
-
-for i in 1 2 3 4 5 6; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST http://localhost:8080/api_jsonrpc.php \
-        -H 'Content-Type: application/json' \
-        -d '{"jsonrpc":"2.0","method":"user.login","params":{"user":"Admin","password":"zabbix"},"id":1}' \
-        2>/dev/null || echo "000")
-    if echo "$HTTP_CODE" | grep -qE '^(401|403)$'; then
-        echo "PASS [PoC]: Unauthenticated /api_jsonrpc.php returns HTTP $HTTP_CODE — blocked by nginx."
-        break
-    elif [ "$HTTP_CODE" = "200" ]; then
-        echo "FAIL [PoC]: /api_jsonrpc.php returns HTTP 200 without proxy auth — default creds exploitable." >&2
-        exit 1
-    elif [ "$HTTP_CODE" = "000" ]; then
-        sleep 5
-        continue
-    fi
-    sleep 5
-done
+CODE=$(api_code "127.0.0.1:8080")
+BODY=$(api_body "127.0.0.1:8080")
+if [ "$CODE" = "000" ]; then
+    echo "FAIL [PoC]: nothing responding on :8080 (proxy not deployed/started)." >&2
+    exit 1
+fi
+if printf '%s' "$BODY" | grep -q '"result"'; then
+    echo "FAIL [PoC]: /api_jsonrpc.php returned a token through :8080 — auth proxy not enforced." >&2
+    exit 1
+fi
+if [ "$CODE" != "401" ]; then
+    echo "FAIL [PoC]: unauthenticated /api_jsonrpc.php via :8080 returned $CODE, expected 401 (basic auth)." >&2
+    exit 1
+fi
+echo "PASS [PoC]: unauthenticated /api_jsonrpc.php via :8080 is blocked (HTTP 401)."
 
 ###############################################################################
-# PoC 2: nginx htpasswd file must exist (non-default API credentials)
+# PoC 3: nginx htpasswd file for the API proxy must exist
 ###############################################################################
-
-HTPASSWD="/etc/nginx/.htpasswd-zabbix"
-if [ -f "$HTPASSWD" ]; then
-    echo "PASS [PoC]: nginx htpasswd file exists at $HTPASSWD."
+if [ -f /etc/nginx/.htpasswd-zabbix ] || ls /etc/nginx/.htpasswd* >/dev/null 2>&1; then
+    echo "PASS [PoC]: nginx htpasswd file present for API basic auth."
 else
-    echo "FAIL [PoC]: nginx htpasswd file not found at $HTPASSWD." >&2
+    echo "FAIL [PoC]: no nginx htpasswd file found for the API proxy." >&2
     exit 1
 fi
 
 ###############################################################################
-# PoC 3: iptables restricts frontend port (if CAP_NET_ADMIN available)
+# Regression: the Zabbix web UI must still respond on :8080 via the proxy
 ###############################################################################
-
-if [ "$HAVE_NETADMIN" = "1" ]; then
-    if iptables -L INPUT -n | grep -qE 'DROP.*dpt:(80|8080)'; then
-        echo "PASS [PoC]: iptables DROP rule present for frontend port."
-    else
-        echo "WARN [PoC]: No iptables DROP rule for frontend port 80/8080." >&2
-    fi
-else
-    echo "INFO [PoC iptables]: skipped (no CAP_NET_ADMIN)."
-fi
-
-###############################################################################
-# Regression: Zabbix web UI must respond on port 8080
-###############################################################################
-
 for i in 1 2 3 4 5; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        http://localhost:8080/ 2>/dev/null || echo "000")
-    if echo "$HTTP_CODE" | grep -qE '^(200|302|301|401|403)$'; then
-        echo "PASS [Regression]: Zabbix web UI responds on port 8080 (HTTP $HTTP_CODE)."
+    H=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/" 2>/dev/null || echo 000)
+    if [ "$H" = "200" ]; then
+        echo "PASS [Regression]: Zabbix web UI responds on :8080 (HTTP 200)."
         exit 0
     fi
-    sleep 5
+    sleep 2
 done
-
-echo "FAIL [Regression]: Zabbix web UI not reachable on port 8080 after remediation." >&2
+echo "FAIL [Regression]: Zabbix web UI not reachable on :8080 after remediation." >&2
 exit 1

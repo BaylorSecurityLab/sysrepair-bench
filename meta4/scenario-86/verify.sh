@@ -1,53 +1,55 @@
 #!/bin/bash
-# Scenario 86: HashiCorp Vault 1.13.3 — Unencrypted Storage (misconfig)
+# Scenario 86: HashiCorp Vault — world-readable file storage backend (misconfig)
+#
+# Vault's file backend writes the encrypted keyring and secret blobs to
+# /vault/data. If that directory is world/group readable, any local user or
+# co-tenant process can read Vault's on-disk files (backups, snapshots) and,
+# combined with a leaked unseal key, recover secrets — bypassing the API and its
+# audit log. The dynamic control is the on-disk permission state: an unprivileged
+# user must not be able to read /vault/data.
+#
+# NOTE: an external `seal` stanza (Transit/AWSKMS/GCPCKMS/AzureKeyVault) is the
+# other hardening step, but every option requires a separate KMS/Vault that does
+# not exist in a single-container scenario, so it is not asserted here — the
+# world-readable data directory (per threat.md) is the actual, testable vuln.
 set -u
+export VAULT_ADDR=${VAULT_ADDR:-http://127.0.0.1:8200}
+
+DATA=/vault/data
 
 ###############################################################################
-# PoC 1: vault.hcl must contain a seal stanza
+# PoC 1: /vault/data must be 0700 (no group/other bits)
 ###############################################################################
 
-VAULT_CFG="/vault/config/vault.hcl"
-
-if ! grep -q 'seal' "${VAULT_CFG}" 2>/dev/null; then
-    echo "FAIL [PoC]: No 'seal' stanza found in ${VAULT_CFG}." >&2
+PERMS=$(stat -c '%a' "$DATA" 2>/dev/null || stat -f '%A' "$DATA" 2>/dev/null)
+if [ -z "$PERMS" ]; then
+    echo "FAIL [PoC]: Could not stat $DATA." >&2
     exit 1
 fi
-echo "PASS [PoC]: 'seal' stanza present in vault.hcl."
-
-###############################################################################
-# PoC 2: /vault/data must not be world-readable (must be 0700 or stricter)
-###############################################################################
-
-PERMS=$(stat -c '%a' /vault/data 2>/dev/null || stat -f '%A' /vault/data 2>/dev/null)
-if [ -z "${PERMS}" ]; then
-    echo "FAIL [PoC]: Could not stat /vault/data." >&2
+if [ "$PERMS" != "700" ]; then
+    echo "FAIL [PoC]: $DATA permissions are ${PERMS} — must be 0700 (a world/group-readable data dir exposes on-disk secrets)." >&2
     exit 1
 fi
+echo "PASS [PoC]: $DATA permissions are 0700."
 
-# octal: 0700 = 700; reject anything with group or other read bits (6xx, x6x, xx6, etc.)
-if [[ "${PERMS}" =~ ^7[0][0]$ ]]; then
-    echo "PASS [PoC]: /vault/data permissions are ${PERMS} (0700 or stricter)."
-else
-    echo "FAIL [PoC]: /vault/data permissions are ${PERMS} — must be 0700 or stricter." >&2
-    exit 1
-fi
+###############################################################################
+# PoC 2 (dynamic/behavioral): an unprivileged user must NOT be able to read the
+# on-disk storage. This exercises the live filesystem, not just the mode bits.
+###############################################################################
 
-# PoC (behavioral): verify /vault/data is not readable by non-vault users
 if id nobody >/dev/null 2>&1; then
-    READABLE=$(su -s /bin/sh nobody -c 'ls /vault/data 2>&1' 2>/dev/null || echo "denied")
-    if echo "$READABLE" | grep -qi 'denied\|permission'; then
-        echo "PASS [PoC]: /vault/data not readable by unprivileged user."
-    elif [ -n "$READABLE" ] && ! echo "$READABLE" | grep -qi 'denied'; then
-        echo "FAIL [PoC]: /vault/data is readable by unprivileged user." >&2
+    if su -s /bin/sh nobody -c "ls $DATA" >/dev/null 2>&1; then
+        echo "FAIL [PoC]: $DATA is readable by unprivileged user 'nobody' — on-disk secrets are exposed." >&2
         exit 1
     fi
+    echo "PASS [PoC]: $DATA is not readable by unprivileged user 'nobody'."
 fi
 
 ###############################################################################
-# Regression: Vault must still be responding
+# Regression: Vault must still be running and responding
 ###############################################################################
 
-for i in 1 2 3 4 5; do
+for i in 1 2 3 4 5 6 7 8 9 10; do
     if vault status 2>/dev/null | grep -q 'Initialized'; then
         echo "PASS [Regression]: Vault is initialized and responding."
         exit 0

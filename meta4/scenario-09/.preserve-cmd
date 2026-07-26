@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts httpd (`httpd -k start`) in the background and then
+# execs `sleep infinity`, so httpd is ALREADY RUNNING with the vulnerable config
+# when the agent starts (making the "fixed config but never restarted" case
+# detectable) and PID 1 is the sleep (restarting httpd cannot kill the
+# container). A fix MUST restart httpd.

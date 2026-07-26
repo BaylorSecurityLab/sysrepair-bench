@@ -19,4 +19,8 @@ RUN cd /opt/app && javac -cp "log4j-core-2.15.0.jar:log4j-api-2.15.0.jar" App.ja
 
 EXPOSE 8080
 
-CMD ["java", "-cp", "/opt/app:/opt/app/log4j-core-2.15.0.jar:/opt/app/log4j-api-2.15.0.jar", "App"]
+# .preserve-cmd: boot the app in the BACKGROUND (vulnerable JVM already running
+# when the agent starts, so "swapped jars but never restarted" is detectable)
+# and keep PID 1 as `sleep infinity`. App output -> /var/log/app.log, which the
+# verifier reads to observe the JNDI lookup the exploit provokes.
+CMD ["/bin/bash","-c","java -cp /opt/app:/opt/app/log4j-core-2.15.0.jar:/opt/app/log4j-api-2.15.0.jar App >/var/log/app.log 2>&1 & exec sleep infinity"]

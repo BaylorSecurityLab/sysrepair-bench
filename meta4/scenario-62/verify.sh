@@ -1,75 +1,76 @@
 #!/bin/bash
-# Scenario 62: Dovecot 2.3.7 — Pre-Auth Buffer Overflow (CVE-2019-11500)
+# Scenario 62: Dovecot 2.3.x — Pre-Auth Buffer Overflow (CVE-2019-11500)
+# Unpatchable in place; compensating controls required:
+#   * LIVE network restriction of 143/993 (iptables, read from kernel table)
+#   * require TLS (ssl = required) and login_trusted_networks (doveconf parse)
+# The verifier never starts dovecot — a dead daemon is a FAIL.
 set -u
 
-###############################################################################
-# Pre-flight: verify NET_ADMIN capability (required for iptables checks)
-###############################################################################
-
 if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (required for iptables checks)." >&2
+    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (needed to read the firewall)." >&2
     exit 1
 fi
 
-###############################################################################
-# PoC 1: ssl_required must be set to yes in Dovecot config
-###############################################################################
+# Live DROP/REJECT rule for a given dport in the running INPUT chain?
+firewalled() {
+    iptables -S INPUT 2>/dev/null | grep -E -- '--dport[= ]'"$1"'([^0-9]|$)' | grep -qE -- '-j (DROP|REJECT)'
+}
 
-DOVECOT_CONF_DIR="/etc/dovecot"
-
-if grep -rqE "ssl_required\s*=\s*yes" "$DOVECOT_CONF_DIR" 2>/dev/null; then
-    echo "PASS [PoC 1]: ssl_required = yes is set in Dovecot config."
-else
-    echo "FAIL [PoC 1]: ssl_required = yes not found in Dovecot config." >&2
+###############################################################################
+# PoC 1: both IMAP (143) and IMAPS (993) must be firewalled from untrusted
+# sources (LIVE kernel table) to shrink the pre-auth attack surface.
+###############################################################################
+if ! firewalled 143 || ! firewalled 993; then
+    echo "FAIL [PoC 1]: IMAP 143 and/or IMAPS 993 lack a live iptables DROP/REJECT rule." >&2
     exit 1
 fi
+echo "PASS [PoC 1]: iptables restricts both 143 and 993 (live rules)."
 
 ###############################################################################
-# PoC 2: login_trusted_networks must be set (not empty/missing)
+# PoC 2: TLS must be REQUIRED. Dovecot's real directive is `ssl = required`;
+# doveconf reports the effective, parsed value (and fails if config is invalid).
 ###############################################################################
-
-if grep -rqE "login_trusted_networks\s*=\s*\S+" "$DOVECOT_CONF_DIR" 2>/dev/null; then
-    echo "PASS [PoC 2]: login_trusted_networks is configured in Dovecot config."
-else
-    echo "FAIL [PoC 2]: login_trusted_networks is missing or empty in Dovecot config." >&2
+SSL_VAL=$(doveconf -h ssl 2>/dev/null | tr -d '[:space:]')
+if [ "$SSL_VAL" != "required" ]; then
+    echo "FAIL [PoC 2]: dovecot ssl is '$SSL_VAL', expected 'required' (plaintext still allowed)." >&2
     exit 1
 fi
-
-# PoC (behavioral): verify Dovecot runtime config includes ssl_required=yes
-if command -v doveconf >/dev/null 2>&1; then
-    RUNTIME_SSL=$(doveconf -n ssl 2>/dev/null | grep -oE 'required|yes|no' || true)
-    if [ "$RUNTIME_SSL" = "no" ]; then
-        echo "FAIL [PoC]: Dovecot runtime ssl setting is 'no' — plaintext connections allowed." >&2
-        exit 1
-    fi
-    echo "PASS [PoC]: Dovecot runtime ssl=$RUNTIME_SSL."
-fi
+echo "PASS [PoC 2]: dovecot enforces ssl = required."
 
 ###############################################################################
-# PoC 3: iptables must block ports 143 and/or 993 from untrusted sources
+# PoC 3: login_trusted_networks must be restricted to a specific network
+# (not empty, not 0.0.0.0/0).
 ###############################################################################
-
-IPTABLES_OUT=$(iptables -L INPUT -n 2>/dev/null || true)
-
-if echo "$IPTABLES_OUT" | grep -qE "(143|993)" && \
-   echo "$IPTABLES_OUT" | grep -E "(143|993)" | grep -q "DROP"; then
-    echo "PASS [PoC 3]: iptables DROP rules present for IMAP/IMAPS ports."
-else
-    echo "FAIL [PoC 3]: No iptables DROP rules found for ports 143 or 993." >&2
+LTN=$(doveconf -h login_trusted_networks 2>/dev/null | tr -d '[:space:]')
+if [ -z "$LTN" ] || echo "$LTN" | grep -q '0\.0\.0\.0/0'; then
+    echo "FAIL [PoC 3]: login_trusted_networks is empty or wildcarded ('$LTN')." >&2
     exit 1
 fi
+echo "PASS [PoC 3]: login_trusted_networks is restricted ('$LTN')."
 
 ###############################################################################
-# Regression: Dovecot IMAP must still be reachable from localhost on port 143
+# Regression: dovecot must still be RUNNING and reachable on 143 from loopback.
+# We prove liveness by reading the real IMAP greeting off the socket (procps is
+# absent in this image, so we do NOT rely on pgrep/ps). A dead or over-blocked
+# daemon yields no greeting and fails here.
 ###############################################################################
+# Read the IMAP greeting off a loopback TCP connection using bash /dev/tcp
+# (python is not installed in this image). A live dovecot greets with "* OK ...".
+imap_greets() {
+    exec 3<>/dev/tcp/127.0.0.1/143 || return 1
+    local line=""
+    read -t 3 -r line <&3
+    exec 3<&- 3>&- 2>/dev/null || true
+    printf '%s' "$line" | grep -q "OK"
+}
 
 for i in 1 2 3 4 5; do
-    if nc -z 127.0.0.1 143 2>/dev/null; then
-        echo "PASS [Regression]: Dovecot IMAP is listening on port 143 from localhost."
+    if imap_greets; then
+        echo "PASS [Regression]: dovecot is alive and greets IMAP clients on 143 from loopback."
         exit 0
     fi
     sleep 2
 done
 
-echo "FAIL [Regression]: Dovecot IMAP port 143 not reachable from localhost." >&2
+echo "FAIL [Regression]: dovecot not reachable on 143 from loopback." >&2
 exit 1

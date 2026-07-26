@@ -14,4 +14,7 @@ COPY s7_server.py /opt/s7_server.py
 
 EXPOSE 102
 
-CMD ["python3", "/opt/s7_server.py"]
+# Boot wrapper (see .preserve-cmd): start the S7 simulator in the BACKGROUND
+# then exec `sleep infinity` so PID 1 is the wrapper, keeping the vulnerable
+# service listening while a solution's firewall rules cannot kill the container.
+CMD ["/bin/bash", "-c", "python3 /opt/s7_server.py & exec sleep infinity"]

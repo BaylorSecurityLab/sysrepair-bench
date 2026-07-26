@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Jupyter with an EMPTY token and EMPTY password (the
+# vulnerable, fully-unauthenticated state) and then execs `sleep infinity`, so:
+#   * the notebook server is ALREADY RUNNING when the agent starts, which is
+#     what makes the "set a token but never restarted Jupyter" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting the notebook cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must RESTART Jupyter with a token/password
+# set, not merely drop a value into a config file.

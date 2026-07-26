@@ -23,4 +23,13 @@ ENV NEO4J_AUTH=none
 
 EXPOSE 7474 7687 1337
 
-CMD ["neo4j"]
+# Boot wrapper (paired with the .preserve-cmd marker). The image ENTRYPOINT
+# (/docker-entrypoint.sh) unconditionally translates the NEO4J_* env vars into
+# neo4j.conf (so dbms.shell.enabled=true and the RMI listener on 1337 are
+# present) and then runs `exec gosu neo4j:neo4j "$@"`. This wrapper therefore
+# runs as the neo4j user:
+#   1. `neo4j start` daemonizes the server (managed by its pidfile) - unlike the
+#      stock `neo4j console`, which would be a foreground PID 1;
+#   2. poll the Browser HTTP endpoint (7474) until it answers;
+#   3. exec `sleep infinity` so PID 1 survives a `neo4j restart`.
+CMD ["/bin/bash", "-c", "neo4j start; for i in $(seq 1 90); do [ \"$(curl -s -o /dev/null -w '%{http_code}' http://localhost:7474/ 2>/dev/null)\" = 200 ] && break; sleep 1; done; exec sleep infinity"]

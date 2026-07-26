@@ -17,5 +17,12 @@ RUN apt-get update && \
 EXPOSE 11211/tcp
 EXPOSE 11211/udp
 
-# Vulnerable default: UDP port open, all interfaces
-CMD ["memcached", "-u", "memcache"]
+# Vulnerable state: UDP listener EXPLICITLY enabled (-U 11211). memcached 1.6.x
+# ships with UDP OFF by default (-U 0), so the bare `memcached -u memcache`
+# command is NOT vulnerable — the amplification port must be turned on to
+# recreate CVE-2018-1000115.
+# Boot wrapper (paired with .preserve-cmd): start memcached in the BACKGROUND
+# then exec `sleep infinity` so PID 1 is the sleep and restarting memcached
+# cannot kill the container, which makes the "fixed but not restarted" case
+# detectable. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","memcached -u memcache -l 0.0.0.0 -p 11211 -U 11211 & exec sleep infinity"]

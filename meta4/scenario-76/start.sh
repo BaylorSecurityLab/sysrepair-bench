@@ -18,4 +18,8 @@ done
 kubectl apply -f /opt/manifest.yaml --kubeconfig /etc/rancher/k3s/k3s.yaml
 
 echo "Vulnerable manifest applied. k3s running with flat networking."
-wait
+
+# Keep PID 1 as sleep so an agent that restarts k3s cannot kill the container.
+# k3s keeps running as a background child; a fix must RESTART it, not merely
+# start it if absent.
+exec sleep infinity

@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Flask app AS appuser in the background (with the
+# world-writable /var/run/docker.sock already present) and then execs
+# `sleep infinity`, so:
+#   * the app is ALREADY RUNNING when the agent starts, so the regression
+#     (Flask must still answer on :8080) is meaningful;
+#   * PID 1 is `sleep infinity`, so container churn cannot kill the sample.
+#
+# The vulnerability itself is a filesystem permission on the docker.sock, which
+# verify.sh probes live as appuser via `su` — it is re-evaluated per access, so
+# the fix (chmod/chown the socket) needs no service restart.

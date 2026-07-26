@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable salt-master (listening on 4505/4506)
+# and then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts (a compensating-control
+#     fix must leave it running - the regression checks it is still listening);
+#   * PID 1 is `sleep infinity`, so restarting salt-master cannot kill the
+#     container.
+#
+# Consequence for solutions: apply iptables restrictions + publisher_acl and
+# RESTART salt-master (so publisher_acl takes effect), leaving it listening.

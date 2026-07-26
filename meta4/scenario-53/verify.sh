@@ -1,54 +1,67 @@
 #!/bin/bash
-# Scenario 53: RocketMQ 5.1.0 — Unauthenticated Config RCE (CVE-2023-33246)
+# Scenario 53: RocketMQ 5.1.0 — unauthenticated broker admin port 10911 exposed
+# (context: CVE-2023-33246 UPDATE_BROKER_CONFIG RCE).
+#
+# BEHAVIOURAL check against the LIVE daemons: the compensating control is to make
+# the unauthenticated broker admin port 10911 unreachable from untrusted networks
+# while keeping the NameServer (9876) and the broker itself operational. The check
+# drives a real TCP connect, not an iptables-rule grep.
+#
+# Exit 0 = remediated (10911 blocked, NameServer + broker alive), Exit 1 = still
+# exposed or service broken.
 set -u
 
-BROKER_CONF="/opt/rocketmq/conf/broker.conf"
-
 ###############################################################################
-# Pre-flight: verify NET_ADMIN capability (required for iptables checks)
+# Pre-flight: NET_ADMIN must be present (the fix is an iptables rule).
 ###############################################################################
-
 if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (required for iptables checks)." >&2
+    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (required to firewall 10911)." >&2
     exit 1
 fi
 
-###############################################################################
-# PoC 1: iptables must have DROP rule for port 10911
-###############################################################################
+# 0 if a TCP connect to $1:$2 completes within the timeout; non-zero on refuse
+# (RST) or silent DROP (SYN dropped -> connect hangs, killed by `timeout`).
+tcp_open() {
+    timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+}
 
-if ! iptables -L INPUT -n 2>/dev/null | grep "10911" | grep -q "DROP"; then
-    echo "FAIL [PoC]: No iptables DROP rule found for port 10911." >&2
+###############################################################################
+# Regression 1: the broker daemon must be ALIVE. This defeats a cheat that makes
+# 10911 unreachable simply by killing the broker (with --init, dead processes are
+# reaped, so this cannot match a zombie).
+###############################################################################
+if ! pgrep -f "BrokerStartup" >/dev/null 2>&1; then
+    echo "FAIL [Regression]: RocketMQ broker (BrokerStartup) is not running — dead service." >&2
     exit 1
 fi
-echo "PASS [PoC]: iptables DROP rule present for port 10911."
+echo "PASS [Regression]: RocketMQ broker process is alive."
 
 ###############################################################################
-# PoC 2: broker.conf must have ACL enabled
+# Regression 2: the NameServer must still be reachable on 9876 for legitimate
+# clients (a live TCP connect).
 ###############################################################################
-
-if [ ! -f "$BROKER_CONF" ]; then
-    echo "FAIL [PoC]: broker.conf not found at $BROKER_CONF." >&2
-    exit 1
-fi
-
-if ! grep -q "aclEnable=true" "$BROKER_CONF" 2>/dev/null; then
-    echo "FAIL [PoC]: broker.conf does not have aclEnable=true." >&2
-    exit 1
-fi
-echo "PASS [PoC]: aclEnable=true is set in broker.conf."
-
-###############################################################################
-# Regression: RocketMQ NameServer must respond on port 9876
-###############################################################################
-
+NS_OK=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    if nc -z 127.0.0.1 9876 2>/dev/null; then
-        echo "PASS [Regression]: RocketMQ NameServer is listening on port 9876."
-        exit 0
-    fi
-    sleep 3
+    if tcp_open 127.0.0.1 9876; then NS_OK=1; break; fi
+    sleep 2
 done
+if [ "$NS_OK" -ne 1 ]; then
+    echo "FAIL [Regression]: RocketMQ NameServer not reachable on 9876." >&2
+    exit 1
+fi
+echo "PASS [Regression]: RocketMQ NameServer reachable on 9876."
 
-echo "FAIL [Regression]: RocketMQ NameServer port 9876 not reachable after remediation." >&2
-exit 1
+###############################################################################
+# PoC: the unauthenticated broker admin port 10911 must be BLOCKED. A live TCP
+# connect must not complete. iptables DROP on 10911 blocks even loopback traffic
+# (verified empirically), so probing 127.0.0.1 is a valid, deterministic
+# discriminator: OPEN at baseline, BLOCKED after the fix.
+###############################################################################
+if tcp_open 127.0.0.1 10911; then
+    echo "FAIL [PoC]: broker admin port 10911 accepted a TCP connection — still exposed." >&2
+    exit 1
+fi
+echo "PASS [PoC]: broker admin port 10911 connection refused/blocked."
+
+echo "All checks passed."
+exit 0

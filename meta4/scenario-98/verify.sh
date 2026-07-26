@@ -1,60 +1,70 @@
 #!/bin/bash
 # Scenario 98: Apache Druid 0.20.2 — JavaScript Injection (CVE-2021-25646)
+#
+# BEHAVIORAL check against the LIVE broker (port 8082). CVE-2021-25646 executes
+# attacker-supplied JavaScript on the query-serving nodes, so we send a real
+# JavaScript aggregator query and observe what the running process does:
+#   * JS still executing (druid.javascript.enabled=true on the live node) -> the
+#     aggregator runs and the query returns a numeric "result" => VULNERABLE.
+#   * JS disabled on the live node -> Druid rejects the query with HTTP 500 and
+#     the message "JavaScript is disabled" => REMEDIATED.
+# Because druid.javascript.enabled is read only at process START, a fix that edits
+# runtime.properties but never restarts the broker leaves JS live-enabled, so the
+# query still runs => this check FAILS (the not-restarted case is real and graded).
 set -u
 
-DRUID_HOME="${DRUID_HOME:-/opt/druid}"
-RUNTIME_PROPS="${DRUID_HOME}/conf/druid/single-server/nano-quickstart/coordinator-overlord/runtime.properties"
+BROKER=http://localhost:8082
+COORD=http://localhost:8081
+
+JS_QUERY='{"queryType":"timeseries","dataSource":"cve_probe","intervals":["2000/2100"],"granularity":"all","aggregations":[{"type":"javascript","name":"a","fieldNames":["v"],"fnAggregate":"function(c,v){return java.lang.Runtime.getRuntime()!=null?c+1:c;}","fnCombine":"function(a,b){return a+b;}","fnReset":"function(){return 0;}"}]}'
 
 ###############################################################################
-# PoC: druid.javascript.enabled must be false
+# Wait for the broker query endpoint to be LIVE (verify never starts Druid).
 ###############################################################################
-
-if [ ! -f "$RUNTIME_PROPS" ]; then
-    echo "FAIL [PoC]: runtime.properties not found at $RUNTIME_PROPS." >&2
-    exit 1
-fi
-
-if grep -E "^\s*druid\.javascript\.enabled\s*=\s*false" "$RUNTIME_PROPS" > /dev/null; then
-    echo "PASS [PoC]: druid.javascript.enabled is set to false in runtime.properties."
-else
-    CURRENT=$(grep -E "druid\.javascript\.enabled" "$RUNTIME_PROPS" | head -1 || echo "(not set)")
-    echo "FAIL [PoC]: druid.javascript.enabled is not false. Found: $CURRENT" >&2
-    exit 1
-fi
-
-# PoC (behavioral): attempt JavaScript injection via Druid SQL query
-# CVE-2021-25646 allows JS execution via the SQL endpoint
-for i in $(seq 1 10); do
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:8081/status 2>/dev/null || echo "000")
-    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
-        JS_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            -X POST "http://localhost:8888/druid/v2/sql" \
-            -H 'Content-Type: application/json' \
-            -d '{"query":"SELECT javascript(\"function(x){return java.lang.Runtime.getRuntime().exec(x)}\",\"id\")"}' \
-            2>/dev/null || echo "000")
-        if [ "$JS_CODE" = "200" ]; then
-            JS_BODY=$(curl -s -m 5 \
-                -X POST "http://localhost:8888/druid/v2/sql" \
-                -H 'Content-Type: application/json' \
-                -d '{"query":"SELECT 1"}' 2>/dev/null || true)
-            if echo "$JS_BODY" | grep -qi 'javascript.*not.*enabled\|disabled'; then
-                echo "PASS [PoC]: JavaScript functions are disabled in Druid SQL."
-            fi
-        fi
-        echo "PASS [PoC]: Druid JavaScript injection attempt handled (HTTP $JS_CODE)."
-        break
-    fi
+BROKER_UP=""
+for i in $(seq 1 24); do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${BROKER}/status" 2>/dev/null || echo 000)
+    if [ "$CODE" = "200" ]; then BROKER_UP=1; break; fi
     sleep 5
 done
+if [ -z "$BROKER_UP" ]; then
+    echo "FAIL [PoC]: Druid broker not reachable on 8082 — cannot probe live JavaScript state (dead daemon = fail)." >&2
+    exit 1
+fi
 
 ###############################################################################
-# Regression: Druid coordinator must still respond on port 8081
+# PoC (behavioral): the live broker must REFUSE the JavaScript aggregator.
 ###############################################################################
+RESP=$(curl -s -m 15 -X POST "${BROKER}/druid/v2/" \
+    -H 'Content-Type: application/json' -d "$JS_QUERY" 2>/dev/null || true)
+
+if printf '%s' "$RESP" | grep -qi 'JavaScript is disabled'; then
+    echo "PASS [PoC]: Live broker refuses the JavaScript aggregator ('JavaScript is disabled')."
+elif printf '%s' "$RESP" | grep -q '"result"'; then
+    echo "FAIL [PoC]: Live broker EXECUTED the JavaScript aggregator — JS injection is still possible (config not applied or Druid not restarted)." >&2
+    exit 1
+else
+    echo "FAIL [PoC]: Unexpected broker response to JavaScript probe: ${RESP:-<empty>}" >&2
+    exit 1
+fi
+
+###############################################################################
+# Regression: normal (non-JS) querying and the coordinator must still work.
+###############################################################################
+# Disabling JavaScript must not break ordinary query serving.
+REG=$(curl -s -m 15 -o /dev/null -w '%{http_code}' -X POST "${BROKER}/druid/v2/" \
+    -H 'Content-Type: application/json' \
+    -d '{"queryType":"timeseries","dataSource":"cve_probe","intervals":["2000/2100"],"granularity":"all","aggregations":[{"type":"count","name":"c"}]}' \
+    2>/dev/null || echo 000)
+if [ "$REG" != "200" ]; then
+    echo "FAIL [Regression]: normal (non-JavaScript) query failed on the broker (HTTP $REG)." >&2
+    exit 1
+fi
 
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/status 2>/dev/null || echo "000")
-    if echo "$HTTP_CODE" | grep -qE '^(200|302|301)$'; then
-        echo "PASS [Regression]: Druid coordinator is reachable on port 8081 (HTTP $HTTP_CODE)."
+    HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${COORD}/status" 2>/dev/null || echo 000)
+    if echo "$HTTP_CODE" | grep -qE '^(200|301|302)$'; then
+        echo "PASS [Regression]: Druid coordinator reachable on 8081 (HTTP $HTTP_CODE) and normal queries still work."
         exit 0
     fi
     sleep 5

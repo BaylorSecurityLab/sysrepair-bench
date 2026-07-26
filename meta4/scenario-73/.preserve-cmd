@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Docker Registry v2 with NO authentication on :5000
+# then execs `sleep infinity`, so:
+#   * the unauthenticated registry is ALREADY SERVING when the agent starts (a
+#     do-nothing agent must fail: unauthenticated GET /v2/_catalog returns 200);
+#   * PID 1 is `sleep infinity`, so restarting the registry cannot kill the box.
+#
+# The registry reads its auth settings (REGISTRY_AUTH*) from the environment at
+# process start, so the fix must RESTART the registry with those variables set —
+# editing config without restarting leaves the running registry open, which the
+# verifier detects by hitting the LIVE /v2/_catalog endpoint.

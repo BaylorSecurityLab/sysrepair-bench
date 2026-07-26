@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the demo app (with vulnerable Log4j 2.16.0) in the
+# background and execs `sleep infinity`, so the daemon is already running when
+# the agent starts (making the "swapped the jars but never restarted" case
+# detectable) and PID 1 stays `sleep infinity` (restarting the app cannot kill
+# the container). Solutions must RESTART the app after upgrading Log4j.

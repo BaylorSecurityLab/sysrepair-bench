@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The roundcube ENTRYPOINT runs its first-boot setup and then the Dockerfile CMD
+# starts Apache in the background and execs `sleep infinity`, so:
+#   * Roundcube (1.6.3, SVG stored-XSS; no Content-Security-Policy) is ALREADY
+#     serving on :80 when the agent starts (a do-nothing agent must fail: no CSP
+#     header is present on live responses);
+#   * PID 1 is `sleep infinity`, so reloading/restarting Apache cannot kill it.
+#
+# Apache emits response headers based on its LOADED config, so the fix must
+# (a2enmod headers +) reload/restart Apache. Editing config without reloading
+# leaves the LIVE responses header-less, which the verifier detects with curl.

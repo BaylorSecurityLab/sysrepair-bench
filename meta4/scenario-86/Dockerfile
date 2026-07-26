@@ -12,9 +12,13 @@ RUN mkdir -p /vault/data /vault/config && chmod 755 /vault/data
 
 COPY vault.hcl /vault/config/vault.hcl
 
+COPY start.sh /opt/start.sh
+RUN chmod +x /opt/start.sh
 
 EXPOSE 8200
 
 ENV VAULT_ADDR=http://127.0.0.1:8200
 
-CMD ["vault", "server", "-config=/vault/config/vault.hcl"]
+# Boot Vault via a wrapper that keeps PID 1 as `sleep infinity`.
+ENTRYPOINT []
+CMD ["/opt/start.sh"]

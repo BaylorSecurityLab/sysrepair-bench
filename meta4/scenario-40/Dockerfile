@@ -20,4 +20,9 @@ RUN mkdir -p /etc/mongod && \
 
 EXPOSE 27017
 
-CMD ["mongod", "--config", "/etc/mongod/mongod.conf", "--bind_ip_all"]
+# Boot wrapper (NOT a bare foreground CMD): start mongod with the zlib-enabled
+# config in the background (--fork returns once it is listening) and then
+# `exec sleep infinity`, so PID 1 stays sleep infinity. The vulnerable daemon
+# runs from boot (so "edited the config but never restarted mongod" is testable)
+# and a solution can restart mongod without killing the container.
+CMD ["/bin/bash","-c","mongod --config /etc/mongod/mongod.conf --dbpath /data/db --bind_ip_all --fork --logpath /var/log/mongod.log && exec sleep infinity"]

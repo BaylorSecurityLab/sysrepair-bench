@@ -1,0 +1,8 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts sshd in the background and then execs
+# `sleep infinity`, so sshd is ALREADY RUNNING with the vulnerable binary +
+# stock LoginGraceTime when the agent starts (the "fixed config but never
+# restarted" case is detectable) and PID 1 is the sleep (restarting sshd cannot
+# kill the container). A fix MUST restart sshd so the running daemon adopts the
+# LoginGraceTime 0 compensating control.

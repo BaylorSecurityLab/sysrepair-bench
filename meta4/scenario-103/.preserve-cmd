@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots cupsd AND the vulnerable cups-browsed daemon in the
+# BACKGROUND and then execs `sleep infinity`, so cups-browsed is ALREADY RUNNING
+# (and reachable for a malicious printer advertisement) when the agent starts,
+# and PID 1 is the sleep so the container survives.
+#
+# Consequence for solutions: the fix must actually STOP/disable the running
+# cups-browsed daemon (or restart it hardened) — merely editing the config file
+# without acting on the running process does not remove the exposure.

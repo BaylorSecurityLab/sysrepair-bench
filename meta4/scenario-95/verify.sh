@@ -27,28 +27,17 @@ fi
 
 echo "PASS [PoC]: secret_key is set to a non-default value."
 
-# PoC (behavioral): attempt to forge a session cookie with the known default key
-# If secret_key is still 'temporary_key', forged cookies would be accepted
-for i in $(seq 1 10); do
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:8080/ 2>/dev/null || echo "000")
-    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
-        FORGE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            -b 'session=.eJyrVkrOz0nVUcrPL0lVslIqS8wpTgUAP24HaA.AAAAAA.forged' \
-            http://localhost:8080/admin/ 2>/dev/null || echo "000")
-        if [ "$FORGE_CODE" = "200" ]; then
-            FORGE_BODY=$(curl -s -m 5 \
-                -b 'session=.eJyrVkrOz0nVUcrPL0lVslIqS8wpTgUAP24HaA.AAAAAA.forged' \
-                http://localhost:8080/admin/ 2>/dev/null || true)
-            if echo "$FORGE_BODY" | grep -qi 'dag\|airflow.*admin'; then
-                echo "FAIL [PoC]: Forged session cookie accepted — secret_key may be default." >&2
-                exit 1
-            fi
-        fi
-        echo "PASS [PoC]: Forged session cookie rejected (HTTP $FORGE_CODE)."
-        break
-    fi
-    sleep 5
-done
+# NOTE on the (removed) black-box "forged cookie" probe:
+# This Airflow 1.10.12 image runs with the default legacy webserver, which has NO
+# authentication enabled (authenticate=False) - /admin/ and every DAG page are
+# openly readable. A session cookie forged with the default secret_key therefore
+# grants no *additional* access, so a black-box request cannot distinguish a
+# rotated key from the default one: /admin/ returns 200 + "dag" either way. The
+# earlier probe here produced a FALSE POSITIVE that failed the correct fix. The
+# authoritative, restart-independent gate is the secret_key value check above
+# (it must not be the published default), plus the service-liveness regression
+# below. (The genuine forgery attack only bites once RBAC/auth is enabled.)
+echo "INFO [PoC]: secret_key rotation verified via config; black-box cookie-forge test is not meaningful without auth enabled on this image."
 
 ###############################################################################
 # Regression: Airflow webserver must still respond on port 8080

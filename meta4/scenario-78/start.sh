@@ -18,4 +18,6 @@ done
 kubectl apply -f /opt/manifest.yaml --kubeconfig /etc/rancher/k3s/k3s.yaml
 
 echo "Vulnerable manifest applied. Internal service exposed via NodePort."
-wait
+
+# Keep PID 1 as sleep so restarting k3s cannot kill the container.
+exec sleep infinity

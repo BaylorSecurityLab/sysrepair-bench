@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the IPMI BMC simulator on UDP 0.0.0.0:623 (no
+# firewall) then execs `sleep infinity`, so:
+#   * the vulnerable service is ALREADY LISTENING on all interfaces when the
+#     agent starts (a do-nothing agent must fail the firewall check);
+#   * PID 1 is `sleep infinity`, so nothing a solution does can kill the box.
+#
+# The primary, LIVE control is the iptables restriction on UDP/623 (read from
+# the running kernel table). The cipher-suite config edit is a defence-in-depth
+# assertion; the simulator does not enforce cipher suites, so it is verified as
+# config state only. There is no daemon-restart step for the firewall control.

@@ -1,2 +1,10 @@
-k3s scenario — CMD /opt/start.sh boots k3s and applies the vulnerable
-manifest. sleep-infinity override means the cluster never starts.
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The image CMD (/opt/start.sh) boots k3s, applies the vulnerable manifest
+# (ServiceAccount superadmin bound to cluster-admin), then execs `sleep infinity`
+# so PID 1 is the wrapper and k3s runs as a background child. Without this marker
+# the harness would replace the CMD with `sleep infinity`, k3s would never start,
+# and the scenario could not be graded.
+#
+# The RBAC fix (delete the ClusterRoleBinding) is evaluated LIVE by the API
+# server, so there is no service-restart step for this scenario.

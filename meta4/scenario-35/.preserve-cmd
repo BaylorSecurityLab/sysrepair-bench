@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the mock IMDS (127.0.0.1:9999) and the SSRF-vulnerable
+# Flask app (:5000) in the background with the vulnerable code already loaded, and
+# then execs `sleep infinity`, so:
+#   * the app is ALREADY RUNNING when the agent starts, which makes the
+#     "patched server.py but never restarted the process" case detectable —
+#     Python does not re-import the module per request, so the old vulnerable
+#     code keeps serving until the process is restarted;
+#   * PID 1 is `sleep infinity`, so restarting the app cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART the Flask process, not merely
+# start it if absent — it is already up with the vulnerable code.

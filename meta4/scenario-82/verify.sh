@@ -4,6 +4,12 @@ set -u
 
 BUCKET="sensitive-data"
 
+# Wait for the LIVE LocalStack endpoint + S3 provisioning before probing.
+for i in $(seq 1 60); do
+  awslocal s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1 && break
+  sleep 2
+done
+
 ###############################################################################
 # PoC: bucket policy must not contain "Principal": "*"
 ###############################################################################

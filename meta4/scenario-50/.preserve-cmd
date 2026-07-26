@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD formats the KRaft storage, starts the Kafka broker in the
+# BACKGROUND with the vulnerable PLAINTEXT config, waits for 9092 to bind, then
+# execs `sleep infinity`, so:
+#   * the broker is ALREADY RUNNING with an unauthenticated PLAINTEXT client
+#     listener when the agent starts (the vulnerability is live);
+#   * PID 1 is `sleep infinity`, not the broker, so stopping/restarting the
+#     broker cannot kill the container.
+#
+# The remediation rewrites /opt/kafka/config/server.properties to require
+# SASL_PLAINTEXT/PLAIN on the client listener and RESTARTS the broker. There IS a
+# "forgot to restart" case: editing the config without restarting leaves the live
+# broker still serving PLAINTEXT, which the behavioural check detects.

@@ -25,4 +25,12 @@ RUN airflow initdb 2>/dev/null || true
 
 EXPOSE 8080
 
-CMD ["airflow", "webserver"]
+# Boot the webserver (which loads example DAGs because load_examples=True) in the
+# background, then hold the container open with `exec sleep infinity` so the
+# webserver is never PID 1. Paired with the `.preserve-cmd` marker. load_examples
+# is read only at startup, so editing airflow.cfg without restarting the
+# webserver leaves the example (RCE) DAG loaded - the not-restarted case is real.
+# ENTRYPOINT is cleared: the 1.10.10 base image entrypoint prepends `airflow` to
+# the args and would mangle this bash wrapper.
+ENTRYPOINT []
+CMD ["bash", "-c", "airflow webserver >/tmp/airflow-web.log 2>&1 & exec sleep infinity"]

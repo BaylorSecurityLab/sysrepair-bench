@@ -19,4 +19,10 @@ RUN apk add --no-cache bash curl
 
 
 EXPOSE 2375 2376
-ENTRYPOINT ["dockerd-entrypoint.sh"]
+# .preserve-cmd boot wrapper. The stock dind entrypoint execs
+# `docker-init -- dockerd` in the FOREGROUND, making dockerd part of PID 1's
+# chain: killing it to restart would stop the container and destroy the eval
+# sample. Instead we run the entrypoint (which performs the dind setup and
+# binds tcp://0.0.0.0:2375) in the BACKGROUND and keep PID 1 as `sleep
+# infinity`, so a remediation can restart dockerd safely.
+ENTRYPOINT ["/bin/bash","-c","dockerd-entrypoint.sh >/var/log/dockerd.log 2>&1 & exec sleep infinity"]

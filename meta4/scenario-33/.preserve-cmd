@@ -1,2 +1,13 @@
-dind scenario — ENTRYPOINT dockerd-entrypoint.sh must run to boot the
-inner daemon. sleep-infinity override breaks every probe.
+# Use the image CMD/ENTRYPOINT instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile ENTRYPOINT is a boot wrapper that runs the dind entrypoint
+# (which binds the unauthenticated tcp://0.0.0.0:2375 listener) in the
+# BACKGROUND and then execs `sleep infinity`, so:
+#   * the exposed Docker API is ALREADY LIVE when the agent starts, making the
+#     "edited config but never restarted dockerd" case detectable;
+#   * PID 1 stays `sleep infinity`, so restarting dockerd cannot kill the
+#     container (the stock foreground `docker-init -- dockerd` would).
+#
+# dockerd takes ~10s to finish binding; the harness waits SETTLE_SECONDS.
+# Consequence for solutions: the fix must RESTART dockerd bound to the unix
+# socket only (no tcp 2375), not merely edit a file.

@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts ActiveMQ (`activemq start` daemonizes), waits for the
+# web console on 8161 to answer, then execs `sleep infinity`, so:
+#   * the broker is ALREADY RUNNING with the unauthenticated /api/ (Jolokia+REST)
+#     endpoint exposed when the agent starts (the vulnerability is live);
+#   * PID 1 is `sleep infinity`, not the broker, so restarting the broker cannot
+#     kill the container.
+#
+# The remediation edits conf/jetty.xml to require authentication on /api/* and
+# then RESTARTS the broker to load it. There IS a "forgot to restart" case here:
+# editing jetty.xml without restarting leaves the running broker still serving
+# /api/ unauthenticated, which the behavioural check detects (still 200 -> FAIL).

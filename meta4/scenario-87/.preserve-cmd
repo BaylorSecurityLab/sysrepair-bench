@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# /opt/start.sh boots Consul (ACL disabled = vulnerable) in the background so the
+# HTTP API is LIVE for the anonymous-403 PoC, then execs `sleep infinity`.
+# Enabling ACLs requires restarting Consul, so a solution that edits consul.hcl
+# but does NOT restart still fails the check. Restarting Consul cannot kill the
+# container because PID 1 remains `sleep infinity`.

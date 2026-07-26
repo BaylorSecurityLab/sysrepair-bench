@@ -57,10 +57,17 @@ def index():
     return jsonify({"service": "langflow-sim", "version": "1.0.0"}), 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7860)
+    # Bind host is configurable so the remediation can rebind the vulnerable
+    # backend to loopback only (127.0.0.1) and expose it solely through the
+    # authenticated nginx proxy. Vulnerable default: all interfaces.
+    app.run(host=os.environ.get("LF_HOST", "0.0.0.0"), port=7860)
 PYEOF
 
 
-EXPOSE 7860
+EXPOSE 7860 80
 
-CMD ["python3", "/opt/langflow/app.py"]
+# Boot wrapper (paired with .preserve-cmd): start the vulnerable Langflow sim on
+# ALL interfaces (0.0.0.0:7860) in the BACKGROUND, then exec `sleep infinity`, so
+# the pre-auth code-exec endpoint is already reachable when the agent starts and
+# PID 1 is the sleep. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","python3 /opt/langflow/app.py >/var/log/langflow.log 2>&1 & exec sleep infinity"]

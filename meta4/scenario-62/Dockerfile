@@ -17,4 +17,8 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update && \
 
 EXPOSE 143 993
 
-CMD ["dovecot", "-F"]
+# Boot wrapper (see .preserve-cmd): start dovecot (it daemonizes) then exec
+# `sleep infinity` so PID 1 is the wrapper, keeping the vulnerable IMAP service
+# already listening while a solution that reloads/restarts dovecot or applies
+# firewall rules cannot kill the container.
+CMD ["/bin/bash", "-c", "dovecot && exec sleep infinity"]

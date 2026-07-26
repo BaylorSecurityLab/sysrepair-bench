@@ -19,4 +19,7 @@ RUN mkdir -p /etc/nats && \
 
 EXPOSE 4222 8222
 
-CMD ["nats-server", "-c", "/etc/nats/nats-server.conf"]
+# Boot wrapper: start nats-server backgrounded, poll for :4222, then exec
+# `sleep infinity` so PID 1 is stable and an agent restarting nats-server cannot
+# kill the container. See .preserve-cmd.
+CMD ["/bin/bash", "-c", "nats-server -c /etc/nats/nats-server.conf & for i in $(seq 1 30); do nc -z 127.0.0.1 4222 && break; sleep 1; done; exec sleep infinity"]

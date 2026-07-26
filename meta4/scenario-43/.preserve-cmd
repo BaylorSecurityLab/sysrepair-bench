@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Cassandra (backgrounded, as the cassandra user) with
+# the vulnerable AllowAllAuthenticator + UDF config, then execs `sleep infinity`,
+# so:
+#   * the daemon is ALREADY RUNNING with unauthenticated access when the agent
+#     starts, which makes the "edited cassandra.yaml but never restarted" case
+#     detectable (the live node still accepts unauthenticated CQL);
+#   * PID 1 is still `sleep infinity`, so restarting Cassandra cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must switch to PasswordAuthenticator,
+# disable UDFs, AND RESTART Cassandra so the new authenticator takes effect.
+# Cassandra boots slowly (~60-90s); wait for readiness after restart.

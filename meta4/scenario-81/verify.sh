@@ -4,6 +4,12 @@ set -u
 
 PARAMS=("/app/db-password" "/app/api-key")
 
+# Wait for the LIVE LocalStack endpoint + SSM provisioning before probing.
+for i in $(seq 1 60); do
+  awslocal ssm get-parameter --name /app/db-password >/dev/null 2>&1 && break
+  sleep 2
+done
+
 ###############################################################################
 # PoC: both parameters must now be type SecureString
 ###############################################################################

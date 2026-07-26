@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Postfix (bare-LF accepted -> SMTP smuggling) on :25
+# then execs `sleep infinity`, so:
+#   * the vulnerable smtpd is ALREADY LISTENING when the agent starts (a
+#     do-nothing agent must fail: a bare-LF-dot smuggles a second message);
+#   * PID 1 is `sleep infinity`, so reloading/restarting Postfix cannot kill it.
+#
+# Postfix's master caches main.cf; new smtpd children use the cached config, so
+# the fix must RELOAD/RESTART Postfix. Editing main.cf without reloading leaves
+# the LIVE smtpd smuggling-vulnerable, which the verifier detects on the wire.

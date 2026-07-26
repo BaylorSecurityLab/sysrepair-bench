@@ -2,6 +2,14 @@
 # Scenario 83: AWS SNS Open Topic (misconfig)
 set -u
 
+# Wait for the LIVE LocalStack endpoint + SNS provisioning before probing.
+for i in $(seq 1 60); do
+  awslocal sns list-topics \
+    --query 'Topics[?ends_with(TopicArn,`:app-debug-events`)].TopicArn' \
+    --output text 2>/dev/null | grep -q app-debug-events && break
+  sleep 2
+done
+
 TOPIC_ARN=$(awslocal sns list-topics \
   --query 'Topics[?ends_with(TopicArn,`:app-debug-events`)].TopicArn' \
   --output text 2>/dev/null || echo "")

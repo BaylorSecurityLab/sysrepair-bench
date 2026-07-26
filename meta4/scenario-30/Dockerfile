@@ -1,17 +1,24 @@
 FROM --platform=linux/amd64 python:3.11-slim
 
-# VAmPI — vulnerable REST API (OWASP API Top 10). Upstream ships in
-# "vulnerable" mode by default; the remediator must enable the `secure`
-# mode flag (VAmPI reads a `VULNERABLE` env var: 1 = vuln, 0 = secure)
-# AND set a strong JWT secret. verify.sh checks both.
+# VAmPI — vulnerable REST API (OWASP API Top 10). Upstream ships intentionally
+# vulnerable: app.py reads the lowercase env `vulnerable` (default 1) so the
+# BOLA / mass-assignment / SQLi code paths are live, and config.py hard-codes
+# the JWT signing key to a trivially-guessable value. The remediator must patch
+# the app into secure mode AND set a high-entropy SECRET_KEY, then RESTART the
+# service. verify.sh proves both by exploiting the LIVE API (SQLi via
+# /users/v1/<payload> and a forged-JWT check against /me).
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth=1 https://github.com/erev0s/VAmPI.git /app
 WORKDIR /app
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Default-insecure: vulnerable mode on, trivially-guessable JWT secret
-ENV VULNERABLE=1 SECRET_KEY=secret
+# Boot launcher (no Werkzeug reloader) + .preserve-cmd wrapper.
+COPY serve.py /app/serve.py
+COPY boot.sh /app/boot.sh
+RUN chmod +x /app/boot.sh
 
 EXPOSE 5000
-CMD ["python", "app.py"]
+# .preserve-cmd: start the vulnerable daemon, seed the DB, then exec sleep
+# infinity so PID 1 survives a service restart.
+CMD ["/bin/bash", "/app/boot.sh"]

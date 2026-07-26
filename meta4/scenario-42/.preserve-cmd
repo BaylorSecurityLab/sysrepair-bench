@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots CouchDB (backgrounded, as the couchdb user) as a
+# distributed Erlang node using the vulnerable "monster" cookie, then execs
+# `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING with the default cookie when the agent
+#     starts, which makes the "changed vm.args but never restarted" case
+#     detectable (the live node still accepts the monster cookie);
+#   * PID 1 is still `sleep infinity`, so restarting couchdb cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must change the cookie in vm.args AND
+# RESTART couchdb so the running node no longer accepts "monster".

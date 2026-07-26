@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable Zabbix frontend sim on 0.0.0.0:8080 in
+# the BACKGROUND and then execs `sleep infinity`, so the default-credential
+# JSON-RPC API (/api_jsonrpc.php) is ALREADY REACHABLE on the public interface
+# when the agent starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must rebind the frontend to loopback and put
+# an nginx auth proxy in front of /api_jsonrpc.php, then (re)start both.

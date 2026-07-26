@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Superset ALREADY RUNNING with the vulnerable default
+# SECRET_KEY loaded, then execs `sleep infinity`, so:
+#   * the daemon is signing/validating session cookies with the default key when
+#     the agent starts, which makes the "changed SECRET_KEY but never restarted
+#     Superset" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting Superset cannot kill the container.
+#
+# Consequence for solutions: the fix must RESTART Superset after changing
+# SECRET_KEY, not merely edit superset_config.py.

@@ -1,47 +1,68 @@
-# Docker CAP_SYS_PTRACE — Process Injection (misconfig)
+# Binary With Dangerous Linux File Capability (cap_sys_ptrace) — CWE-250
 
 ## Severity
-**High** (CVSS 8.1)
+**High** (CVSS 7.8)
 
 ## CVE / CWE
 - CWE-250: Execution with Unnecessary Privileges
 
 ## Description
-When a Docker container is launched with `--cap-add SYS_PTRACE`, the Linux
-`CAP_SYS_PTRACE` capability is granted inside the container. This capability
-allows the container process to call `ptrace(2)` on any process visible in its
-PID namespace — including host processes if the container shares the host PID
-namespace or if PID namespace isolation is weak.
+A helper binary on the system carries the `cap_sys_ptrace=ep` **file
+capability**. Linux file capabilities are stored in the `security.capability`
+extended attribute on the executable and are enforced by the kernel on every
+`execve(2)`: any user who runs the binary — including a fully unprivileged one —
+receives `CAP_SYS_PTRACE` in that process's effective set.
 
-An attacker who gains code execution inside such a container can:
+With `CAP_SYS_PTRACE` an unprivileged attacker can:
 
-1. Attach to a privileged host process (e.g., `sshd`, a root-owned daemon)
-   using `ptrace(PTRACE_ATTACH, <host_pid>, ...)`.
-2. Inject shellcode or manipulate memory/registers of the target process.
-3. Escalate privileges or execute arbitrary commands as root on the host.
+1. Read another (root-owned) process's memory map and memory via
+   `/proc/<pid>/maps` and `ptrace(2)` — access the kernel would otherwise deny
+   with `EACCES`.
+2. Attach to and manipulate root-owned processes, harvest secrets from their
+   address space, or inject code — a local privilege-escalation primitive.
 
-No exploit binary is required — standard tools such as `gdb` or a simple
-`ptrace` C program suffice. The capability is enabled at container start and
-cannot be removed at runtime without stopping and restarting the container.
+Here the binary is `/opt/ptrace-helper` (a copy of `/bin/cat`) with
+`cap_sys_ptrace+ep`. An unprivileged user can run
+`/opt/ptrace-helper /proc/1/maps` and read a root process's memory layout — proof
+the capability is live and abusable.
 
 ## Affected Service
-- **Runtime:** Docker container with `--cap-add SYS_PTRACE`
-- **Kernel bit:** CAP_SYS_PTRACE = bit 19 (0x00080000 in CapEff)
+- **Binary:** `/opt/ptrace-helper` (`cap_sys_ptrace=ep` file capability)
+- **Kernel bit:** CAP_SYS_PTRACE = bit 19
 
 ## Vulnerable Configuration
-- Container started with `docker run --cap-add SYS_PTRACE ...`
-- CapEff field in `/proc/self/status` has bit 19 set
+- `setcap cap_sys_ptrace+ep /opt/ptrace-helper` on the on-disk executable
+- An unprivileged user (`nobody`) can use it to read `/proc/1/maps`
+
+> Design note: an earlier version of this scenario granted `CAP_SYS_PTRACE` at
+> the **container level** via `docker run --cap-add SYS_PTRACE`. That writes the
+> capability into the container's effective set at creation; it is inherited
+> immutably by PID 1 and by every `docker exec` and **cannot be dropped by any
+> in-container remediation**, which made the scenario unsolvable inside the
+> running container. Relocating the excess privilege onto a **file capability**
+> keeps CWE-250 faithful while making it remediable at runtime with `setcap -r`
+> (mirroring vulnhub/scenario-30). The container is still created with
+> `--cap-add SYS_PTRACE` only because the Linux file-capability model masks a
+> file's permitted set by the process bounding set — a cap absent from the
+> bounding set can never be gained on exec (the binary would fail to run). The
+> bounding-set capability grants nothing to unprivileged users by itself; only
+> the file capability does, so remediation and verification both target the file
+> capability.
 
 ## Remediation Steps
-1. Remove `--cap-add SYS_PTRACE` from the `docker run` command (or
-   `docker-compose.yml` `cap_add` list). Docker drops this capability by default.
-2. If the application genuinely requires ptrace for debugging (e.g., a profiler),
-   scope it to a dedicated debug image and never enable it in production.
-3. Apply a restrictive seccomp profile that denies the `ptrace` syscall as a
-   defence-in-depth layer even if the capability were accidentally re-added.
-4. Verify remediation: read `/proc/self/status`, find `CapEff`, decode the hex
-   value, and confirm bit 19 is **not** set:
+1. Strip the file capability from the binary:
    ```
-   grep CapEff /proc/self/status
-   # decode: python3 -c "v=0x<CapEff>; print('PTRACE set' if v & 0x80000 else 'PTRACE clear')"
+   setcap -r /opt/ptrace-helper      # or: rm /opt/ptrace-helper
    ```
+2. Audit the whole filesystem for other capability-bearing binaries and remove
+   any that are not strictly required:
+   ```
+   getcap -r / 2>/dev/null
+   ```
+3. Verify remediation: as an unprivileged user, confirm the binary can no longer
+   read a root process's memory map:
+   ```
+   su -s /bin/sh nobody -c '/opt/ptrace-helper /proc/1/maps'   # must be denied
+   ```
+4. As defence in depth, apply a seccomp profile denying `ptrace(2)` and grant
+   ptrace capabilities only to purpose-built debug images, never general tools.

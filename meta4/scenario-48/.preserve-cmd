@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts ActiveMQ (`activemq start` daemonizes), waits for the
+# web console on 8161 to answer, then execs `sleep infinity`, so:
+#   * the broker is ALREADY RUNNING with the unauthenticated OpenWire port 61616
+#     reachable when the agent starts (the residual risk is live);
+#   * PID 1 is `sleep infinity`, not the broker, so an iptables rule or a broker
+#     restart cannot kill the container.
+#
+# The remediation here is a RUNTIME compensating control (iptables DROP on the
+# OpenWire admin port 61616), so there is no "forgot to restart" case - the
+# firewall rule takes effect immediately on the live host.

@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts Tomcat (catalina.sh start) in the background and
+# then execs `sleep infinity`, so Tomcat is ALREADY RUNNING with the vulnerable
+# config when the agent starts (the "fixed config but never restarted" case is
+# detectable) and PID 1 is the sleep (restarting Tomcat cannot kill the
+# container). A fix MUST restart Tomcat.

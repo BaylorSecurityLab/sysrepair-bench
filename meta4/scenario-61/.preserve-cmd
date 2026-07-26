@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Exim (advertising CHUNKING -> SMTP smuggling) on :25
+# then execs `sleep infinity`, so:
+#   * the vulnerable smtpd is ALREADY LISTENING and advertising CHUNKING when the
+#     agent starts (a do-nothing agent must fail the EHLO capability check);
+#   * PID 1 is `sleep infinity`, so restarting Exim cannot kill the container.
+#
+# Exim reads its configuration at daemon start, so the fix must RESTART the
+# daemon. Editing the config (and even running update-exim4.conf) without
+# restarting leaves the LIVE daemon advertising CHUNKING, which the verifier
+# detects by reading the EHLO reply on the wire.

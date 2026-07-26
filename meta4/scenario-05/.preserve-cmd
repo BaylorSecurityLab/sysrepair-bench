@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Tomcat (serving the vulnerable Spring 5.3.17 WAR) in
+# the background and execs `sleep infinity`, so the daemon is already running
+# when the agent starts (making "upgraded the Spring jars but never restarted
+# Tomcat" detectable) and PID 1 stays `sleep infinity` (restarting Tomcat cannot
+# kill the container). Solutions must RESTART Tomcat after upgrading Spring.

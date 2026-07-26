@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts the RocketMQ NameServer and Broker in the BACKGROUND
+# (JVM heaps shrunk so they boot in limited RAM), waits for the NameServer (9876)
+# then the Broker (10911) to bind, then execs `sleep infinity`, so:
+#   * both daemons are ALREADY RUNNING with the unauthenticated broker admin port
+#     10911 reachable when the agent starts (the residual risk is live);
+#   * PID 1 is `sleep infinity`, not a daemon, so an iptables rule or a daemon
+#     restart cannot kill the container.
+#
+# The remediation here is a RUNTIME compensating control (iptables DROP on the
+# broker admin port 10911), so there is no "forgot to restart" case - the
+# firewall rule takes effect immediately on the live host.

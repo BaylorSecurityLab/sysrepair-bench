@@ -11,4 +11,8 @@ RUN apt-get update && \
 
 EXPOSE 25
 
-CMD ["postfix", "start-fg"]
+# Boot wrapper (see .preserve-cmd): start the Postfix master in the BACKGROUND
+# (`postfix start` daemonizes) then exec `sleep infinity` so PID 1 is the
+# wrapper. The vulnerable SMTP service is already listening on :25 when the agent
+# starts, and a solution that reloads/restarts Postfix cannot kill the container.
+CMD ["/bin/bash", "-c", "postfix start && exec sleep infinity"]

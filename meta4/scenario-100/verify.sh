@@ -55,16 +55,29 @@ else
 fi
 
 ###############################################################################
-# Regression: salt-master process must be running
+# Regression: salt-master must still be LISTENING on its ZeroMQ ret bus (4506).
+# (pgrep/pgrep -x is not available on this slim base, and salt does not set a
+# proctitle, so match on the live listening socket via /proc/net/tcp instead.
+# The iptables DROP rules filter INPUT - they do NOT remove the LISTEN socket -
+# so a correctly-restarted master is still visible here.)
 ###############################################################################
 
-for i in 1 2 3 4 5; do
-    if pgrep -x salt-master > /dev/null 2>&1; then
-        echo "PASS [Regression]: salt-master process is running."
+listening_on() {
+    # $1 = decimal port; prints "yes" if a socket is in LISTEN (state 0A).
+    awk 'NR>1 && $4=="0A"{print $2}' /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+        | sed 's/.*://' \
+        | while read -r hexport; do
+            [ "$((16#$hexport))" = "$1" ] && echo yes && break
+        done
+}
+
+for i in 1 2 3 4 5 6; do
+    if [ -n "$(listening_on 4506)" ]; then
+        echo "PASS [Regression]: salt-master is listening on 4506 (ret bus)."
         exit 0
     fi
-    sleep 2
+    sleep 3
 done
 
-echo "FAIL [Regression]: salt-master process is not running." >&2
+echo "FAIL [Regression]: salt-master is not listening on 4506 after remediation." >&2
 exit 1

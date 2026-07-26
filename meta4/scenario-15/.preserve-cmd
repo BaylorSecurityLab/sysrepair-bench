@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD launches Jenkins (via start-jenkins.sh) in the background
+# and then execs `sleep infinity`, so:
+#   * Jenkins is ALREADY RUNNING (vulnerable 2.441) when the agent starts,
+#     which makes the "swapped the war but never restarted" case detectable
+#     (verify.sh reads the version from the live X-Jenkins header first);
+#   * PID 1 is still `sleep infinity`, so restarting java cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must replace the war AND RESTART Jenkins,
+# not merely drop a new war on disk — the running header still reports the old
+# version until the daemon is restarted.

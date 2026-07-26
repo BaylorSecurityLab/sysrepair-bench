@@ -19,4 +19,8 @@ PermitRootLogin yes\n' >> /etc/ssh/sshd_config
 
 
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D"]
+# .preserve-cmd boot wrapper: generate host keys if missing, start sshd
+# BACKGROUNDED (no -D) with the vulnerable config, then exec sleep infinity so
+# PID 1 survives an sshd restart. sshd -D as PID 1 would let a restart kill the
+# container and destroy the eval sample.
+CMD ["/bin/bash","-c","ssh-keygen -A >/dev/null 2>&1; mkdir -p /run/sshd; /usr/sbin/sshd; exec sleep infinity"]

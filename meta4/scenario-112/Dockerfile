@@ -38,6 +38,15 @@ RUN cat >> /usr/local/apache2/conf/httpd.conf << 'EOF'
     Require all granted
 </Directory>
 
+# Non-script alias — the reliable file-read vector for CVE-2021-41773 (mod_cgi
+# tries to EXECUTE files reached through the ScriptAlias'd /cgi-bin/, so the
+# arbitrary-file-READ escape needs a plain Alias).
+Alias /icons/ "/usr/local/apache2/icons/"
+<Directory "/usr/local/apache2/icons">
+    Options Indexes FollowSymLinks
+    Require all granted
+</Directory>
+
 ScriptAlias /cgi-bin/ /usr/local/apache2/cgi-bin/
 
 <Directory /usr/local/apache2/cgi-bin>
@@ -50,4 +59,8 @@ EOF
 
 EXPOSE 80
 
-CMD ["httpd-foreground"]
+# Boot wrapper (paired with .preserve-cmd): start httpd in the BACKGROUND then
+# exec `sleep infinity`, so PID 1 is the sleep and restarting httpd cannot kill
+# the container. This makes the "fixed config but never restarted" case
+# detectable. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","/usr/local/apache2/bin/httpd -k start && exec sleep infinity"]

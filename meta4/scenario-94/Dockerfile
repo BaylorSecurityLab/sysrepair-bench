@@ -17,4 +17,10 @@ RUN echo "SECRET_KEY = 'CHANGE_ME_TO_A_COMPLEX_RANDOM_SECRET'" >> /app/pythonpat
 
 EXPOSE 8088
 
-CMD ["/usr/bin/run-server.sh"]
+# Boot Superset (which signs Flask sessions with the vulnerable default
+# SECRET_KEY loaded at startup) in the background, then hold the container open
+# with `exec sleep infinity` so gunicorn is never PID 1. Paired with the
+# `.preserve-cmd` marker. SECRET_KEY is read only at process start, so editing
+# superset_config.py without restarting Superset leaves the running process
+# trusting cookies forged with the old key - the not-restarted case is real.
+CMD ["bash", "-c", "/usr/bin/run-server.sh >/tmp/superset.log 2>&1 & exec sleep infinity"]

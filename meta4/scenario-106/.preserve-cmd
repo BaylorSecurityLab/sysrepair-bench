@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the APISIX admin API in the BACKGROUND with the
+# well-known DEFAULT admin key active, then execs `sleep infinity`, so:
+#   * the service is ALREADY RUNNING with the vulnerable default key when the
+#     agent starts;
+#   * the admin key is read ONLY at process start, so changing the key file
+#     without RESTARTING the service leaves the default key live — the
+#     "fixed config but never restarted" case is detectable;
+#   * PID 1 is `sleep infinity`, so restarting the service cannot kill the box.

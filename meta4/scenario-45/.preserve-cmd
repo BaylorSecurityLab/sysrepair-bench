@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots influxd (1.7.5, vulnerable to CVE-2019-20933) with
+# an empty JWT shared-secret, creates the `admin` account the forged token
+# targets, then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING (with the empty shared-secret held in
+#     memory) when the agent starts, which is what makes the "fixed the config
+#     but never restarted the service" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting influxd cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART influxd after setting a
+# non-empty shared-secret, not merely edit the config - the live daemon keeps
+# accepting empty-key JWTs until it is restarted.

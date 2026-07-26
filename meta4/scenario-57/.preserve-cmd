@@ -1,0 +1,15 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is a boot wrapper (/boot.sh) that starts CoreDNS in the
+# BACKGROUND (reparented to tini/PID 1), polls until :53 answers, then execs
+# `sleep infinity`, so:
+#   * CoreDNS is ALREADY RUNNING with the no-ACL (open) Corefile when the agent
+#     starts, which is what makes the "edited the Corefile but never restarted
+#     CoreDNS" case detectable (CoreDNS does not hot-reload without the reload
+#     plugin, which is intentionally absent);
+#   * PID 1 is `sleep infinity` (tini reaps CoreDNS), so restarting CoreDNS
+#     cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART CoreDNS (pkill + relaunch
+# backgrounded), not merely start it if absent - it is already up with the
+# vulnerable configuration. Do NOT kill PID 1.

@@ -25,6 +25,7 @@ The real vulnerability: accessing /console/css/%252e%252e%252fconsole.portal
 bypasses the console authentication check via URL encoding.
 This sim serves the console without auth to represent the vulnerable state.
 """
+import os
 from flask import Flask, request, Response
 from urllib.parse import unquote
 
@@ -59,10 +60,18 @@ def healthz():
     return "ok", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7001)
+    # Host/port are configurable so the remediation can move the vulnerable
+    # backend to loopback and let an nginx proxy own the public 7001 port.
+    # Vulnerable default: all interfaces on 7001.
+    app.run(host=os.environ.get("WL_HOST", "0.0.0.0"),
+            port=int(os.environ.get("WL_PORT", "7001")))
 PYEOF
 
 
 EXPOSE 7001
 
-CMD ["python3", "/opt/weblogic/app.py"]
+# Boot wrapper (paired with .preserve-cmd): start the vulnerable WebLogic console
+# sim on 0.0.0.0:7001 in the BACKGROUND, then exec `sleep infinity` so the
+# unauthenticated /console surface is already reachable when the agent starts and
+# PID 1 is the sleep. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","python3 /opt/weblogic/app.py >/var/log/weblogic.log 2>&1 & exec sleep infinity"]

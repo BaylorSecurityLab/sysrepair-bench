@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the demo app in the background and execs
+# `sleep infinity` (PID 1 stays sleep, so restarting the app cannot kill the
+# container). The running app is a REGRESSION target only: CVE-2021-44832 is not
+# exploitable against the live JVM (it requires attacker-controlled logging
+# config + a restart), so the verifier tests the on-disk log4j-core artifact's
+# JDBC/JNDI behaviour rather than a network payload. Solutions upgrade the jars
+# and restart the app.

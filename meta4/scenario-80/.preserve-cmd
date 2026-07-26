@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# /opt/start.sh boots LocalStack in the background (so the IAM resources are
+# provisioned and awslocal can reach a LIVE endpoint) and then execs
+# `sleep infinity` as PID-adjacent to the shell, so restarting/killing
+# LocalStack cannot stop the container. Remediation is live AWS API calls, so
+# there is no "forgot to restart" case.

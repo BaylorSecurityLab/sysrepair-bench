@@ -1,45 +1,58 @@
 #!/bin/bash
 # Scenario 109: WebLogic Console URL Bypass (CVE-2020-14882)
+# Ground truth is BEHAVIORAL against the LIVE public port 7001. The admin console
+# (/console, incl. the %252e%252e URL-encoding bypass) must be unreachable from
+# the network. Vulnerable state: the sim serves /console with no auth on
+# 0.0.0.0:7001. Remediation: move the backend to loopback and put an nginx proxy
+# on 7001 that denies /console.
 set -u
+IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+[ -z "$IP" ] && IP=127.0.0.1
 
-###############################################################################
-# PoC: URL-encoding bypass path must be blocked (403/404) via nginx
-# curl sends the double-encoded URL; nginx must deny it.
-###############################################################################
+code_of() { curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$IP:7001$1" 2>/dev/null || echo 000; }
+body_of() { curl -s -m 5 "http://$IP:7001$1" 2>/dev/null || true; }
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-    'http://localhost:7001/console/css/%252e%252e%252fconsole.portal')
-
-if [ "$STATUS" = "200" ]; then
-    echo "FAIL [PoC]: URL-encoding bypass returned 200 — /console path not blocked." >&2
+# Wait for something to answer on 7001 (do NOT start it).
+UP=0
+for i in $(seq 1 20); do
+    [ "$(code_of /)" != "000" ] && { UP=1; break; }
+    sleep 2
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: nothing serving on 7001 (dead / not started)." >&2
     exit 1
 fi
-echo "PASS [PoC]: /console/css/%252e%252e%252fconsole.portal returned $STATUS (blocked)."
 
 ###############################################################################
-# PoC 2: Direct /console path must also be blocked
+# PoC 1: the URL-encoding bypass must be blocked (not 200, no console content)
 ###############################################################################
-
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7001/console)
-if [ "$STATUS" = "200" ]; then
-    echo "FAIL [PoC]: /console returned 200 — console path not blocked by nginx." >&2
+BP='/console/css/%252e%252e%252fconsole.portal'
+CODE=$(code_of "$BP"); BODY=$(body_of "$BP")
+if [ "$CODE" = "200" ] || printf '%s' "$BODY" | grep -qi 'WebLogic .*Console\|Administration Console'; then
+    echo "FAIL [PoC]: URL-encoding bypass reachable on 7001 (HTTP $CODE) — console exposed." >&2
     exit 1
 fi
-echo "PASS [PoC]: /console returned $STATUS (blocked by nginx)."
+echo "PASS [PoC]: URL-encoding bypass blocked ($CODE)."
 
 ###############################################################################
-# Regression: WebLogic (simulated) must still respond on port 7001
-# for non-console paths via the nginx proxy
+# PoC 2: direct /console must also be blocked
 ###############################################################################
+CODE=$(code_of "/console"); BODY=$(body_of "/console")
+if [ "$CODE" = "200" ] || printf '%s' "$BODY" | grep -qi 'Administration Console'; then
+    echo "FAIL [PoC]: /console reachable on 7001 (HTTP $CODE) — console not blocked." >&2
+    exit 1
+fi
+echo "PASS [PoC]: /console blocked ($CODE)."
 
+###############################################################################
+# Regression: non-console paths must still be served via the proxy
+###############################################################################
 for i in 1 2 3 4 5; do
-    STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7001/)
-    if [ "$STATUS" = "200" ]; then
-        echo "PASS [Regression]: WebLogic responds with 200 on / (non-console path)."
+    if [ "$(code_of /)" = "200" ]; then
+        echo "PASS [Regression]: WebLogic root path served on 7001 (HTTP 200)."
         exit 0
     fi
-    sleep 3
+    sleep 2
 done
-
-echo "FAIL [Regression]: WebLogic root path returned $STATUS — service not running." >&2
+echo "FAIL [Regression]: root path not served on 7001." >&2
 exit 1

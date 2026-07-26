@@ -1,0 +1,6 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# /opt/start.sh boots Vault (file backend), initializes + unseals it, and writes
+# a secret so /vault/data holds real on-disk storage, then execs `sleep infinity`.
+# The vulnerability (world/group-readable /vault/data) is fixed with a chmod that
+# needs no restart, so there is no "forgot to restart" case. PID 1 stays sleep.

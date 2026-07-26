@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots mongod with the zlib-enabled config using --fork and
+# then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING (advertising zlib) when the agent starts,
+#     which is what makes the "edited mongod.conf but never restarted" case
+#     detectable via the live isMaster/hello compressor list;
+#   * PID 1 is still `sleep infinity`, so restarting mongod cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART mongod, not merely edit the
+# config file — the running server keeps negotiating zlib until it is restarted.

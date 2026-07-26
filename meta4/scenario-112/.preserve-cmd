@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots httpd 2.4.49 with the vulnerable (traversal-enabled)
+# config in the BACKGROUND and then execs `sleep infinity`, so:
+#   * httpd is ALREADY RUNNING when the agent starts, which makes the
+#     "fixed the config but never restarted the service" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting httpd cannot kill the container.
+#
+# Consequence for solutions: the fix must RESTART httpd, not merely start it.

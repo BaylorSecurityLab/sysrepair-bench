@@ -1,31 +1,65 @@
 #!/bin/bash
+# Scenario 03: Log4j 2.16.0 recursive-lookup DoS (CVE-2021-45105)
+#
+# BEHAVIOURAL verifier. It does not grep the jar version. It fires the real
+# CVE-2021-45105 payload - a self-referential ${${::-...}} lookup - at the LIVE
+# service in a query parameter that lands in the logged Thread Context Map, then
+# watches the app's own log for the "Infinite loop in property interpolation"
+# error that ONLY a vulnerable Log4j (<= 2.16.0) emits while evaluating it.
+# Error observed => still vulnerable => FAIL. Absent (and app healthy) => PASS.
+#
+# Truth table:
+#   2.16.0 running                 -> recursion error -> FAIL
+#   2.17.1 + app restarted         -> none            -> PASS
+#   2.17.1 jars but NOT restarted  -> recursion error -> FAIL (old JVM)
+#   nothing done                   -> recursion error -> FAIL
+
 set -u
-JAR=$(ls /opt/app/log4j-core-*.jar 2>/dev/null | head -1)
-[ -z "$JAR" ] && { echo "FAIL [PoC]: log4j-core jar missing." >&2; exit 1; }
-VER=$(basename "$JAR" | sed -E 's/log4j-core-([0-9.]+)\.jar/\1/')
-ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
-if ! ver_ge "$VER" "2.17.1"; then
-    echo "FAIL [PoC]: log4j-core is $VER (need >= 2.17.1)." >&2; exit 1
+LOG=/var/log/app.log
+URL=http://127.0.0.1:8080
+
+# The image CMD boots the app (see .preserve-cmd); a live daemon is expected.
+# verify.sh must NOT start it - a dead service is a failure.
+UP=0
+for i in $(seq 1 15); do
+    if wget -q -O /dev/null -T 3 "$URL/?q=probe"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: app not reachable on 8080 - a dead service is a failure." >&2
+    exit 1
 fi
-echo "PASS [PoC]: log4j-core upgraded to $VER."
+if [ ! -r "$LOG" ]; then
+    echo "FAIL [Regression]: app log $LOG not readable - cannot observe runtime behaviour." >&2
+    exit 1
+fi
 
-# PoC (behavioral): send a JNDI payload and verify the app does not hang
-for i in 1 2 3 4 5; do
-    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/"; then
-        JNDI_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            'http://127.0.0.1:8080/?q=${jndi:ldap://127.0.0.1:1/a}' 2>/dev/null || echo "000")
-        if [ "$JNDI_CODE" = "000" ]; then
-            echo "FAIL [PoC]: App hung or crashed on JNDI payload." >&2
-            exit 1
-        fi
-        echo "PASS [PoC]: App returned HTTP $JNDI_CODE for JNDI payload (no hang/crash)."
-        break
-    fi
-    sleep 2
-done
+###############################################################################
+# PoC: drive the recursive-lookup DoS and observe the runtime reaction.
+# Only inspect log lines appended AFTER this point (robust to a prior restart).
+###############################################################################
+BEFORE=$(wc -l < "$LOG")
+PAYLOAD='${${::-${::-$${::-j}}}}'
+wget -q -O /dev/null -T 8 "$URL/?q=$PAYLOAD" >/dev/null 2>&1
+sleep 2
 
-for i in 1 2 3 4 5 6 7 8; do
-    curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/" && { echo "PASS [Regression]: HTTP 8080 reachable."; exit 0; }
-    sleep 2
-done
-echo "FAIL [Regression]: HTTP 8080 not reachable." >&2; exit 1
+NEW=$(tail -n +$((BEFORE + 1)) "$LOG")
+if printf '%s' "$NEW" | grep -q 'Infinite loop in property interpolation'; then
+    echo "FAIL [PoC]: the payload triggered 'Infinite loop in property interpolation'" >&2
+    echo "            in the running app - CVE-2021-45105 recursion is present." >&2
+    exit 1
+fi
+echo "PASS [PoC]: recursive-lookup payload did not trigger uncontrolled recursion."
+
+###############################################################################
+# Regression: the app must still serve normal requests.
+###############################################################################
+OUT=$(wget -q -O- -T 5 "$URL/?q=hello" 2>/dev/null || true)
+if [ "$OUT" != "ok" ]; then
+    echo "FAIL [Regression]: app did not return the expected body on a normal request." >&2
+    exit 1
+fi
+echo "PASS [Regression]: app healthy on 8080."
+
+echo "All checks passed."
+exit 0

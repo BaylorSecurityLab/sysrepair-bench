@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Redis with NO requirepass in the background, seeds the
+# ArgoCD session-token / app-state keys, and then execs `sleep infinity`, so:
+#   * Redis is ALREADY RUNNING unauthenticated when the agent starts, which makes
+#     the "wrote requirepass to a config but never restarted Redis" case
+#     detectable (a running server does not pick up requirepass without a restart
+#     or CONFIG SET);
+#   * PID 1 is `sleep infinity`, so restarting Redis cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART Redis with the new config, not
+# merely write the config file — the live server is still auth-less until then.

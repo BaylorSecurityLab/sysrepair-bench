@@ -77,4 +77,11 @@ RUN chmod +x /app/start.sh
 
 
 EXPOSE 5000
-CMD ["/app/start.sh"]
+
+# Boot wrapper (see .preserve-cmd): start the mock IMDS on 127.0.0.1:9999 and the
+# SSRF-vulnerable Flask app on :5000 in the background (vulnerable code already
+# running), then hand PID 1 to `sleep infinity`. Python does not re-import
+# server.py per request, so patching the source without restarting the process
+# leaves the old vulnerable code serving — that is what makes the
+# "fixed but not restarted" case detectable.
+CMD ["/bin/bash","-c","python3 /app/imds.py & python3 /app/server.py & for i in $(seq 1 40); do curl -sf -o /dev/null -m 2 http://127.0.0.1:5000/ && break; sleep 0.5; done; exec sleep infinity"]

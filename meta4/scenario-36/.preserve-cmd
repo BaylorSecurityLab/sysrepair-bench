@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile ENTRYPOINT boots MinIO in the background, creates `testbucket`
+# with an anonymous *download* policy (the vulnerability), and then execs
+# `sleep infinity`, so:
+#   * MinIO is ALREADY RUNNING with the public bucket when the agent starts;
+#   * PID 1 is `sleep infinity`, so restarting MinIO cannot kill the container.
+#
+# The bucket policy is server-side state re-evaluated per request, so the fix
+# (`mc anonymous set none`) takes effect live and needs no MinIO restart.

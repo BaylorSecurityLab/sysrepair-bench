@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD (boot.sh) starts VAmPI in its VULNERABLE posture and then
+# execs `sleep infinity`, so:
+#   * the API is ALREADY RUNNING when the agent starts, which makes the "fixed
+#     the source but never restarted the service" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting the app cannot kill the
+#     container and destroy the eval sample.
+#
+# Consequence for solutions: a fix must RESTART the app (kill + relaunch), not
+# merely start it if absent — it is already up serving the vulnerable code.

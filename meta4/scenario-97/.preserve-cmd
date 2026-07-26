@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD runs entrypoint.sh, which starts Elasticsearch and then
+# Kibana 6.5.4 with the vulnerable Timelion plugin ENABLED, in the background,
+# and finally execs `sleep infinity`, so:
+#   * Kibana is ALREADY RUNNING with Timelion enabled when the agent starts,
+#     which makes the "set timelion.enabled:false but never restarted Kibana"
+#     case detectable;
+#   * PID 1 is `sleep infinity`, so restarting Kibana cannot kill the container.
+#
+# Consequence for solutions: the fix must RESTART Kibana after disabling Timelion,
+# not merely edit kibana.yml.

@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Airflow webserver ALREADY RUNNING with
+# load_examples=True (the vulnerable example RCE DAG loaded), then execs
+# `sleep infinity`, so:
+#   * the example DAG is live in the running scheduler/webserver when the agent
+#     starts, which makes the "set load_examples=False but never restarted"
+#     case detectable;
+#   * PID 1 is `sleep infinity`, so restarting the webserver cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must RESTART the webserver after setting
+# load_examples=False (and may delete the example DAG files), not merely edit
+# airflow.cfg.

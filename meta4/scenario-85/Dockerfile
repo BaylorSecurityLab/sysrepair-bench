@@ -8,10 +8,17 @@ USER root
 
 RUN apk add --no-cache bash procps curl coreutils
 
+RUN mkdir -p /vault/data /vault/config
+
+COPY start.sh /opt/start.sh
+RUN chmod +x /opt/start.sh
 
 EXPOSE 8200
 
 ENV VAULT_DEV_ROOT_TOKEN_ID=root
 ENV VAULT_ADDR=http://127.0.0.1:8200
 
-CMD ["vault", "server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+# Boot Vault (in -dev mode = the vuln) via a wrapper that keeps PID 1 as
+# `sleep infinity`, so a solution can restart Vault as a non-dev server.
+ENTRYPOINT []
+CMD ["/opt/start.sh"]

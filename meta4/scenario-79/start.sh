@@ -21,4 +21,7 @@ kubectl create secret generic test-secret \
     2>/dev/null || true
 
 echo "Test secret created. k3s running without etcd encryption."
-wait
+
+# Keep PID 1 as sleep so an agent that restarts k3s (required to enable
+# encryption-at-rest) cannot kill the container.
+exec sleep infinity

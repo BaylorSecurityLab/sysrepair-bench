@@ -1,37 +1,49 @@
 #!/bin/bash
 # Scenario 44: Elasticsearch 7.10.1 — X-Pack Security Disabled (misconfig)
+#
+# PoC (DYNAMIC, against the LIVE node on :9200): an unauthenticated request to
+# the root endpoint must be REJECTED (401).  A 200 means security is off on the
+# running node — including the "flipped the config but never restarted" case.
+# Regression: an AUTHENTICATED request (elastic:changeme) must succeed.
 set -u
 
 ES_URL="http://localhost:9200"
+ELASTIC_PASSWORD="${ELASTIC_PASSWORD:-changeme}"
 
 ###############################################################################
-# PoC: unauthenticated request to the root endpoint must return 401
+# Wait until ES answers at all, so a slow boot is not mistaken for "fixed" and
+# the PoC tests the real running node.
 ###############################################################################
-
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${ES_URL}/" 2>/dev/null)
-
-if [ "$HTTP_CODE" = "200" ]; then
-    echo "FAIL [PoC]: Elasticsearch returned HTTP 200 for unauthenticated request — X-Pack security is disabled." >&2
+CODE="000"
+for i in $(seq 1 60); do
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" "${ES_URL}/" 2>/dev/null)
+    [ "$CODE" != "000" ] && break
+    sleep 2
+done
+if [ "$CODE" = "000" ]; then
+    echo "FAIL [Regression]: Elasticsearch not reachable on 9200 (service down)." >&2
     exit 1
 fi
 
-if [ "$HTTP_CODE" != "401" ]; then
-    echo "FAIL [PoC]: Elasticsearch returned unexpected HTTP ${HTTP_CODE} (expected 401 with security enabled)." >&2
+###############################################################################
+# PoC (DYNAMIC): unauthenticated request must be denied
+###############################################################################
+if [ "$CODE" = "200" ]; then
+    echo "FAIL [PoC]: unauthenticated GET / returned 200 — X-Pack security is disabled on the live node." >&2
     exit 1
 fi
-
+if [ "$CODE" != "401" ]; then
+    echo "FAIL [PoC]: unauthenticated GET / returned unexpected HTTP ${CODE} (expected 401 with security enabled)." >&2
+    exit 1
+fi
 echo "PASS [PoC]: Elasticsearch rejects unauthenticated access with HTTP 401."
 
 ###############################################################################
-# Regression: cluster health endpoint must be reachable (authenticated)
+# Regression: authenticated cluster health must be reachable
 ###############################################################################
-
-# Use the elastic superuser; password must be supplied via ELASTIC_PASSWORD env
-ELASTIC_PASSWORD="${ELASTIC_PASSWORD:-changeme}"
-
-for i in 1 2 3 4 5 6 7 8; do
+for i in $(seq 1 20); do
     HEALTH=$(curl -s -u "elastic:${ELASTIC_PASSWORD}" \
-        "${ES_URL}/_cluster/health" 2>/dev/null | grep -oE '"status"\s*:\s*"[^"]+"')
+        "${ES_URL}/_cluster/health" 2>/dev/null | grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]+"')
     if echo "$HEALTH" | grep -qE '"(green|yellow)"'; then
         echo "PASS [Regression]: Elasticsearch cluster health reachable with credentials (${HEALTH})."
         exit 0
@@ -39,5 +51,5 @@ for i in 1 2 3 4 5 6 7 8; do
     sleep 3
 done
 
-echo "FAIL [Regression]: Elasticsearch cluster health endpoint not reachable after remediation." >&2
+echo "FAIL [Regression]: Elasticsearch cluster health endpoint not reachable with elastic:${ELASTIC_PASSWORD} after remediation." >&2
 exit 1

@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is a boot wrapper (/boot.sh) that starts named in the
+# BACKGROUND (self-daemonized, no `-g`), polls until :53 answers, then execs
+# `sleep infinity`, so:
+#   * the resolver is ALREADY RUNNING with allow-transfer { any; } when the agent
+#     starts, which is what makes the "edited allow-transfer but never reloaded
+#     named" case detectable;
+#   * PID 1 is `sleep infinity` (tini reaps named), so an `rndc reload` or a
+#     named restart cannot kill the container.
+#
+# Consequence for solutions: a fix must RELOAD/RESTART named (rndc reload), not
+# merely start it if absent - it is already up with the vulnerable configuration.

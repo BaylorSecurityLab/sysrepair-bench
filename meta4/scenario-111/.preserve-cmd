@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots memcached with the UDP amplification port enabled
+# (-U 11211) in the BACKGROUND and then execs `sleep infinity`, so:
+#   * memcached is ALREADY RUNNING when the agent starts, which makes the
+#     "disabled UDP in intent but never restarted the daemon" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting memcached cannot kill the
+#     container.
+#
+# Consequence for solutions: memcached has no config file — the UDP listener is
+# a runtime flag, so the fix MUST restart memcached with -U 0.

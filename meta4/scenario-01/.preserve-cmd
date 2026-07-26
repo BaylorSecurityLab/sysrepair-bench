@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Solr (with the vulnerable Log4j 2.14.1) in the
+# background and then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "patched the jars but never restarted Solr" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting Solr cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART Solr after replacing the Log4j
+# jars, not merely start it if absent - the service is already up with the
+# vulnerable classes loaded into the running JVM.

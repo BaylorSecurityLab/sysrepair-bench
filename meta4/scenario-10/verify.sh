@@ -1,45 +1,36 @@
 #!/bin/bash
+# CVE-2024-50379 — Tomcat case-insensitive JSP upload race. The exploitable
+# precondition is the writable default servlet (readonly=false). Ground truth
+# is BEHAVIORAL against the LIVE server on 8080: a PUT that lands a file proves
+# the servlet is writable. Boots already-running (.preserve-cmd), so a config
+# edit without a restart still serves the vulnerable config and FAILs here.
 set -u
-WEB_XML=/usr/local/tomcat/conf/web.xml
-ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+BASE=http://127.0.0.1:8080
 
-VER=$(/usr/local/tomcat/bin/version.sh 2>/dev/null | awk -F: '/Server number/{gsub(/[[:space:]]/,"",$2);print $2}')
-[ -z "$VER" ] && VER=$(grep -oE 'Apache Tomcat/[0-9.]+' /usr/local/tomcat/RELEASE-NOTES 2>/dev/null | head -1 | sed 's|.*/||')
-
-READONLY=$(awk '/<servlet-class>org\.apache\.catalina\.servlets\.DefaultServlet/,/<\/servlet>/' "$WEB_XML" \
-           | awk '/<param-name>readonly</{flag=1;next} flag && /<param-value>/{print;exit}' \
-           | grep -oE 'true|false' | head -1)
-
-VER_SAFE=0
-case "$VER" in
-    9.0.*)  ver_ge "$VER" "9.0.98"  && VER_SAFE=1 ;;
-    10.1.*) ver_ge "$VER" "10.1.34" && VER_SAFE=1 ;;
-    11.0.*) ver_ge "$VER" "11.0.2"  && VER_SAFE=1 ;;
-esac
-
-if [ "$READONLY" = "true" ] || [ -z "$READONLY" ] || [ "$VER_SAFE" = "1" ]; then
-    echo "PASS [PoC]: readonly='$READONLY' tomcat=$VER ver_safe=$VER_SAFE."
-else
-    echo "FAIL [PoC]: readonly=false AND tomcat $VER vulnerable." >&2; exit 1
+UP=0
+for i in $(seq 1 30); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' -m 3 "$BASE/" 2>/dev/null)" = "200" ]; then UP=1; break; fi
+    sleep 2
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: Tomcat did not serve HTTP 200 on 8080 (dead/not restarted)." >&2
+    exit 1
 fi
 
-# PoC (behavioral): attempt PUT upload — must be rejected (403/405)
-for i in $(seq 1 10); do
-    if curl -sf -o /dev/null -m 3 "http://127.0.0.1:8080/"; then
-        PUT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            -X PUT -d 'TEST' "http://127.0.0.1:8080/verify_probe.txt" 2>/dev/null || echo "000")
-        if [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ]; then
-            echo "FAIL [PoC]: PUT upload succeeded (HTTP $PUT_CODE) — readonly=false still active." >&2
-            exit 1
-        fi
-        echo "PASS [PoC]: PUT rejected (HTTP $PUT_CODE)."
-        break
-    fi
-    sleep 2
-done
+# --- dynamic probe: writable default servlet -------------------------------
+PROBE="/verify_probe_$$.txt"
+PUT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X PUT --data-binary 'TEST' "$BASE$PROBE" 2>/dev/null || echo 000)
+if [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ] || [ "$PUT_CODE" = "200" ]; then
+    GET_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$BASE$PROBE" 2>/dev/null || echo 000)
+    curl -s -o /dev/null -m 5 -X DELETE "$BASE$PROBE" 2>/dev/null || true
+    echo "FAIL [PoC]: PUT accepted (HTTP $PUT_CODE, GET $GET_CODE) — default servlet writable (readonly=false live)." >&2
+    exit 1
+fi
+echo "PASS [PoC]: PUT rejected (HTTP $PUT_CODE) — default servlet read-only / patched."
 
-for i in $(seq 1 20); do
-    curl -sf -o /dev/null -m 3 http://127.0.0.1:8080/ && { echo "PASS [Regression]: Tomcat 8080 reachable."; exit 0; }
-    sleep 2
-done
-echo "FAIL [Regression]: Tomcat 8080 unreachable." >&2; exit 1
+if [ "$(curl -s -o /dev/null -w '%{http_code}' -m 3 "$BASE/" 2>/dev/null)" = "200" ]; then
+    echo "PASS [Regression]: Tomcat HTTP 8080 reachable (HTTP 200)."
+    exit 0
+fi
+echo "FAIL [Regression]: Tomcat HTTP 8080 not serving 200 after probe." >&2
+exit 1

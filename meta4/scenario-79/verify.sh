@@ -1,22 +1,38 @@
 #!/bin/sh
 # Scenario 79: K8s Secrets Plaintext in etcd — No Encryption-at-Rest (misconfig)
+#
+# DYNAMIC PoC: write a Secret carrying a random sentinel value THROUGH THE LIVE
+# apiserver, then read the on-disk kine/SQLite datastore. If encryption-at-rest
+# is active the value is stored as ciphertext and the sentinel does not appear;
+# if it is not, the sentinel appears verbatim. This exercises the running
+# apiserver — a provider-config file that was written but never applied (k3s not
+# restarted) leaves live writes in plaintext and therefore FAILS.
 set -u
 
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 export KUBECONFIG
 
-ENCRYPTION_CONFIG=/etc/rancher/k3s/encryption-config.yaml
+DB=/var/lib/rancher/k3s/server/db/state.db
+PROBE="enc-probe-$$"
+RAND=$(head -c 12 /dev/urandom 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+[ -n "$RAND" ] || RAND="$$_$(date +%s 2>/dev/null)"
+SENTINEL="SENTINEL_${RAND}"
+
+cleanup() { kubectl delete secret "$PROBE" -n default --ignore-not-found >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
 
 ###############################################################################
 # Wait for k3s API to be ready (up to 90s)
 ###############################################################################
 
 echo "Waiting for k3s API server..."
-for i in $(seq 1 45); do
+i=0
+while [ "$i" -lt 45 ]; do
     if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
         echo "k3s API is ready."
         break
     fi
+    i=$((i+1))
     if [ "$i" -eq 45 ]; then
         echo "FAIL [Regression]: k3s API did not become ready in time." >&2
         exit 1
@@ -25,28 +41,42 @@ for i in $(seq 1 45); do
 done
 
 ###############################################################################
-# PoC: Encryption configuration file must exist
+# Regression + PoC setup: write a sentinel Secret through the live apiserver
 ###############################################################################
 
-if [ ! -f "$ENCRYPTION_CONFIG" ]; then
-    echo "FAIL [PoC]: Encryption config file not found at $ENCRYPTION_CONFIG. Secrets are stored as plaintext in etcd." >&2
+if ! kubectl create secret generic "$PROBE" -n default \
+        --from-literal=canary="$SENTINEL" >/dev/null 2>&1; then
+    echo "FAIL [Regression]: Secrets API not functional (could not create probe secret)." >&2
     exit 1
 fi
-echo "PASS [PoC]: Encryption config file exists at $ENCRYPTION_CONFIG."
+sleep 3
 
-# PoC: The config must reference aescbc or secretbox
-if ! grep -qE 'aescbc|secretbox' "$ENCRYPTION_CONFIG" 2>/dev/null; then
-    echo "FAIL [PoC]: Encryption config does not reference 'aescbc' or 'secretbox' provider. Plaintext storage may still be in effect." >&2
+if ! kubectl get secret "$PROBE" -n default >/dev/null 2>&1; then
+    echo "FAIL [Regression]: probe secret not retrievable via the Secrets API." >&2
     exit 1
 fi
-echo "PASS [PoC]: Encryption config references a strong encryption provider (aescbc or secretbox)."
 
 ###############################################################################
-# Regression: Secrets API must still function
+# PoC: sentinel must NOT be recoverable in plaintext from the datastore
 ###############################################################################
 
-if kubectl get secret test-secret -n default 2>/dev/null | grep -q "test-secret"; then
-    echo "PASS [Regression]: Secrets API is functional (test-secret is accessible)."
+if [ ! -f "$DB" ]; then
+    echo "FAIL [PoC]: datastore $DB not found — cannot assess encryption-at-rest." >&2
+    exit 1
+fi
+
+if grep -a -q "$SENTINEL" "$DB" "$DB-wal" 2>/dev/null; then
+    echo "FAIL [PoC]: Secret value stored as PLAINTEXT in the datastore — encryption-at-rest is not active (config written but not applied, or absent)." >&2
+    exit 1
+fi
+echo "PASS [PoC]: Secret written via the live apiserver is encrypted at rest (sentinel absent from datastore)."
+
+###############################################################################
+# Regression: pre-existing Secret still accessible
+###############################################################################
+
+if kubectl get secret test-secret -n default >/dev/null 2>&1; then
+    echo "PASS [Regression]: Secrets API is functional (test-secret accessible)."
     exit 0
 fi
 

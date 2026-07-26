@@ -11,10 +11,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir pyModbusTCP
+    /opt/venv/bin/pip install --no-cache-dir "pyModbusTCP==0.3.0"
 
 COPY modbus_server.py /opt/modbus_server.py
 
 EXPOSE 502
 
-CMD ["/opt/venv/bin/python3", "/opt/modbus_server.py"]
+# Boot wrapper (see .preserve-cmd): start the PLC simulator in the BACKGROUND
+# then exec `sleep infinity` so PID 1 is the wrapper, not the daemon. This keeps
+# the vulnerable service ALREADY LISTENING when the agent starts while ensuring
+# a solution that (re)applies firewall rules cannot kill the container.
+CMD ["/bin/bash", "-c", "/opt/venv/bin/python3 /opt/modbus_server.py & exec sleep infinity"]

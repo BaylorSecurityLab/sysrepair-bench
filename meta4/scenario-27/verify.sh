@@ -26,18 +26,30 @@ case "$RUNTIME_VER" in
 esac
 echo "PASS [PoC]: xz runtime reports version $RUNTIME_VER."
 
-# Also check liblzma.so — it must not be the 5.6.0/5.6.1 build
-LIBLZMA=$(find /usr/lib /usr/local/lib -name 'liblzma.so.5*' -type f 2>/dev/null | head -1)
-if [ -n "$LIBLZMA" ]; then
-    LIB_VER=$(strings "$LIBLZMA" 2>/dev/null | grep -oE '5\.[0-9]+\.[0-9]+' | head -1)
-    case "$LIB_VER" in
-        5.6.0|5.6.1)
-            echo "FAIL [PoC]: liblzma reports $LIB_VER — still in affected range." >&2
-            exit 1
-            ;;
+# Also check EVERY liblzma.so on disk — a downgrade of the xz *binary* alone
+# leaves the backdoored shared object in place (sshd et al. link liblzma, not
+# the xz CLI), so a single head -1 sample is not enough. We scan all copies.
+# The source build encodes the version in the filename (liblzma.so.5.6.1), so
+# filename detection works even when `strings`/binutils is absent from the
+# image (avoids the "tool absent -> silent skip" trap).
+BAD_LIB=""
+for lib in $(find / -xdev -name 'liblzma.so.5.*' 2>/dev/null); do
+    [ -e "$lib" ] || continue
+    real=$(readlink -f "$lib" 2>/dev/null || echo "$lib")
+    base=$(basename "$real")
+    case "$base" in
+        *5.6.0|*5.6.1) BAD_LIB="$real ($base)" ;;
     esac
-    echo "PASS [PoC]: liblzma version string is $LIB_VER."
+    if command -v strings >/dev/null 2>&1; then
+        sv=$(strings "$real" 2>/dev/null | grep -oE '5\.6\.[01]' | head -1)
+        [ -n "$sv" ] && BAD_LIB="$real (strings=$sv)"
+    fi
+done
+if [ -n "$BAD_LIB" ]; then
+    echo "FAIL [PoC]: a liblzma in the affected 5.6.0/5.6.1 range is still on disk: $BAD_LIB" >&2
+    exit 1
 fi
+echo "PASS [PoC]: no liblzma.so in the affected 5.6.0/5.6.1 range found on disk."
 
 # Regression: xz round-trip must work
 RESULT=$(echo "sysrepair-test" | xz -z 2>/dev/null | xz -d 2>/dev/null)

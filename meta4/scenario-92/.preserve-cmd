@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Prometheus with NO --web.config.file (so every HTTP
+# endpoint is unauthenticated - the vulnerable state) and then execs
+# `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "wrote web.yml but never restarted Prometheus with it" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting Prometheus cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must RELAUNCH Prometheus with
+# --web.config.file=<web.yml>, not merely drop the file on disk.

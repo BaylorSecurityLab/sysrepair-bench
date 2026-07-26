@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts rsyncd (detached) with the vulnerable open module,
+# then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING (open, unauthenticated) when the agent
+#     starts, so a dead daemon is a genuine FAIL;
+#   * PID 1's main child is `sleep infinity`, so restarting rsyncd cannot kill
+#     the container.
+#
+# Note on "not restarted": rsyncd re-reads /etc/rsyncd.conf on EVERY incoming
+# connection, so a config fix takes effect without any restart. There is
+# therefore no "fixed the config but forgot to restart" failure case for this
+# scenario.

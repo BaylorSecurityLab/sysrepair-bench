@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Mosquitto broker (daemonized, -d) with the
+# vulnerable anonymous config, waits for :1883 to listen, and then execs
+# `sleep infinity`, so:
+#   * the broker is ALREADY RUNNING when the agent starts, which is what makes
+#     the "fixed the config but never restarted the broker" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting mosquitto cannot kill the
+#     container and destroy the eval sample.
+#
+# Consequence for solutions: a fix must RESTART the broker (pkill mosquitto +
+# relaunch), not merely start it if absent - it is already up with the
+# vulnerable configuration.

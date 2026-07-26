@@ -9,7 +9,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl ca-certificates gnupg && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    apt-get install -y --no-install-recommends nodejs nginx && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -64,6 +64,10 @@ EOF
 RUN npx next build
 
 
-EXPOSE 3000
+EXPOSE 3000 80
 
-CMD ["npx", "next", "start", "-p", "3000"]
+# Boot wrapper (paired with .preserve-cmd): start the vulnerable Next.js app on
+# 0.0.0.0:3000 in the BACKGROUND, then exec `sleep infinity` so the middleware
+# auth-bypass surface is already reachable when the agent starts and PID 1 is the
+# sleep. NOT a bare foreground CMD.
+CMD ["/bin/bash","-c","cd /app && npx next start -p 3000 >/var/log/next.log 2>&1 & exec sleep infinity"]

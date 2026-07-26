@@ -39,5 +39,14 @@ RUN chown -R appuser:appuser /app
 
 
 EXPOSE 8080
-USER appuser
-CMD ["python3", "/app/server.py"]
+
+# Keep the image user as root so the grader's `docker exec` (which runs as the
+# image USER) can `su` to appuser in verify.sh and chmod the root-owned socket in
+# the solution. The application itself still runs UNPRIVILEGED as appuser — the
+# boot wrapper drops to appuser via `su` to launch Flask.
+USER root
+
+# Boot wrapper (see .preserve-cmd): launch Flask AS appuser in the background
+# (the vulnerable posture: appuser can reach the 0666 docker.sock), then hand
+# PID 1 to `sleep infinity` so the container survives service churn.
+CMD ["/bin/bash","-c","su appuser -s /bin/bash -c 'python3 /app/server.py' & for i in $(seq 1 40); do curl -sf -o /dev/null -m 2 http://127.0.0.1:8080/health && break; sleep 0.5; done; exec sleep infinity"]

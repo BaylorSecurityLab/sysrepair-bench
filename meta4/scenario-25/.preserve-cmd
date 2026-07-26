@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable buildkitd (v0.12.4) backgrounded on
+# /run/buildkit/buildkitd.sock and then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "replaced the binary but never restarted the daemon" case detectable
+#     (verify.sh queries the LIVE daemon version, not just the binary on disk);
+#   * PID 1 is `sleep infinity`, so restarting buildkitd cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART buildkitd, not merely replace
+# the binary - the vulnerable daemon is already up.

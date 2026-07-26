@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Airflow webserver ALREADY RUNNING with the
+# vulnerable default secret_key (temporary_key) loaded, then execs
+# `sleep infinity`, so:
+#   * the webserver is signing session cookies with the default key when the
+#     agent starts, which makes the "changed secret_key but never restarted the
+#     webserver" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting the webserver cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must RESTART the webserver after changing
+# secret_key, not merely edit airflow.cfg.

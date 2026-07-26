@@ -33,4 +33,7 @@ def catch_all(path):
     )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8090, debug=False)
+    # Bind host is configurable so the remediation can rebind the vulnerable
+    # backend to loopback only and expose it solely via the nginx WAF proxy.
+    # Vulnerable default: all interfaces.
+    app.run(host=os.environ.get("CONF_HOST", "0.0.0.0"), port=8090, debug=False)

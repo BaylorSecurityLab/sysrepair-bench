@@ -1,52 +1,41 @@
 #!/bin/bash
-# Scenario 40: MongoDB 4.4 — Zlib Compression Amplification Risk (misconfiguration)
+# Scenario 40: MongoDB — zlib wire-compression amplification risk (misconfig).
+# Dynamic check against the LIVE server (no static config-file grep): offer ONLY
+# zlib on connect and read back which compressor the running server actually
+# negotiates. This catches the "edited the file but never restarted" case AND
+# the "deleted net.compression" case — MongoDB's DEFAULT compressor list
+# includes zlib, so removing the config re-enables it.
+# This image ships the legacy `mongo` shell (mongosh/ss ABSENT), so probing uses
+# `mongo --networkMessageCompressors`.
 set -u
 
-CONF_FILE="/etc/mongod/mongod.conf"
+MHOST=127.0.0.1
 
-###############################################################################
-# PoC: zlib must not appear in the compressors list
-###############################################################################
+# --- Regression: mongod must be up (do NOT start it; a dead daemon is a FAIL).
+PING=$(timeout 15 mongo --quiet --host "$MHOST" --eval 'JSON.stringify(db.runCommand({ping:1}))' 2>&1 || true)
+case "$PING" in
+    *'"ok":1'*) echo "PASS [Regression]: mongod is up and responds to ping." ;;
+    *) echo "FAIL [Regression]: mongod not reachable on $MHOST:27017 ($PING)." >&2; exit 1 ;;
+esac
 
-if grep -qiE 'compressors\s*:.*zlib' "$CONF_FILE" 2>/dev/null; then
-    echo "FAIL [PoC]: mongod.conf still lists zlib as an accepted compressor — compression amplification risk present." >&2
+# --- PoC (live wire negotiation): the client offers ONLY zlib. The server
+#     echoes the mutually-supported compressors in isMaster().compression, so
+#     if zlib is still accepted it appears here -> vulnerable.
+NEG=$(timeout 15 mongo --quiet --networkMessageCompressors zlib --host "$MHOST" \
+        --eval 'JSON.stringify(db.isMaster().compression)' 2>&1 || true)
+if echo "$NEG" | grep -qi 'zlib'; then
+    echo "FAIL [PoC]: live server negotiates zlib wire compression (compression=$NEG)." >&2
     exit 1
 fi
 
-# Also check if --networkMessageCompressors was passed on the command line
-if mongosh --quiet --eval "db.adminCommand({getCmdLineOpts:1})" 2>/dev/null \
-    | grep -qi 'zlib'; then
-    echo "FAIL [PoC]: Running mongod reports zlib in networkMessageCompressors." >&2
+# --- Cross-check the RUNNING server's parsed config (runtime, not the on-disk
+#     file), which also reflects whether mongod was actually restarted.
+OPTS=$(timeout 15 mongo --quiet --host "$MHOST" admin \
+        --eval 'JSON.stringify(db.adminCommand({getCmdLineOpts:1}).parsed.net)' 2>&1 || true)
+if echo "$OPTS" | grep -qi 'zlib'; then
+    echo "FAIL [PoC]: running mongod config still lists zlib as a compressor (net=$OPTS)." >&2
     exit 1
 fi
 
-echo "PASS [PoC]: zlib compression is disabled — compression amplification risk mitigated."
-
-# PoC (behavioral): verify runtime compressor settings via serverStatus
-for i in 1 2 3 4 5; do
-    COMPRESSOR_INFO=$(mongosh --quiet --eval "db.serverStatus().network" 2>/dev/null || true)
-    if [ -n "$COMPRESSOR_INFO" ]; then
-        if echo "$COMPRESSOR_INFO" | grep -qi 'zlib'; then
-            echo "FAIL [PoC]: Running MongoDB reports zlib in network compressors." >&2
-            exit 1
-        fi
-        echo "PASS [PoC]: Running MongoDB does not report zlib compression."
-        break
-    fi
-    sleep 2
-done
-
-###############################################################################
-# Regression: MongoDB must still respond to a ping
-###############################################################################
-
-for i in 1 2 3 4 5; do
-    if mongosh --quiet --eval "db.runCommand({ping:1})" 2>/dev/null | grep -q '"ok"'; then
-        echo "PASS [Regression]: MongoDB responds to ping after disabling zlib."
-        exit 0
-    fi
-    sleep 2
-done
-
-echo "FAIL [Regression]: MongoDB not reachable after remediation." >&2
-exit 1
+echo "PASS [PoC]: zlib wire compression is disabled on the live server (negotiated=$NEG)."
+exit 0

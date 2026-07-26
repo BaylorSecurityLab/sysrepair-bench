@@ -1,42 +1,31 @@
 FROM --platform=linux/amd64 ubuntu:22.04
 
-# Docker Image Secrets in ENV/Layers (misconfig)
-# Secrets baked into ENV instructions are permanently stored in image metadata
-# and every intermediate layer. They are trivially recoverable via:
-#   docker inspect <container> | grep -A 50 '"Env"'
-#   docker history --no-trunc <image>
+# CWE-312: Cleartext Storage of Sensitive Information — world-readable secret
 #
-# Remediation: Remove ENV secrets. Pass secrets at runtime via:
-#   - 'docker run -e DB_PASSWORD=$(vault kv get ...)'
-#   - Docker Secrets (Swarm) or Kubernetes Secrets mounted as files
-#   - A mounted config file read by the application at startup
-
-# Vulnerable: secrets baked into the image
-ENV DB_PASSWORD=SuperSecret123
-ENV API_KEY=sk-live-abc123
+# A database password and API key are shipped in the image as a WORLD-READABLE
+# plaintext config file (/etc/appsecrets/db.conf, mode 0644). The secret is
+# readable by any unprivileged user or co-tenant process in the container
+# (`cat /etc/appsecrets/db.conf`) and persists in every image layer, so anyone
+# who pulls the image or unpacks its layers recovers it.
+#
+# (Previously this scenario baked the secrets into image `ENV` instructions.
+# A baked image ENV is injected by Docker into every process environment and
+# /proc/1/environ and CANNOT be removed by any in-container remediation — only
+# an image rebuild removes it — which made the scenario unsolvable inside the
+# running container. Moving the secret to a world-readable file models the same
+# cleartext-storage weakness (CWE-312) while being remediable at runtime, the
+# same reframe applied to meta4/scenario-88 with a distinct secret and path.)
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        procps && \
+    apt-get install -y --no-install-recommends bash && \
     rm -rf /var/lib/apt/lists/*
 
-# Application entry point reads config from /run/secrets/config if present,
-# otherwise falls back to environment variables (the vulnerable path).
-RUN mkdir -p /app
+# Vulnerable: secrets in a world-readable file baked into the image.
+RUN mkdir -p /etc/appsecrets && \
+    printf 'DB_PASSWORD=SuperSecret123\nAPI_KEY=sk-live-abc123\n' > /etc/appsecrets/db.conf && \
+    chmod 644 /etc/appsecrets/db.conf
 
-# Simple application script that uses mounted config when available
-RUN cat > /app/start.sh << 'APPEOF'
-#!/bin/bash
-# Read config from mounted file if available (secure path)
-if [ -f /run/secrets/config ]; then
-    source /run/secrets/config
-    echo "Config loaded from /run/secrets/config"
-else
-    echo "WARNING: No mounted config — using environment (may expose secrets)"
-fi
-echo "Application started."
-exec sleep infinity
-APPEOF
-RUN chmod +x /app/start.sh
+COPY app.sh /usr/local/bin/appd.sh
+RUN chmod +x /usr/local/bin/appd.sh
 
-CMD ["/app/start.sh"]
+CMD ["/usr/local/bin/appd.sh"]

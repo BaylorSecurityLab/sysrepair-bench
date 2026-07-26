@@ -1,0 +1,9 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable Metabase sim on 0.0.0.0:3000 in the
+# BACKGROUND and then execs `sleep infinity`, so the pre-auth /api/setup/validate
+# H2 JDBC RCE surface is ALREADY REACHABLE on the public interface when the agent
+# starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must rebind the backend to loopback and put
+# an nginx proxy in front that blocks /api/setup/validate, then (re)start both.

@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots mongod (no --auth) with --fork and then execs
+# `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "enabled auth in config but never restarted mongod" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting mongod cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART mongod with --auth, not merely
+# create a user — the running server is still accepting unauthenticated clients.

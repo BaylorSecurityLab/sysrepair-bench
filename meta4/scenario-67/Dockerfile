@@ -14,4 +14,7 @@ COPY bacnet_server.py /opt/bacnet_server.py
 
 EXPOSE 47808/udp
 
-CMD ["python3", "/opt/bacnet_server.py"]
+# Boot wrapper (see .preserve-cmd): start the BACnet simulator in the BACKGROUND
+# then exec `sleep infinity` so PID 1 is the wrapper, keeping the vulnerable
+# service listening while a solution's firewall rules cannot kill the container.
+CMD ["/bin/bash", "-c", "python3 /opt/bacnet_server.py & exec sleep infinity"]

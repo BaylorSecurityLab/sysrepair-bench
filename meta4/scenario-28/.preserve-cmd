@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Flask crAPI-style API (vulnerable code) in the
+# background and then execs `sleep infinity`, so:
+#   * the API is ALREADY RUNNING when the agent starts, which is what makes the
+#     "edited app.py but never restarted the process" case detectable (Python
+#     does not re-read source per request, so the old code keeps serving);
+#   * PID 1 is `sleep infinity`, so restarting the API cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART the API process, not merely start
+# it if absent - it is already up with the vulnerable code.

@@ -17,5 +17,13 @@ ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
 RUN mkdir -p /usr/share/jenkins/ref/init.groovy.d
 COPY init.groovy /usr/share/jenkins/ref/init.groovy.d/init.groovy
 
-USER jenkins
+# Boot wrapper: start Jenkins backgrounded, keep PID 1 as `sleep infinity`
+# so a remediation can restart the daemon in place (see .preserve-cmd).
+COPY start-jenkins.sh /usr/local/bin/start-jenkins.sh
+RUN chmod +x /usr/local/bin/start-jenkins.sh
+
+# Run as root so an in-container remediation can replace the root-owned
+# jenkins.war and restart the (root-launched) java process.
 EXPOSE 8080 50000
+ENTRYPOINT []
+CMD ["/bin/bash","-c","/usr/local/bin/start-jenkins.sh && exec sleep infinity"]

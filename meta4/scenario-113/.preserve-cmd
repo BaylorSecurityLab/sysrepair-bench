@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD (/opt/start.sh) boots the vulnerable Confluence sim on
+# 0.0.0.0:8090 in the BACKGROUND and then execs `sleep infinity`, so the
+# OGNL-injection surface is ALREADY REACHABLE on the public interface when the
+# agent starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must rebind the backend to loopback and put
+# an nginx WAF proxy in front, then (re)start both — a config written but never
+# activated leaves the endpoint exposed.

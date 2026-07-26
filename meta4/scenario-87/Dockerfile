@@ -12,9 +12,12 @@ RUN mkdir -p /consul/config /consul/data
 
 COPY consul.hcl /consul/config/consul.hcl
 
+COPY start.sh /opt/start.sh
+RUN chmod +x /opt/start.sh
 
 EXPOSE 8500 8600
 
-CMD ["consul", "agent", "-server", "-bootstrap", "-ui", \
-     "-data-dir=/consul/data", "-config-dir=/consul/config", \
-     "-client=0.0.0.0"]
+# Boot Consul via a wrapper that keeps PID 1 as `sleep infinity` so a solution
+# can restart Consul (required to apply ACLs) without killing the container.
+ENTRYPOINT []
+CMD ["/opt/start.sh"]

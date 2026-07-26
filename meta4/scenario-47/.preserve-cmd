@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts rabbitmq-server in the background, waits for the
+# management API (15672) to come up, then execs `sleep infinity`, so:
+#   * the broker is ALREADY RUNNING with the default guest/guest account when
+#     the agent starts (the vulnerability is live);
+#   * PID 1 is `sleep infinity`, not the broker, so management actions cannot
+#     kill the container.
+#
+# The remediation here is a RUNTIME change (rabbitmqctl delete_user guest), so
+# there is no "forgot to restart" case - deleting the user takes effect
+# immediately on the live broker.

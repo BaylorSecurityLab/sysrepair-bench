@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the vulnerable Next.js app on 0.0.0.0:3000 in the
+# BACKGROUND and then execs `sleep infinity`, so the middleware auth-bypass
+# surface (x-middleware-subrequest) is ALREADY REACHABLE on the public interface
+# when the agent starts, and PID 1 is the sleep.
+#
+# Consequence for solutions: the fix must rebind the app to loopback and put an
+# nginx proxy in front that strips the x-middleware-subrequest header, then
+# (re)start both.

@@ -1,0 +1,14 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots Solr (backgrounded via `bin/solr start`), seeds the
+# vulnerable 'testcore' with the DataImportHandler enabled, then execs
+# `sleep infinity`. So:
+#   * Solr is ALREADY RUNNING (with the vulnerable DIH) when the agent starts,
+#     which is what makes the "edited solrconfig.xml but never reloaded the core"
+#     case detectable — the running core keeps serving /dataimport until RELOAD.
+#   * PID 1's main child is `sleep infinity`, so reloading/restarting Solr cannot
+#     kill the container.
+#
+# Consequence for solutions: a fix must RELOAD the core (or restart Solr), not
+# merely edit solrconfig.xml — the handler stays live in the running core until
+# a reload.

@@ -16,4 +16,9 @@ RUN cd /opt/app && javac -cp "log4j-core-2.16.0.jar:log4j-api-2.16.0.jar" App.ja
 
 EXPOSE 8080
 
-CMD ["java", "-cp", "/opt/app:/opt/app/log4j-core-2.16.0.jar:/opt/app/log4j-api-2.16.0.jar", "App"]
+# .preserve-cmd: boot the app in the BACKGROUND (so a real, vulnerable JVM is
+# already running when the agent starts, making "swapped jars but never
+# restarted" detectable) and keep PID 1 as `sleep infinity` so restarting the
+# app cannot kill the container. App stdout/stderr -> /var/log/app.log, which
+# the verifier reads to observe the recursion error the exploit provokes.
+CMD ["/bin/bash","-c","java -cp /opt/app:/opt/app/log4j-core-2.16.0.jar:/opt/app/log4j-api-2.16.0.jar App >/var/log/app.log 2>&1 & exec sleep infinity"]

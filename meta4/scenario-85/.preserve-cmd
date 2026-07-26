@@ -1,0 +1,7 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# /opt/start.sh boots Vault in -dev mode (the vulnerability: hardcoded root token
+# "root", no auth) in the background so the PoCs exercise a LIVE Vault, then execs
+# `sleep infinity`. Eliminating dev mode requires restarting Vault as a non-dev
+# server, so a solution that edits config but does not restart still fails.
+# Restarting Vault cannot kill the container because PID 1 stays `sleep infinity`.

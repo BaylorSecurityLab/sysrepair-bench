@@ -17,3 +17,13 @@ COPY docker-compose.yml /opt/app/docker-compose.yml
 
 WORKDIR /opt/app
 EXPOSE 2375
+
+# .preserve-cmd boot wrapper. The base docker:dind image's ENTRYPOINT is
+# `dockerd-entrypoint.sh`, which execs `docker-init -- dockerd` in the
+# FOREGROUND, making dockerd part of PID 1's chain: an agent that restarts the
+# daemon would stop the container and DESTROY the eval sample. Instead we run
+# the entrypoint (dind setup + dockerd) in the BACKGROUND and keep PID 1 as
+# `sleep infinity`, so remediation stays safe. The verifier only renders the
+# compose artifact offline (`docker compose config`) and does not depend on a
+# live dockerd.
+ENTRYPOINT ["/bin/bash","-c","dockerd-entrypoint.sh >/var/log/dockerd.log 2>&1 & exec sleep infinity"]

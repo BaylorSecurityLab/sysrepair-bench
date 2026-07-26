@@ -38,7 +38,7 @@ echo "PASS [PoC]: SECRET_KEY is set and does not match any known default value."
 # If SECRET_KEY is still a default, forged cookies could be accepted
 for i in $(seq 1 10); do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:8088/login 2>/dev/null || echo "000")
-    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
+    if echo "$CODE" | grep -qE '^(200|301|302|307|308)$'; then
         FORGE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
             -b 'session=eyJ1c2VyX2lkIjoxfQ.AAAAAA.forged_signature' \
             http://localhost:8088/superset/welcome/ 2>/dev/null || echo "000")
@@ -58,7 +58,7 @@ done
 
 for i in 1 2 3 4 5; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/login 2>/dev/null || echo "000")
-    if echo "$HTTP_CODE" | grep -qE '^(200|302|301)$'; then
+    if echo "$HTTP_CODE" | grep -qE '^(200|301|302|307|308)$'; then
         echo "PASS [Regression]: Superset login page is reachable on port 8088 (HTTP $HTTP_CODE)."
         exit 0
     fi

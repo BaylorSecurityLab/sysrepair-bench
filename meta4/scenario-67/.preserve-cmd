@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the BACnet/IP simulator on UDP 0.0.0.0:47808 (no
+# firewall) then execs `sleep infinity`, so:
+#   * the vulnerable service is ALREADY LISTENING on all interfaces when the
+#     agent starts (a do-nothing agent must fail the firewall check);
+#   * PID 1 is `sleep infinity`, so nothing a solution does can kill the box.
+#
+# The remediation is a network-layer compensating control (iptables), applied
+# LIVE to the running kernel table - there is no daemon-restart step, so there
+# is no "edited config but forgot to restart" case for this scenario.

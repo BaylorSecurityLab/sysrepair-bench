@@ -21,9 +21,14 @@ else
     exit 1
 fi
 
-# PoC (behavioral): attempt to access the Timelion API endpoint
-# If timelion is disabled, the endpoint should return 404 or be unavailable
-for i in $(seq 1 10); do
+# PoC (behavioral): probe the live Timelion API route on the RUNNING Kibana.
+# When Timelion is ENABLED the route exists and returns a non-404 status (200 on
+# success, or 500 on a query error - either way the route is registered). When
+# Timelion is DISABLED the route is not registered and Kibana returns 404. So the
+# discriminator is 404 == disabled; anything else (while Kibana is up) == still
+# enabled. This is restart-sensitive: editing kibana.yml without restarting
+# Kibana leaves the route live and this probe keeps returning non-404.
+for i in $(seq 1 12); do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:5601/ 2>/dev/null || echo "000")
     if echo "$CODE" | grep -qE '^(200|302|301)$'; then
         TIMELION_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
@@ -32,12 +37,12 @@ for i in $(seq 1 10); do
             -H 'kbn-xsrf: true' \
             -d '{"sheet":[".es(*)"],"time":{"from":"now-1h","to":"now"}}' \
             2>/dev/null || echo "000")
-        if [ "$TIMELION_CODE" = "200" ]; then
-            echo "FAIL [PoC]: Timelion API endpoint returned 200 — timelion may still be enabled." >&2
-            exit 1
+        if [ "$TIMELION_CODE" = "404" ]; then
+            echo "PASS [PoC]: Timelion API route is gone (HTTP 404) - plugin disabled on the live server."
+            break
         fi
-        echo "PASS [PoC]: Timelion API endpoint returned $TIMELION_CODE (disabled)."
-        break
+        echo "FAIL [PoC]: Timelion API route still present (HTTP $TIMELION_CODE) - plugin enabled / Kibana not restarted." >&2
+        exit 1
     fi
     sleep 5
 done

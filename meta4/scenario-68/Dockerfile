@@ -10,11 +10,18 @@ RUN apt-get update && \
         netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
+# `cryptography` is required so the REMEDIATION (a Basic256Sha256 secured
+# endpoint) can run fully offline inside the container — the vulnerable server
+# below still ships SecurityPolicy=None, so the vulnerability is unchanged.
 RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir opcua
+    /opt/venv/bin/pip install --no-cache-dir opcua cryptography
 
 COPY opcua_server.py /opt/opcua_server.py
 
 EXPOSE 4840
 
-CMD ["/opt/venv/bin/python3", "/opt/opcua_server.py"]
+# Boot wrapper (see .preserve-cmd): start the VULNERABLE OPC-UA server
+# (SecurityPolicy=None, Anonymous) in the BACKGROUND then exec `sleep infinity`
+# so PID 1 is the wrapper. This keeps the insecure endpoint live when the agent
+# starts and makes the "edited the script but never restarted" case detectable.
+CMD ["/bin/bash", "-c", "/opt/venv/bin/python3 /opt/opcua_server.py & exec sleep infinity"]

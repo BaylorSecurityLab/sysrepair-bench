@@ -1,0 +1,16 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots the Druid nano-quickstart with druid.javascript.enabled
+# =true in _common (server-side JS execution on the query-serving nodes,
+# CVE-2021-25646) and then execs `sleep infinity`, so:
+#   * the broker is ALREADY RUNNING with JS enabled when the agent starts. verify.sh
+#     sends a real JavaScript-aggregator query to the LIVE broker (port 8082): while
+#     JS is live-enabled the query executes, once JS is live-disabled the broker
+#     returns "JavaScript is disabled". Because the flag is read only at process
+#     start, a fix that edits runtime.properties but never restarts the broker leaves
+#     JS live-enabled and the check FAILS — the not-restarted case is genuinely
+#     detectable and graded.
+#   * PID 1 is `sleep infinity`, so restarting Druid cannot kill the container.
+#
+# Consequence for solutions: the fix must set druid.javascript.enabled=false on the
+# query nodes (_common) AND RESTART the Druid services, not merely edit the file.

@@ -20,3 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-c
     rm /tmp/rss.zip
 
 EXPOSE 80
+# .preserve-cmd boot wrapper. The stock image runs apache2-foreground as the
+# CMD (foreground, PID 1's chain). We run the WordPress entrypoint (which copies
+# /usr/src/wordpress into /var/www/html and deploys the vulnerable plugin) and
+# apache in the BACKGROUND, keeping PID 1 as `sleep infinity`. WordPress re-reads
+# plugin files per request, so the fix (remove/upgrade the plugin) takes effect
+# with no restart; apache only needs to stay up for the regression check.
+ENTRYPOINT ["/bin/bash","-c","docker-entrypoint.sh apache2-foreground & exec sleep infinity"]

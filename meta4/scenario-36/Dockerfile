@@ -36,8 +36,10 @@ echo "SECRET_DATA: aws_access_key_id=AKIAIOSFODNN7EXAMPLE" | \
 # Set anonymous download policy (vulnerable!)
 mc anonymous set download local/testbucket 2>/dev/null
 
-# Bring MinIO to foreground
-wait $MINIO_PID
+# Boot wrapper (see .preserve-cmd): MinIO stays running in the background with
+# the public bucket already configured, and PID 1 becomes `sleep infinity` so a
+# solution that restarts MinIO cannot kill the container / destroy the sample.
+exec sleep infinity
 BASH
 RUN chmod +x /opt/start.sh
 

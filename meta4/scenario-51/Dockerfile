@@ -18,4 +18,7 @@ RUN echo "listener 1883" > /mosquitto/config/mosquitto.conf && \
 
 EXPOSE 1883
 
-CMD ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
+# Boot wrapper: start the broker daemonized (-d double-forks so it survives),
+# poll for :1883, then exec `sleep infinity` so PID 1 is stable and an agent
+# restarting mosquitto cannot kill the container. See .preserve-cmd.
+CMD ["/bin/sh", "-c", "mosquitto -c /mosquitto/config/mosquitto.conf -d; for i in $(seq 1 30); do nc -z 127.0.0.1 1883 && break; sleep 1; done; exec sleep infinity"]

@@ -1,0 +1,10 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts sshd (backgrounded, NOT `-D`) with the vulnerable
+# cipher/MAC configuration and then execs `sleep infinity`, so:
+#   * sshd is ALREADY RUNNING when the agent starts, which makes the "edited
+#     sshd_config but never restarted the daemon" case detectable — the live
+#     KEXINIT still advertises the vulnerable algorithms until a real restart;
+#   * PID 1 is `sleep infinity`, so restarting sshd cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART sshd, not merely start it.

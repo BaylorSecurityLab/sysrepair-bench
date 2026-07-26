@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts the YARN ResourceManager (unauthenticated REST API on
+# port 8088) as a daemon and then execs `sleep infinity`, so:
+#   * the RM is ALREADY RUNNING and serving /ws/v1/cluster/apps unauthenticated
+#     when the agent starts, which makes the "edited config but never restarted
+#     the RM" case detectable (the live API still returns 200);
+#   * PID 1 is `sleep infinity`, so restarting the RM cannot kill the container.
+#
+# Consequence for solutions: the fix must RESTART the ResourceManager after
+# enabling HTTP authentication, not merely edit the config.

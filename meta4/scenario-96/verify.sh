@@ -22,18 +22,22 @@ else
     exit 1
 fi
 
-# PoC (behavioral): verify example_bash_operator DAG is not available
-# CVE-2020-11978 exploits the example DAG; if load_examples=False, it should not exist
-for i in $(seq 1 10); do
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:8080/ 2>/dev/null || echo "000")
-    if echo "$CODE" | grep -qE '^(200|302|301)$'; then
-        DAG_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-            "http://localhost:8080/api/v1/dags/example_bash_operator" 2>/dev/null || echo "000")
-        if [ "$DAG_CODE" = "200" ]; then
-            echo "FAIL [PoC]: example_bash_operator DAG is still present — load_examples may not be effective." >&2
+# PoC (behavioral): the RUNNING webserver must not expose the example DAGs.
+# NB: the stable /api/v1 REST API does not exist in Airflow 1.10.x (it is 2.0+),
+# so querying it is a tautology (always 404). Instead scrape the default,
+# unauthenticated web UI. This is restart-sensitive: a config edit that is not
+# followed by a webserver restart (and a DB purge) leaves the example DAGs loaded
+# in the live process, and they keep appearing here.
+for i in $(seq 1 12); do
+    HOME_HTML=$(curl -s -L -m 8 http://localhost:8080/ 2>/dev/null || true)
+    ADMIN_HTML=$(curl -s -L -m 8 http://localhost:8080/admin/ 2>/dev/null || true)
+    COMBINED="${HOME_HTML}${ADMIN_HTML}"
+    if [ -n "$COMBINED" ]; then
+        if printf '%s' "$COMBINED" | grep -qE 'example_bash_operator|example_trigger_target_dag'; then
+            echo "FAIL [PoC]: example DAGs still exposed by the running webserver - load_examples not effective (restart/DB purge missing)." >&2
             exit 1
         fi
-        echo "PASS [PoC]: example_bash_operator DAG not found (HTTP $DAG_CODE)."
+        echo "PASS [PoC]: example DAGs are not exposed by the running webserver."
         break
     fi
     sleep 5

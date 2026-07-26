@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD boots CouchDB (backgrounded, as the couchdb user) with the
+# vulnerable weak admin credential and then execs `sleep infinity`, so:
+#   * the daemon is ALREADY RUNNING when the agent starts, which makes the
+#     "changed the config but the live daemon is still weak" case detectable;
+#   * PID 1 is still `sleep infinity`, so restarting couchdb cannot kill the
+#     container.
+#
+# Consequence for solutions: the fix must actively change the admin password on
+# the LIVE node (via the runtime _config API, which applies immediately), not
+# merely start the service.

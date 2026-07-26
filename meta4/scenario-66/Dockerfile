@@ -16,4 +16,7 @@ COPY ipmi.conf /etc/ipmi.conf
 
 EXPOSE 623/udp
 
-CMD ["python3", "/opt/ipmi_server.py"]
+# Boot wrapper (see .preserve-cmd): start the IPMI BMC simulator in the
+# BACKGROUND then exec `sleep infinity` so PID 1 is the wrapper, keeping the
+# vulnerable service listening while a solution's firewall rules cannot kill it.
+CMD ["/bin/bash", "-c", "python3 /opt/ipmi_server.py & exec sleep infinity"]

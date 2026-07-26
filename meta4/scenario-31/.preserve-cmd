@@ -1,0 +1,11 @@
+# Use the image CMD/ENTRYPOINT instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile ENTRYPOINT is a boot wrapper that runs the WordPress entrypoint
+# (deploying the vulnerable really-simple-ssl 9.0.0 plugin into /var/www/html)
+# and apache in the BACKGROUND, then execs `sleep infinity`. So:
+#   * apache is ALREADY serving when the agent starts, so the verifier can prove
+#     the vulnerable plugin is live-deployed by fetching it over HTTP;
+#   * PID 1 stays `sleep infinity`.
+#
+# WordPress re-reads plugin files on every request, so removing/upgrading the
+# plugin takes effect immediately — there is no "not restarted" case here.

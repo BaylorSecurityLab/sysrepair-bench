@@ -11,6 +11,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 
+COPY apache2-preserve /usr/local/bin/apache2-preserve
+RUN chmod +x /usr/local/bin/apache2-preserve
+
 EXPOSE 80
 
-CMD ["apache2-foreground"]
+# Boot wrapper (see .preserve-cmd): the command name starts with "apache2" so the
+# image ENTRYPOINT still runs its first-boot docroot setup, then execs this
+# wrapper, which starts Apache in the BACKGROUND and execs `sleep infinity` so
+# PID 1 is the wrapper. Roundcube (no CSP header) is already serving on :80 when
+# the agent starts, and reloading/restarting Apache cannot kill the container.
+CMD ["apache2-preserve"]

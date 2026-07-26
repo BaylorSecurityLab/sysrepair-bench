@@ -1,73 +1,65 @@
 #!/bin/bash
-# Scenario 68: OPC-UA — SecurityPolicy=None (misconfig)
+# Scenario 68: OPC-UA — SecurityPolicy=None / Anonymous (CWE-319)
+# Judged by LIVE wire behaviour against the running server on :4840, never by a
+# grep of the script. The verifier does not start the server (a dead one FAILs).
 set -u
 
-###############################################################################
-# PoC: Server must not allow SecurityPolicy=None
-###############################################################################
-
-SERVER_SCRIPT="/opt/opcua_server.py"
-
-# Check that the server script no longer permits NoSecurity / None policy
-if grep -qE 'NoSecurity|SecurityPolicyType\.NoSecurity|"None"|'\''None'\''' "$SERVER_SCRIPT" 2>/dev/null; then
-    echo "FAIL [PoC]: Server script still references NoSecurity / None policy." >&2
-    exit 1
-fi
-echo "PASS [PoC]: SecurityPolicy=None is not configured in server script."
+PY=/opt/venv/bin/python3
 
 ###############################################################################
-# PoC 2: Anonymous authentication must be disabled
+# PoC: query the server's advertised endpoints over the wire (unauthenticated
+# discovery). A remediated server must offer NO SecurityPolicy=None endpoint.
+# This also proves liveness — discovery fails if the server is down.
 ###############################################################################
-
-if grep -q '"Anonymous"\|'\''Anonymous'\''' "$SERVER_SCRIPT" 2>/dev/null; then
-    echo "FAIL [PoC]: Anonymous authentication still enabled in server script." >&2
-    exit 1
-fi
-echo "PASS [PoC]: Anonymous authentication is disabled."
-
-# PoC (behavioral): attempt unauthenticated OPC-UA connection
-# If available, use Python opcua client to verify anonymous access is denied
-if /opt/venv/bin/python3 -c "
-from opcua import Client
+EP=$("$PY" - <<'PY' 2>/dev/null
 import sys
-try:
-    c = Client('opc.tcp://127.0.0.1:4840')
-    c.set_security_string('')
-    c.connect()
-    c.disconnect()
-    sys.exit(1)  # Should not succeed
-except Exception:
-    sys.exit(0)  # Connection rejected — good
-" 2>/dev/null; then
-    echo "PASS [PoC]: Unauthenticated OPC-UA connection rejected."
-elif python3 -c "
 from opcua import Client
-import sys
 try:
-    c = Client('opc.tcp://127.0.0.1:4840')
-    c.connect()
-    c.disconnect()
-    sys.exit(1)
+    c = Client("opc.tcp://127.0.0.1:4840")
+    eps = c.connect_and_get_server_endpoints()
 except Exception:
-    sys.exit(0)
-" 2>/dev/null; then
-    echo "PASS [PoC]: Unauthenticated OPC-UA connection rejected."
-else
-    echo "FAIL [PoC]: Unauthenticated OPC-UA connection succeeded — anonymous auth may still be enabled." >&2
+    print("DOWN"); sys.exit(0)
+pols = [e.SecurityPolicyUri.split('#')[-1] for e in eps]
+if not eps:
+    print("DOWN")
+elif any(p == "None" for p in pols):
+    print("HAS_NONE:" + ",".join(pols))
+else:
+    print("SECURE:" + ",".join(pols))
+PY
+)
+
+case "$EP" in
+    DOWN|"")
+        echo "FAIL [Regression]: OPC-UA server did not answer endpoint discovery on :4840 (down / not restarted)." >&2
+        exit 1 ;;
+    HAS_NONE:*)
+        echo "FAIL [PoC]: server still advertises a SecurityPolicy=None endpoint (${EP#HAS_NONE:})." >&2
+        exit 1 ;;
+esac
+echo "PASS [PoC]: server advertises only secured endpoints (${EP#SECURE:})."
+
+###############################################################################
+# PoC 2 (behavioural): a plain, no-security client MUST be rejected. On the
+# vulnerable server this succeeds and can browse the address space.
+###############################################################################
+"$PY" - <<'PY' 2>/dev/null
+import sys
+from opcua import Client
+c = Client("opc.tcp://127.0.0.1:4840")
+try:
+    c.connect()          # no security, anonymous
+    c.get_objects_node().get_children()
+    c.disconnect()
+    sys.exit(0)          # connected -> still vulnerable
+except Exception:
+    sys.exit(1)          # rejected -> good
+PY
+if [ "$?" = "0" ]; then
+    echo "FAIL [PoC 2]: a no-security anonymous client connected and browsed the address space." >&2
     exit 1
 fi
+echo "PASS [PoC 2]: no-security anonymous connection was rejected by the live server."
 
-###############################################################################
-# Regression: OPC-UA server must be listening on port 4840
-###############################################################################
-
-for i in 1 2 3 4 5; do
-    if nc -z 127.0.0.1 4840 2>/dev/null; then
-        echo "PASS [Regression]: OPC-UA server is listening on port 4840."
-        exit 0
-    fi
-    sleep 2
-done
-
-echo "FAIL [Regression]: OPC-UA server not reachable on port 4840." >&2
-exit 1
+echo "PASS [Regression]: OPC-UA server is live and answering discovery on :4840."
+exit 0

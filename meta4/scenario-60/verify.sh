@@ -1,45 +1,54 @@
 #!/bin/bash
-# Scenario 60: Postfix 3.7 — SMTP Smuggling (CVE-2023-51764)
+# Scenario 60: Postfix — SMTP Smuggling (CVE-2023-51764)
+# LIVE exploit: a single SMTP transaction whose DATA is terminated by a BARE
+# "<LF>.<LF>" instead of "<CR><LF>.<CR><LF>". A vulnerable Postfix treats the
+# bare terminator as end-of-data and accepts the SMUGGLED second message that
+# follows, so TWO messages queue from one payload. A remediated Postfix
+# (smtpd_forbid_bare_newline=yes, exclusions emptied) queues only ONE.
+# The verifier never starts Postfix — a dead service is a FAIL. It cleans up any
+# queued test mail so it leaves the mail system as it found it.
 set -u
 
-###############################################################################
-# PoC: smtpd_forbid_bare_newline must be enabled in main.cf
-###############################################################################
+HOST=127.0.0.1
+PORT=25
 
-MAIN_CF="/etc/postfix/main.cf"
+# Best-effort cleanup of the test messages this probe queues (leave the queue as
+# we found it). postsuper -d ALL removes queue entries only.
+cleanup() { postsuper -d ALL >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
 
-if [ ! -f "$MAIN_CF" ]; then
-    echo "FAIL [PoC]: Postfix main.cf not found at $MAIN_CF." >&2
-    exit 1
-fi
+# One SMTP session: message #1 ends with a BARE-LF dot; a smuggled message #2
+# follows. Count "queued as" acknowledgements in the reply stream.
+smuggle() {
+    printf 'EHLO probe\r\nMAIL FROM:<a@localhost>\r\nRCPT TO:<root@localhost>\r\nDATA\r\nSubject: one\r\n\r\nbody\r\n.\nMAIL FROM:<smuggled@localhost>\r\nRCPT TO:<root@localhost>\r\nDATA\r\nSubject: two\r\n\r\nsmuggled\r\n.\r\nQUIT\r\n' \
+        | timeout 15 nc -q3 "$HOST" "$PORT" 2>/dev/null
+}
 
-if ! grep -qE "smtpd_forbid_bare_newline\s*=\s*yes" "$MAIN_CF" 2>/dev/null; then
-    echo "FAIL [PoC]: main.cf does not contain 'smtpd_forbid_bare_newline = yes'." >&2
-    exit 1
-fi
-echo "PASS [PoC]: smtpd_forbid_bare_newline = yes is set in main.cf."
-
-# PoC (behavioral): verify Postfix runtime config includes smtpd_forbid_bare_newline
-RUNTIME_CFG=$(postconf smtpd_forbid_bare_newline 2>/dev/null || true)
-if echo "$RUNTIME_CFG" | grep -q 'smtpd_forbid_bare_newline = yes'; then
-    echo "PASS [PoC]: Postfix runtime confirms smtpd_forbid_bare_newline = yes."
-elif echo "$RUNTIME_CFG" | grep -q 'smtpd_forbid_bare_newline'; then
-    echo "FAIL [PoC]: Postfix runtime smtpd_forbid_bare_newline is not 'yes': $RUNTIME_CFG" >&2
-    exit 1
-fi
-
-###############################################################################
-# Regression: Postfix must still accept EHLO on port 25
-###############################################################################
-
+OUT=""
 for i in 1 2 3 4 5; do
-    RESPONSE=$(echo "EHLO test" | nc -q1 127.0.0.1 25 2>/dev/null || true)
-    if echo "$RESPONSE" | grep -q "^250"; then
-        echo "PASS [Regression]: Postfix responds to EHLO on port 25."
-        exit 0
-    fi
+    OUT=$(smuggle)
+    if printf '%s' "$OUT" | grep -q '^220 '; then break; fi
     sleep 2
 done
 
-echo "FAIL [Regression]: Postfix not responding to EHLO on port 25." >&2
-exit 1
+if ! printf '%s' "$OUT" | grep -q '^220 '; then
+    echo "FAIL [Regression]: Postfix did not greet on port $PORT (service down / not started)." >&2
+    exit 1
+fi
+
+QUEUED=$(printf '%s' "$OUT" | grep -c 'Ok: queued as')
+
+if [ "$QUEUED" -ge 2 ]; then
+    echo "FAIL [PoC]: SMTP smuggling succeeded — one bare-LF payload queued $QUEUED messages." >&2
+    echo "            Set smtpd_forbid_bare_newline=yes and empty the exclusions, then reload." >&2
+    exit 1
+fi
+
+if [ "$QUEUED" -lt 1 ]; then
+    echo "FAIL [Regression]: Postfix accepted no message from loopback (over-blocked / broken)." >&2
+    exit 1
+fi
+
+echo "PASS [PoC]: bare-LF smuggling blocked — the payload queued only $QUEUED message."
+echo "PASS [Regression]: Postfix is live on port $PORT and accepts legitimate mail."
+exit 0

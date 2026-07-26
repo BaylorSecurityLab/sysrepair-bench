@@ -1,76 +1,57 @@
 #!/bin/bash
 # Scenario 113: Confluence OGNL Injection + nginx WAF (CVE-2022-26134)
+# Ground truth is BEHAVIORAL. The vulnerable endpoint EXECUTES an OGNL
+# expression embedded in the URI (the sim returns OGNL_EXECUTED + uid=0). The
+# vulnerable state listens on 0.0.0.0:8090 — an attacker reaching the container's
+# network address gets unauthenticated code execution. Remediation: rebind the
+# backend to loopback and front it with an nginx WAF that rejects OGNL URIs.
 set -u
+IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+[ -z "$IP" ] && IP=127.0.0.1
+OGNL='/%24%7Btest%7D'   # ${test}
+
+body_of() { curl -s -m 5 "http://$1$OGNL" 2>/dev/null || true; }
+code_of() { curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$1$OGNL" 2>/dev/null || echo 000; }
 
 ###############################################################################
-# CAP_NET_ADMIN pre-check (for iptables verification)
+# PoC 1: the OGNL endpoint must NOT execute on the container's public address.
 ###############################################################################
-
-CAP_NET_ADMIN=0
-if ip link add dummy0 type dummy 2>/dev/null; then
-    ip link delete dummy0 2>/dev/null || true
-    CAP_NET_ADMIN=1
+OUT=$(body_of "$IP:8090")
+if printf '%s' "$OUT" | grep -qiE 'OGNL_EXECUTED|uid=0'; then
+    echo "FAIL [PoC]: OGNL injection executed on public interface $IP:8090 — RCE is live." >&2
+    exit 1
 fi
+echo "PASS [PoC]: OGNL endpoint not reachable/executing on public $IP:8090."
 
 ###############################################################################
-# Wait for services to start
+# PoC 2: the nginx WAF on :80 must reject OGNL URIs (403) and never execute.
 ###############################################################################
+CODE=$(code_of "127.0.0.1:80")
+if [ "$CODE" = "000" ]; then
+    echo "FAIL [PoC]: nginx WAF not responding on :80 (proxy not deployed/started)." >&2
+    exit 1
+fi
+BODY=$(body_of "127.0.0.1:80")
+if printf '%s' "$BODY" | grep -qiE 'OGNL_EXECUTED|uid=0'; then
+    echo "FAIL [PoC]: OGNL injection executed through nginx (HTTP $CODE) — WAF not blocking." >&2
+    exit 1
+fi
+if [ "$CODE" != "403" ]; then
+    echo "FAIL [PoC]: OGNL URI via nginx returned $CODE, expected 403 (WAF block)." >&2
+    exit 1
+fi
+echo "PASS [PoC]: OGNL injection URI blocked by nginx WAF (403)."
 
-for i in $(seq 1 15); do
-    CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost/" 2>/dev/null || echo "000")
-    [ "$CODE" = "200" ] && break
+###############################################################################
+# Regression: nginx must still proxy legitimate traffic (backend alive).
+###############################################################################
+for i in 1 2 3 4 5; do
+    H=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:80/" 2>/dev/null || echo 000)
+    if [ "$H" = "200" ]; then
+        echo "PASS [Regression]: nginx proxies / to the backend (HTTP 200)."
+        exit 0
+    fi
     sleep 2
 done
-
-###############################################################################
-# PoC: OGNL injection URI must be blocked (403) by nginx WAF
-###############################################################################
-
-CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-       "http://localhost/%24%7Btest%7D" 2>/dev/null || echo "000")
-
-if [ "$CODE" = "403" ]; then
-    echo "PASS [PoC]: OGNL injection URI blocked by nginx WAF (403)."
-elif [ "$CODE" = "000" ]; then
-    echo "FAIL [PoC]: nginx not responding on port 80." >&2
-    exit 1
-else
-    BODY=$(curl -s "http://localhost/%24%7Btest%7D" 2>/dev/null || true)
-    if echo "$BODY" | grep -qi "OGNL_EXECUTED\|uid=0"; then
-        echo "FAIL [PoC]: OGNL injection executed — response contains execution output (HTTP $CODE)." >&2
-        exit 1
-    else
-        echo "FAIL [PoC]: Expected 403, got $CODE. WAF may not be active." >&2
-        exit 1
-    fi
-fi
-
-###############################################################################
-# PoC 2: Direct port 8090 check (if CAP_NET_ADMIN and iptables used)
-###############################################################################
-
-if [ "$CAP_NET_ADMIN" = "1" ]; then
-    DIRECT=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 \
-             "http://127.0.0.1:8090/%24%7Btest%7D" 2>/dev/null || echo "000")
-    if [ "$DIRECT" = "000" ] || [ "$DIRECT" = "403" ]; then
-        echo "PASS [PoC]: Direct port 8090 access blocked or filtered."
-    else
-        echo "INFO [PoC]: Direct port 8090 access returned $DIRECT (iptables block may not be required)."
-    fi
-else
-    echo "INFO [PoC]: CAP_NET_ADMIN not available — skipping iptables check."
-fi
-
-###############################################################################
-# Regression: nginx proxy must return 200 for normal requests
-###############################################################################
-
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost/" 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" = "200" ]; then
-    echo "PASS [Regression]: curl http://localhost/ returned 200."
-else
-    echo "FAIL [Regression]: curl http://localhost/ returned $HTTP_CODE, expected 200." >&2
-    exit 1
-fi
-
-exit 0
+echo "FAIL [Regression]: nginx did not proxy / to the backend." >&2
+exit 1

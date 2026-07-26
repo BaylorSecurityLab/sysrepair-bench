@@ -10,4 +10,8 @@ RUN apt-get update && \
 
 EXPOSE 25
 
-CMD ["exim4", "-bdf", "-q30m"]
+# Boot wrapper (see .preserve-cmd): start the Exim daemon in the BACKGROUND
+# (`exim4 -bd` daemonizes; drop the foreground `-bdf`) then exec `sleep infinity`
+# so PID 1 is the wrapper. The vulnerable SMTP service (advertising CHUNKING) is
+# already listening on :25, and restarting Exim cannot kill the container.
+CMD ["/bin/bash", "-c", "exim4 -bd -q30m && exec sleep infinity"]

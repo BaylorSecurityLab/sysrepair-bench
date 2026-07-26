@@ -44,7 +44,28 @@ app IN  A   10.0.0.2
 EOF
 
 
+# Boot wrapper (NOT a bare foreground CMD): the base image's ENTRYPOINT is
+# ["/coredns"], which would make CoreDNS PID 1 - restarting it to reload the
+# Corefile would then kill the container and destroy the eval sample. Clear the
+# ENTRYPOINT and start CoreDNS in the BACKGROUND inside a subshell so it is
+# reparented to tini/PID 1 (which reaps it, making a clean restart possible),
+# poll until :53 answers, then `exec sleep infinity`. See .preserve-cmd.
+RUN cat > /boot.sh <<'EOF'
+#!/bin/sh
+( /coredns -conf /Corefile >/var/log/coredns.log 2>&1 & )
+i=0
+while [ "$i" -lt 30 ]; do
+    if dig +short +time=1 +tries=1 @127.0.0.1 local.test A 2>/dev/null | grep -q '10.0.0.1'; then
+        break
+    fi
+    i=$((i+1)); sleep 1
+done
+exec sleep infinity
+EOF
+RUN chmod +x /boot.sh
+
+
 EXPOSE 53/tcp 53/udp
 
-ENTRYPOINT ["/coredns"]
-CMD ["-conf", "/Corefile"]
+ENTRYPOINT []
+CMD ["/bin/sh", "/boot.sh"]

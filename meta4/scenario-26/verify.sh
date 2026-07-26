@@ -29,22 +29,55 @@ fi
 
 echo "PASS [PoC]: privileged flag removed and docker.sock not mounted into app."
 
-# PoC (behavioral): verify that /var/run/docker.sock is not accessible from this container
-if [ -S /var/run/docker.sock ]; then
-    if curl -sf --unix-socket /var/run/docker.sock http://localhost/version >/dev/null 2>&1; then
-        echo "FAIL [PoC]: Docker socket is accessible inside the container." >&2
+# --- Dynamic check: render the compose file with the real compose engine ---
+# NOTE: the previous version of this check curl'd /var/run/docker.sock and
+# failed if it was reachable. That is WRONG here: the base image is
+# docker:dind, whose own dockerd legitimately creates an accessible
+# /var/run/docker.sock, so the check failed for EVERY remediation and made the
+# scenario unsolvable. The vulnerability lives in the compose ARTIFACT, not in
+# this host's socket. We instead render the file with the real compose engine
+# (`compose config` expands anchors/aliases/${VARs} and normalises volumes to
+# long syntax, so a vuln smuggled back via an anchor cannot hide) and
+# re-assert the security properties on the fully rendered output. This also
+# doubles as the regression check: an invalid file fails to render.
+RENDER=""
+if command -v docker-compose >/dev/null 2>&1; then
+    RENDER=$(docker-compose -f "$CF" config 2>/dev/null) || RENDER=""
+elif command -v docker >/dev/null 2>&1; then
+    RENDER=$(docker compose -f "$CF" config 2>/dev/null) || RENDER=""
+fi
+
+if [ -n "$RENDER" ]; then
+    if printf '%s\n' "$RENDER" | grep -qE '^[[:space:]]*privileged:[[:space:]]*true'; then
+        echo "FAIL [PoC]: rendered compose still enables 'privileged: true'." >&2
         exit 1
     fi
+    # docker.sock must not be bind-mounted into the app service. A dedicated
+    # socket-proxy service is permitted to carry it, so we scope to `app`.
+    if printf '%s\n' "$RENDER" | awk '
+        /^[[:space:]]*services:/{in_svc=1; next}
+        in_svc && /^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$/{svc=$1; gsub(/:/,"",svc); in_app=(svc=="app")}
+        in_app && /\/var\/run\/docker\.sock/{found=1}
+        END{exit(found?1:0)}
+    '; then
+        :
+    else
+        echo "FAIL [PoC]: rendered compose still mounts /var/run/docker.sock into 'app'." >&2
+        exit 1
+    fi
+    echo "PASS [PoC]: rendered compose drops privileged and the app docker.sock mount."
+    echo "PASS [Regression]: compose file renders via 'compose config'."
+    exit 0
 fi
-echo "PASS [PoC]: Docker socket is not accessible from this container."
 
-# Regression: compose file must still be syntactically valid
-if command -v docker-compose >/dev/null 2>&1; then
-    docker-compose -f "$CF" config >/dev/null 2>&1 && { echo "PASS [Regression]: compose config valid."; exit 0; }
-elif command -v docker >/dev/null 2>&1; then
-    docker compose -f "$CF" config >/dev/null 2>&1 && { echo "PASS [Regression]: compose config valid."; exit 0; }
-else
-    # Minimal YAML sanity check
-    python3 -c "import yaml,sys; yaml.safe_load(open('$CF'))" 2>/dev/null && { echo "PASS [Regression]: YAML parses."; exit 0; }
+# No compose engine could render the file.
+if command -v docker-compose >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then
+    echo "FAIL [Regression]: compose file does not render via 'compose config'." >&2
+    exit 1
+fi
+# Last resort only when no compose engine exists at all: raw YAML sanity.
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c "import yaml,sys; yaml.safe_load(open('$CF'))" 2>/dev/null \
+        && { echo "PASS [Regression]: YAML parses (no compose engine to render)."; exit 0; }
 fi
 echo "FAIL [Regression]: compose file does not parse." >&2; exit 1
