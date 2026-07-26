@@ -38,13 +38,21 @@ $osName     = 'Windows Server 2019 Datacenter (Desktop Experience)'
 # Missing entirely from the first draft of this plan, and the single most
 # common Install-Lab failure.
 if (-not $SkipSourcesCheck) {
-    if (-not $LabSourcesPath) {
-        $LabSourcesPath = Get-LabSourcesLocation -ErrorAction SilentlyContinue
+    if (-not $LabSourcesPath) { $LabSourcesPath = 'C:\LabSources' }
+
+    # The skeleton is created BEFORE AutomatedLab is imported, not after.
+    # Import-Module AutomatedLab resolves its LabSources location during
+    # import and dies with "Cannot bind argument to parameter 'Path' because
+    # it is null" when the folder does not exist -- so any preflight that
+    # calls Get-LabSourcesLocation or New-LabSourcesFolder to create it can
+    # never run. Verified on a clean host.
+    foreach ($d in 'ISOs', 'OSUpdates', 'PostInstallationActivities', 'Tools',
+                   'SoftwarePackages', 'CustomRoles', 'LabScripts') {
+        $p = Join-Path $LabSourcesPath $d
+        if (-not (Test-Path $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
     }
-    if (-not $LabSourcesPath -or -not (Test-Path $LabSourcesPath)) {
-        Write-Host '[lab] LabSources folder not found; creating it'
-        $LabSourcesPath = New-LabSourcesFolder -ErrorAction Stop
-    }
+
+    Import-Module AutomatedLab -ErrorAction Stop
 
     $isoDir = Join-Path $LabSourcesPath 'ISOs'
     if (-not (Test-Path $isoDir) -or -not (Get-ChildItem $isoDir -Filter '*.iso' -ErrorAction SilentlyContinue)) {
