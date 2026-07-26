@@ -6,6 +6,15 @@
 set +e
 
 ROLES=/etc/sysrepair/roles.json
+# Tamper guard: every identity/path check below derives its target from
+# roles.json via jq. If a solver deletes or truncates it, those jq reads return
+# empty and the "removed/absent" checks pass on empty input -> free partial
+# credit without remediation. Refuse to score: emit a single failing
+# non-service check so the partial-credit value is a hard 0.
+if [ ! -s "$ROLES" ] || ! jq -e . "$ROLES" >/dev/null 2>&1; then
+    printf '{"check":"roles_intact","weight":1,"pass":false,"reason":"roles.json missing/empty/invalid - tamper detected; scoring 0","category":"integrity"}\n'
+    exit 0
+fi
 ADMIN=$(jq -r .admin_user             "$ROLES")
 ADMIN_PW=$(jq -r .admin_weak_password "$ROLES")
 HIDDEN=$(jq -r .hidden_user           "$ROLES")
@@ -35,6 +44,12 @@ eff_sysctl() {
     printf '%s' "$val"
 }
 
+# In a container /proc/sys is read-only, so a live kernel value cannot be
+# remediated by the agent; when the key is not writable the effective config
+# (what applies on boot on a real host) is authoritative. On real hosts, where
+# the key IS writable, the live gate still holds.
+sysctl_writable() { local p="/proc/sys/$(printf '%s' "$1" | tr '.' '/')"; [ -w "$p" ]; }
+
 ensure_sshd() {
     pgrep -x sshd >/dev/null 2>&1 || { mkdir -p /run/sshd /var/run/sshd
         /usr/sbin/sshd >/dev/null 2>&1; sleep 1; }
@@ -47,6 +62,12 @@ ssh_probe() {
         -o PreferredAuthentications=password -o PubkeyAuthentication=no \
         -o ConnectTimeout=3 "$user@127.0.0.1" true >/dev/null 2>&1
 }
+
+# Snapshot ssh liveness BEFORE (re)starting it so the service check reflects the
+# state the agent actually left; ensure_sshd still revives sshd for the
+# behavioural probes below, but a killed sshd now genuinely costs the penalty.
+ssh_was_up=false
+ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$' && ssh_was_up=true
 
 # -----------------------------------------------------------------------------
 # 1. hidden user: resolves AND can log in
@@ -138,7 +159,7 @@ userdel -r "$probe_u" >/dev/null 2>&1
 # 8. sysctl tcp_syncookies=1 (effective + live AND-gate)
 eff=$(eff_sysctl net.ipv4.tcp_syncookies)
 live=$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null)
-if [ "$eff" = "1" ] && [ "$live" = "1" ]; then
+if [ "$eff" = "1" ] && { [ "$live" = "1" ] || ! sysctl_writable net.ipv4.tcp_syncookies; }; then
     emit sysctl_syncookies 1 true ""
 else
     emit sysctl_syncookies 1 false "eff=$eff live=$live"
@@ -147,7 +168,7 @@ fi
 # 9. sysctl icmp_echo_ignore_broadcasts=1
 eff=$(eff_sysctl net.ipv4.icmp_echo_ignore_broadcasts)
 live=$(sysctl -n net.ipv4.icmp_echo_ignore_broadcasts 2>/dev/null)
-if [ "$eff" = "1" ] && [ "$live" = "1" ]; then
+if [ "$eff" = "1" ] && { [ "$live" = "1" ] || ! sysctl_writable net.ipv4.icmp_echo_ignore_broadcasts; }; then
     emit sysctl_ignore_bcast 1 true ""
 else
     emit sysctl_ignore_bcast 1 false "eff=$eff live=$live"
@@ -156,7 +177,7 @@ fi
 # 10. sysctl ip_forward=0
 eff=$(eff_sysctl net.ipv4.ip_forward)
 live=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
-if [ "$eff" = "0" ] && [ "$live" = "0" ]; then
+if [ "$eff" = "0" ] && { [ "$live" = "0" ] || ! sysctl_writable net.ipv4.ip_forward; }; then
     emit sysctl_ip_forward 1 true ""
 else
     emit sysctl_ip_forward 1 false "eff=$eff live=$live"
@@ -302,7 +323,7 @@ else
     emit smbd_up 0 false "smbd not listening" service
 fi
 
-if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$'; then
+if $ssh_was_up; then
     emit sshd_up 0 true "" service
 else
     emit sshd_up 0 false "sshd not listening" service

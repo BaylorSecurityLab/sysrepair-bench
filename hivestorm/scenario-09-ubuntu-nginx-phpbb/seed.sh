@@ -156,7 +156,18 @@ cat >/usr/local/sbin/hs-start.sh <<'EOF'
 #!/bin/bash
 service rsyslog start || true
 service cron    start || true
+mkdir -p /run/sshd /var/run/sshd
 /usr/sbin/sshd || true
-exec nginx -g 'daemon off;'
+# Start nginx in daemon (background) mode so PID 1 stays `sleep infinity` —
+# restarting/reloading nginx during remediation must NOT kill the container.
+nginx || true
+exec sleep infinity
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh
+
+# ---- info-leak fix: erase the answer key from the live image -----------------
+# roles.json is read ONLY at build time above (values baked into generated
+# artifacts via heredocs); hs-start.sh uses a quoted heredoc and never reads it.
+# The scorer re-injects a pristine copy at verify time, so removing it here
+# denies the running agent the enumeration shortcut without affecting scoring.
+rm -f /etc/sysrepair/roles.json

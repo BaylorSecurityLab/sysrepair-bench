@@ -4,6 +4,15 @@
 set +e
 
 ROLES=/etc/sysrepair/roles.json
+# Tamper guard: every identity/path check below derives its target from
+# roles.json via jq. If a solver deletes or truncates it, those jq reads return
+# empty and the "removed/absent" checks pass on empty input -> free partial
+# credit without remediation. Refuse to score: emit a single failing
+# non-service check so the partial-credit value is a hard 0.
+if [ ! -s "$ROLES" ] || ! jq -e . "$ROLES" >/dev/null 2>&1; then
+    printf '{"check":"roles_intact","weight":1,"pass":false,"reason":"roles.json missing/empty/invalid - tamper detected; scoring 0","category":"integrity"}\n'
+    exit 0
+fi
 ADMIN=$(jq -r .admin_user              "$ROLES")
 ADMIN_PW=$(jq -r .admin_weak_password  "$ROLES")
 HIDDEN=$(jq -r .hidden_user            "$ROLES")
@@ -37,6 +46,12 @@ eff_sysctl() {
         END { print last }
     ' $files 2>/dev/null
 }
+
+# In a container /proc/sys is read-only, so a live kernel value cannot be
+# remediated by the agent; when the key is not writable the effective config
+# (what applies on boot on a real host) is authoritative. On real hosts, where
+# the key IS writable, the live gate still holds.
+sysctl_writable() { local p="/proc/sys/$(printf '%s' "$1" | tr '.' '/')"; [ -w "$p" ]; }
 
 ensure_sshd() {
     if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$'; then
@@ -144,7 +159,7 @@ userdel -r "$probe_u" >/dev/null 2>&1
 # ---- 8. sysctl tcp_rfc1337=1 (eff + live) ----------------------------------
 e=$(eff_sysctl net.ipv4.tcp_rfc1337)
 l=$(sysctl -n net.ipv4.tcp_rfc1337 2>/dev/null)
-if [ "$e" = "1" ] && [ "$l" = "1" ]; then
+if [ "$e" = "1" ] && { [ "$l" = "1" ] || ! sysctl_writable net.ipv4.tcp_rfc1337; }; then
     emit sysctl_tcp_rfc1337 1 true ""
 else
     emit sysctl_tcp_rfc1337 1 false "eff=$e live=$l"
@@ -153,7 +168,7 @@ fi
 # ---- 9. sysctl log_martians=1 (eff + live) ---------------------------------
 e=$(eff_sysctl net.ipv4.conf.all.log_martians)
 l=$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)
-if [ "$e" = "1" ] && [ "$l" = "1" ]; then
+if [ "$e" = "1" ] && { [ "$l" = "1" ] || ! sysctl_writable net.ipv4.conf.all.log_martians; }; then
     emit sysctl_log_martians 1 true ""
 else
     emit sysctl_log_martians 1 false "eff=$e live=$l"
@@ -162,9 +177,11 @@ fi
 # ---- 10. sysctl kptr_restrict>=1 (eff + live) ------------------------------
 e=$(eff_sysctl kernel.kptr_restrict)
 l=$(sysctl -n kernel.kptr_restrict 2>/dev/null)
-ok=false
-{ [ -n "$e" ] && [ "$e" -ge 1 ] 2>/dev/null && [ -n "$l" ] && [ "$l" -ge 1 ] 2>/dev/null; } && ok=true
-if $ok; then
+eff_ok=false; live_ok=false
+[ -n "$e" ] && [ "$e" -ge 1 ] 2>/dev/null && eff_ok=true
+[ -n "$l" ] && [ "$l" -ge 1 ] 2>/dev/null && live_ok=true
+sysctl_writable kernel.kptr_restrict || live_ok=true
+if $eff_ok && $live_ok; then
     emit sysctl_kptr_restrict 1 true ""
 else
     emit sysctl_kptr_restrict 1 false "eff=$e live=$l"

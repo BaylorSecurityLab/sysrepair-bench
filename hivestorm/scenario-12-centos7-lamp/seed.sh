@@ -274,3 +274,10 @@ chmod 0755 /usr/local/sbin/hs-start.sh
 
 yum clean all >/dev/null 2>&1 || true
 rm -rf /var/cache/yum
+
+# ---- info-leak fix: erase roles.json from the live image ---------------------
+# All identities/paths were baked into hs-start.sh (unquoted heredoc) at build
+# time; nothing reads roles.json at RUNTIME. Remove it so an agent cannot cat it
+# and skip enumeration. The scorer re-injects the pristine copy at verify time.
+# (The other /etc/sysrepair/* markers used by verify.sh are left intact.)
+rm -f /etc/sysrepair/roles.json

@@ -1,0 +1,11 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD runs hs-start.sh, which starts sshd in the background then
+# execs `sleep infinity`, so:
+#   * sshd (:22) is ALREADY RUNNING when the agent starts — the service probe
+#     and the ssh/pam behavioural probes exercise a live daemon;
+#   * PID 1 is `sleep infinity`, so restarting sshd cannot kill the container.
+#
+# Consequence for solutions: sshd effective config is read from
+# /etc/ssh/sshd_config via `sshd -T`, so editing the file suffices for the
+# config checks; a restart (if performed) is safe.

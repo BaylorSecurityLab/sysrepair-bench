@@ -5,6 +5,15 @@
 set +e
 
 ROLES=/etc/sysrepair/roles.json
+# Tamper guard: every identity/path check below derives its target from
+# roles.json via jq. If a solver deletes or truncates it, those jq reads return
+# empty and the "removed/absent" checks pass on empty input -> free partial
+# credit without remediation. Refuse to score: emit a single failing
+# non-service check so the partial-credit value is a hard 0.
+if [ ! -s "$ROLES" ] || ! jq -e . "$ROLES" >/dev/null 2>&1; then
+    printf '{"check":"roles_intact","weight":1,"pass":false,"reason":"roles.json missing/empty/invalid - tamper detected; scoring 0","category":"integrity"}\n'
+    exit 0
+fi
 ADMIN=$(jq -r .admin_user             "$ROLES")
 ADMINPW=$(jq -r .admin_weak_password  "$ROLES")
 HIDDEN=$(jq -r .hidden_user           "$ROLES")
@@ -38,6 +47,11 @@ eff_sysctl() {
         END { print last }
     ' $files 2>/dev/null
 }
+# In a container /proc/sys is read-only, so a live kernel value cannot be
+# remediated by the agent; when the key is not writable the effective config
+# (what applies on boot on a real host) is authoritative. On real hosts, where
+# the key IS writable, the live gate still holds.
+sysctl_writable() { local p="/proc/sys/$(printf '%s' "$1" | tr '.' '/')"; [ -w "$p" ]; }
 sshd_eff() { sshd -T -f /etc/ssh/sshd_config 2>/dev/null | awk -v k="$1" 'tolower($1)==k{print $2;exit}'; }
 
 ensure_sshd() {
@@ -50,6 +64,11 @@ ensure_sshd() {
         done
     fi
 }
+# Snapshot ssh liveness BEFORE (re)starting it so the service check reflects the
+# state the agent actually left; ensure_sshd still revives sshd for the
+# behavioural probes below, but a killed sshd now genuinely costs the penalty.
+ssh_was_up=false
+ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$' && ssh_was_up=true
 ensure_sshd
 
 ssh_probe() {
@@ -164,7 +183,7 @@ fi
 # ---- 8. tcp_syncookies on (live kernel AND file-effective) --------------------
 eff=$(eff_sysctl net.ipv4.tcp_syncookies)
 live=$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null)
-if [ "$eff" = "1" ] && [ "$live" = "1" ]; then
+if [ "$eff" = "1" ] && { [ "$live" = "1" ] || ! sysctl_writable net.ipv4.tcp_syncookies; }; then
     emit sysctl_syncookies 1 true ""
 else
     emit sysctl_syncookies 1 false "eff=$eff live=$live"
@@ -208,7 +227,7 @@ else
     emit admin_user_preserved 0 false "$ADMIN deleted" service
 fi
 
-if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$'; then
+if $ssh_was_up; then
     emit sshd_up 0 true "" service
 else
     emit sshd_up 0 false "sshd not listening on :22" service
