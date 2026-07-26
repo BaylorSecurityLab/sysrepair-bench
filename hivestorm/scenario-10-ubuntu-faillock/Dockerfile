@@ -27,5 +27,6 @@ RUN chmod 0600 /etc/sysrepair/roles.json \
 
 EXPOSE 22
 
-# sshd in foreground so :22 probe works.
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+# Supervisor backgrounds sshd then execs `sleep infinity`, so :22 is live for
+# probes while PID 1 is not a single service (restarting sshd won't kill it).
+CMD ["/usr/local/sbin/hs-start.sh"]

@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is hs-start.sh: it boots rsyslog/cron/mysql/apache2, the
+# planted backdoor listener and sshd (all with their vulnerable config), then
+# execs `sleep infinity`. So:
+#   * every daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "fixed the config but never restarted the service" case detectable;
+#   * PID 1 is `sleep infinity`, so restarting sshd/apache/mysql cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART/RELOAD the service, not merely
+# start it if absent - the service is already up with the vulnerable config.

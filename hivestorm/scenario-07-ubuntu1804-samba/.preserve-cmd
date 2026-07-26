@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD runs hs-start.sh, which boots rsyslog/cron/smbd/nmbd/
+# ircd-irc2, starts sshd, then execs `sleep infinity`, so:
+#   * the daemons (samba on :445, sshd on :22, ircd) are ALREADY RUNNING when
+#     the agent starts — the service and behavioural probes exercise live
+#     subsystems, and "fixed the config but never restarted the service" stays
+#     detectable;
+#   * PID 1 is `sleep infinity`, so restarting smbd/sshd cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RESTART the affected service (e.g. smbd
+# after editing smb.conf), not merely start it if absent.

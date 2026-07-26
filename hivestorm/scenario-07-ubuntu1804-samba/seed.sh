@@ -134,10 +134,20 @@ service smbd      start || true
 service nmbd      start || true
 service ircd-irc2 start || true
 [ -x /etc/rc.local ] && /etc/rc.local || true
-mkdir -p /var/run/sshd
-exec /usr/sbin/sshd -D -e
+mkdir -p /var/run/sshd /run/sshd
+# Background sshd so PID 1 stays `sleep infinity` — restarting any service
+# (sshd/smbd) during remediation must NOT kill the container.
+/usr/sbin/sshd -e || true
+exec sleep infinity
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+
+# ---- info-leak fix: erase the answer key from the live image -----------------
+# roles.json is read ONLY at build time above (values baked into generated
+# scripts via heredocs); hs-start.sh uses a quoted heredoc and never reads it.
+# The scorer re-injects a pristine copy at verify time, so removing it here
+# denies the running agent the enumeration shortcut without affecting scoring.
+rm -f /etc/sysrepair/roles.json

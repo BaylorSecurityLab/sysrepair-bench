@@ -143,3 +143,9 @@ chmod 0755 /usr/local/sbin/hs-start.sh
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+
+# ---- info-leak fix: erase roles.json from the live image ---------------------
+# All identities/paths were baked into hs-start.sh (unquoted heredoc) at build
+# time; nothing reads roles.json at RUNTIME. Remove it so an agent cannot cat it
+# and skip enumeration. The scorer re-injects the pristine copy at verify time.
+rm -f /etc/sysrepair/roles.json

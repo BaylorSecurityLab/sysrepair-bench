@@ -125,9 +125,19 @@ service cron    start || true
 service mysql   start || true
 service apache2 start || true
 /usr/local/sbin/hs-backdoor.sh &
-exec /usr/sbin/sshd -D -e
+# Boot sshd as a background daemon (not `exec sshd -D`) so PID 1 stays a stable
+# `sleep infinity`: an agent restarting sshd must not be able to kill the box.
+/usr/sbin/sshd -e || true
+exec sleep infinity
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+
+# ---- info-leak fix: erase the role map so a session agent cannot cat it -------
+# Nothing reads roles.json at RUNTIME: hs-backdoor.sh and the rogue cron are
+# generated with UNQUOTED heredocs (values baked at build time) and hs-start.sh
+# uses a QUOTED heredoc. The scorer re-injects the pristine roles.json at verify
+# time, so grading is unaffected. Must be the LAST line of seed.sh.
+rm -f /etc/sysrepair/roles.json

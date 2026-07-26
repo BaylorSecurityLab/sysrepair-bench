@@ -137,3 +137,10 @@ while true; do
 done
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh
+
+# ---- info-leak fix: erase roles.json from the live image ---------------------
+# All identities/paths were baked into hs-start.sh + daemon.json (unquoted
+# heredocs) at build time; the dind boot flow (dockerd-entrypoint -> hs-start.sh)
+# never reads roles.json at RUNTIME. Remove it so an agent cannot cat it and skip
+# enumeration. The scorer re-injects the pristine copy at verify time.
+rm -f /etc/sysrepair/roles.json

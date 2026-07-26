@@ -131,10 +131,20 @@ service postgresql start || true
 service apache2    start || true
 service bind9      start || true
 [ -x /etc/rc.local ] && /etc/rc.local || true
-exec /usr/sbin/sshd -D -e
+# Boot sshd as a background daemon (not `exec sshd -D`) so PID 1 stays a stable
+# `sleep infinity`: an agent restarting sshd must not be able to kill the box.
+/usr/sbin/sshd -e || true
+exec sleep infinity
 EOF
 chmod 0755 /usr/local/sbin/hs-start.sh
 
 mkdir -p /var/run/sshd
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+
+# ---- info-leak fix: erase the role map so a session agent cannot cat it -------
+# Nothing reads roles.json at RUNTIME: rc.local (perl backdoor) is generated with
+# an UNQUOTED heredoc (PERL_BD baked at build time) and hs-start.sh uses a QUOTED
+# heredoc. The scorer re-injects the pristine roles.json at verify time, so
+# grading is unaffected. Must be the LAST line of seed.sh.
+rm -f /etc/sysrepair/roles.json

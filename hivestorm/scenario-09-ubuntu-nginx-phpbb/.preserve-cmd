@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD runs hs-start.sh, which boots rsyslog/cron, starts sshd,
+# starts nginx in daemon (background) mode, then execs `sleep infinity`, so:
+#   * nginx (:80) and sshd (:22) are ALREADY RUNNING when the agent starts —
+#     the HTTP header / ssh-login probes exercise live subsystems, and "fixed
+#     the config but never reloaded nginx" stays detectable;
+#   * PID 1 is `sleep infinity`, so reloading/restarting nginx cannot kill the
+#     container.
+#
+# Consequence for solutions: a fix must RELOAD/RESTART nginx after editing
+# nginx.conf, not merely start it if absent.

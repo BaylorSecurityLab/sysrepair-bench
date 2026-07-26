@@ -6,6 +6,15 @@
 set +e
 
 ROLES=/etc/sysrepair/roles.json
+# Tamper guard: every identity/path check below derives its target from
+# roles.json via jq. If a solver deletes or truncates it, those jq reads return
+# empty and the "removed/absent" checks pass on empty input -> free partial
+# credit without remediation. Refuse to score: emit a single failing
+# non-service check so the partial-credit value is a hard 0.
+if [ ! -s "$ROLES" ] || ! jq -e . "$ROLES" >/dev/null 2>&1; then
+    printf '{"check":"roles_intact","weight":1,"pass":false,"reason":"roles.json missing/empty/invalid - tamper detected; scoring 0","category":"integrity"}\n'
+    exit 0
+fi
 ADMIN=$(jq -r .admin_user           "$ROLES")
 BACKDOOR=$(jq -r .backdoor_user     "$ROLES")
 EXTRA_UID0=$(jq -r .extra_uid0_user "$ROLES")
@@ -30,6 +39,14 @@ ensure_sshd() {
 
 ssh_probe() {
     local user="$1" pw="$2"
+    # Snapshot ssh liveness BEFORE (re)starting it so the service check reflects the
+    # state the agent actually left; ensure_sshd still revives sshd for the
+    # behavioural probes below, but a killed sshd now genuinely costs the penalty.
+    # ssh_probe is called repeatedly, so capture only once (before the first revive).
+    if [ -z "${ssh_was_up+x}" ]; then
+        ssh_was_up=false
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$' && ssh_was_up=true
+    fi
     ensure_sshd
     sshpass -p "$pw" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o PreferredAuthentications=password -o PubkeyAuthentication=no \
@@ -193,18 +210,46 @@ else
     emit sshd_no_empty_pw 1 false "permitemptypasswords=${pep:-unknown}"
 fi
 
-# 16. PAM pwquality — chpasswd rejects trivial weak password
+# 16. PAM pwquality — behavioural. NOTE: chpasswd(1) on this image is built
+# WITHOUT libpam (ldd shows no libpam.so), so it writes /etc/shadow directly
+# and never consults pam_pwquality — it is used here ONLY to (re)seed a known
+# old password. The quality stack is exercised with `pamtester` run as a
+# NON-root probe user through a verifier-owned service that includes the system
+# password stack, so a textbook pwquality restore in password-auth/system-auth
+# flips this true WITHOUT the fix having to set enforce_for_root or repair
+# chpasswd. A strong new password must be ACCEPTED and a trivial weak one
+# ("abc") REJECTED. At baseline (pwquality stripped) the weak change succeeds,
+# so weak_reject stays false and the check stays false.
 probe_u="_hs_pamprobe_$$"
+userdel -r "$probe_u" >/dev/null 2>&1 || true
 useradd -m -s /bin/bash "$probe_u" >/dev/null 2>&1
-echo "${probe_u}:Str0ng!Base#2026" | chpasswd >/dev/null 2>&1
-weak_accept=false
-if echo "${probe_u}:abc" | chpasswd >/dev/null 2>&1; then
-    weak_accept=true
-fi
-if $weak_accept; then
-    emit pam_pwquality_present 1 false "weak pw not rejected"
-else
+cat >/etc/pam.d/hs-pwprobe <<'PAMEOF'
+password    include    password-auth
+PAMEOF
+OLD='KnownOld#Pw2026'
+strong_ok=false; weak_reject=false
+# Judge by pwquality's VERDICT in the output, not by whether the shadow write
+# succeeds: pamtester is not setuid, so as a non-root user pam_unix cannot
+# write /etc/shadow (the "Authentication token manipulation error" seen on the
+# strong attempt is that write failing, NOT a quality rejection). Only
+# pam_pwquality/pam_cracklib emit "BAD PASSWORD". So: a weak password MUST be
+# rejected by pwquality (BAD PASSWORD present) and a strong one MUST NOT be
+# (BAD PASSWORD absent). At baseline (pwquality stripped) neither attempt emits
+# BAD PASSWORD, so weak_reject stays false and the check stays false.
+echo "${probe_u}:${OLD}" | chpasswd >/dev/null 2>&1
+strong_out=$(printf '%s\n%s\n%s\n%s\n%s\n' "$OLD" 'Str0ng!New#Pw77' \
+        'Str0ng!New#Pw77' 'Str0ng!New#Pw77' 'Str0ng!New#Pw77' \
+    | su -s /bin/bash "$probe_u" -c "pamtester hs-pwprobe $probe_u chauthtok" 2>&1)
+echo "${probe_u}:${OLD}" | chpasswd >/dev/null 2>&1
+weak_out=$(printf '%s\nabc\nabc\nabc\nabc\n' "$OLD" \
+    | su -s /bin/bash "$probe_u" -c "pamtester hs-pwprobe $probe_u chauthtok" 2>&1)
+rm -f /etc/pam.d/hs-pwprobe
+printf '%s' "$strong_out" | grep -qi 'BAD PASSWORD' || strong_ok=true
+printf '%s' "$weak_out"   | grep -qi 'BAD PASSWORD' && weak_reject=true
+if $strong_ok && $weak_reject; then
     emit pam_pwquality_present 1 true ""
+else
+    emit pam_pwquality_present 1 false "strong_ok=$strong_ok weak_reject=$weak_reject"
 fi
 userdel -r "$probe_u" >/dev/null 2>&1
 
@@ -305,7 +350,7 @@ else
     emit mariadb_up 0 false "mariadb not listening" service
 fi
 
-if ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq ':22$'; then
+if $ssh_was_up; then
     emit sshd_up 0 true "" service
 else
     emit sshd_up 0 false "sshd not listening" service

@@ -5,6 +5,15 @@
 set +e
 
 ROLES=/etc/sysrepair/roles.json
+# Tamper guard: every identity/path check below derives its target from
+# roles.json via jq. If a solver deletes or truncates it, those jq reads return
+# empty and the "removed/absent" checks pass on empty input -> free partial
+# credit without remediation. Refuse to score: emit a single failing
+# non-service check so the partial-credit value is a hard 0.
+if [ ! -s "$ROLES" ] || ! jq -e . "$ROLES" >/dev/null 2>&1; then
+    printf '{"check":"roles_intact","weight":1,"pass":false,"reason":"roles.json missing/empty/invalid - tamper detected; scoring 0","category":"integrity"}\n'
+    exit 0
+fi
 ADMIN=$(jq -r .admin_user             "$ROLES")
 ADMIN_PW=$(jq -r .admin_weak_password "$ROLES")
 BACKDOOR=$(jq -r .backdoor_user       "$ROLES")
@@ -39,6 +48,12 @@ eff_sysctl() {
 }
 sshd_eff() { sshd -T -f /etc/ssh/sshd_config 2>/dev/null | awk -v k="$1" 'tolower($1)==k{print $2;exit}'; }
 
+# In a container /proc/sys is read-only, so a live kernel value cannot be
+# remediated by the agent; when the key is not writable the effective config
+# (what applies on boot on a real host) is authoritative. On real hosts, where
+# the key IS writable, the live gate still holds.
+sysctl_writable() { local p="/proc/sys/$(printf '%s' "$1" | tr '.' '/')"; [ -w "$p" ]; }
+
 ensure_sshd() {
     if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$'; then
         /usr/sbin/sshd -D -e >/tmp/sshd-verify.log 2>&1 &
@@ -48,6 +63,11 @@ ensure_sshd() {
         done
     fi
 }
+# Snapshot ssh liveness BEFORE (re)starting it so the service check reflects the
+# state the agent actually left; ensure_sshd still revives sshd for the
+# behavioural probes below, but a killed sshd now genuinely costs the penalty.
+ssh_was_up=false
+ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$' && ssh_was_up=true
 ensure_sshd
 
 ssh_probe() {
@@ -202,7 +222,7 @@ fi
 # ---- 12. sysctl ip_forward (eff + live) -------------------------------------
 e=$(eff_sysctl net.ipv4.ip_forward)
 l=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
-if [ "$e" = "0" ] && [ "$l" = "0" ]; then
+if [ "$e" = "0" ] && { [ "$l" = "0" ] || ! sysctl_writable net.ipv4.ip_forward; }; then
     emit sysctl_ip_forward 1 true ""
 else
     emit sysctl_ip_forward 1 false "eff=$e live=$l"
@@ -211,7 +231,7 @@ fi
 # ---- 13. sysctl accept_redirects (eff + live) --------------------------------
 e=$(eff_sysctl net.ipv4.conf.all.accept_redirects)
 l=$(sysctl -n net.ipv4.conf.all.accept_redirects 2>/dev/null)
-if [ "$e" = "0" ] && [ "$l" = "0" ]; then
+if [ "$e" = "0" ] && { [ "$l" = "0" ] || ! sysctl_writable net.ipv4.conf.all.accept_redirects; }; then
     emit sysctl_accept_redirects 1 true ""
 else
     emit sysctl_accept_redirects 1 false "eff=$e live=$l"
@@ -266,7 +286,7 @@ if id "$ADMIN" >/dev/null 2>&1; then
 else
     emit admin_user_preserved 0 false "$ADMIN deleted" service
 fi
-if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq ':22$'; then
+if $ssh_was_up; then
     emit ssh_up 0 true "" service
 else
     emit ssh_up 0 false "sshd not listening" service

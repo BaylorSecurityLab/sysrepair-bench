@@ -63,4 +63,22 @@ chown "${NONADMIN}:${NONADMIN}" "$MP3_PATH" || true
 
 # Note: $PROH_PKG is installed via Dockerfile RUN apt-get install — agent must
 # remove it. seed.sh doesn't need to do anything extra.
-true
+
+# ---- supervisor --------------------------------------------------------------
+# Background sshd so PID 1 stays `sleep infinity` — restarting sshd during
+# remediation (to re-read sshd_config) must NOT kill the container.
+mkdir -p /run/sshd /var/run/sshd
+cat >/usr/local/sbin/hs-start.sh <<'EOF'
+#!/bin/bash
+mkdir -p /run/sshd /var/run/sshd
+/usr/sbin/sshd -e || true
+exec sleep infinity
+EOF
+chmod 0755 /usr/local/sbin/hs-start.sh
+
+# ---- info-leak fix: erase the answer key from the live image -----------------
+# roles.json is read ONLY at build time above; hs-start.sh uses a quoted heredoc
+# and never reads it. The scorer re-injects a pristine copy at verify time, so
+# removing it here denies the running agent the enumeration shortcut without
+# affecting scoring.
+rm -f /etc/sysrepair/roles.json

@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is hs-start.sh: it boots rsyslog/cron/postgresql/apache2/
+# bind9 and the rc.local perl backdoor (all with their vulnerable config), then
+# execs `sleep infinity`. So:
+#   * every daemon is ALREADY RUNNING when the agent starts, which is what makes
+#     the "fixed the config but never restarted the service" case detectable;
+#   * PID 1 is `sleep infinity`, so stopping apache2/bind9 or reloading
+#     postgresql cannot kill the container.
+#
+# Consequence for solutions: a fix must RESTART/RELOAD the service, not merely
+# start it if absent - the service is already up with the vulnerable config.

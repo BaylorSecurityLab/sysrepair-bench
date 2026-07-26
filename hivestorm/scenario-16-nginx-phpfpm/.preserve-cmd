@@ -1,0 +1,17 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is `/usr/local/sbin/hs-start.sh`, which backgrounds sshd,
+# php-fpm8.2 (pool running as root, world-writable socket), nginx (path-info
+# RCE vhost + private catch-all + autoindex), cron and the planted ncat
+# listener, then `wait`s. So every seeded misconfiguration is LIVE at first
+# boot, which is what makes verify.sh's behavioural probes (HTTP RCE via
+# webshell, pathinfo exec, posix_getuid pool probe, autoindex/server_tokens
+# headers, private-vhost Host: leak, nc :$listener_port) meaningful.
+#
+# PID 1 is hs-start.sh (a `wait` over all daemons), NOT any single service,
+# so a solution may restart php-fpm and reload nginx without killing the
+# container.
+#
+# Without this marker the harness overrides CMD with `sleep infinity`: no
+# daemon boots, every service check fails (-10 each) and the service-dependent
+# non-service checks become meaningless (false-pass).

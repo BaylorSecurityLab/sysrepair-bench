@@ -1,0 +1,16 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD is `/usr/local/sbin/hs-start.sh`, which backgrounds
+# sshd, mariadb (bound to 0.0.0.0:3306), httpd (ServerTokens Full +
+# /server-status), vsftpd (anon), xinetd/telnet (:23), crond and the planted
+# ncat listener, then `wait`s. So every seeded misconfiguration is LIVE at
+# first boot, which is what makes verify.sh's behavioural probes (curl
+# /server-status, ss :3306, ftp anon, telnet :23, nc :$listener_port)
+# meaningful.
+#
+# PID 1 is hs-start.sh (a `wait` over all daemons), NOT any single service,
+# so a solution may restart httpd/mariadb without killing the container.
+#
+# Without this marker the harness overrides CMD with `sleep infinity`: no
+# daemon boots, every service check fails (-10 each) and the service-dependent
+# non-service checks become meaningless (false-pass).
