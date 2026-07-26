@@ -104,8 +104,16 @@ function Invoke-PocGate {
     $runner = "sudo docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local " +
               "-v ${guest}:/verify-poc.sh srb-attacker:1 bash /verify-poc.sh"
 
-    ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
-        "vagrant@$($script:AttackerIP)" "$runner >/dev/null 2>&1; rc=`$?; rm -f $guest; exit `$rc" 2>&1 | Out-Null
+    # CAPTURE the output rather than discarding it. A gate failure is only
+    # actionable if you can see what the tool actually said -- the recurring
+    # defect in this suite is a denial the PoC does not recognise (scenario-06
+    # returned "ERROR_DS_DRA_BAD_DN", which matched no denial pattern, so a
+    # correct fix graded as failure). Throwing the output away means every
+    # such failure costs a manual re-run at several minutes each.
+    $out = ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
+        "vagrant@$($script:AttackerIP)" "$runner 2>&1; rc=`$?; rm -f $guest; exit `$rc" 2>&1 | Out-String
+
+    $script:LastPocOutput = $out
     return $LASTEXITCODE
 }
 
@@ -145,11 +153,17 @@ function Test-ScenarioGates {
     Start-Sleep -Seconds 10
 
     $poc1 = Invoke-PocGate -ScenarioDir $dir
+    $poc1Out = $script:LastPocOutput
     $svc1 = Invoke-GuestScript -Target $serviceTarget -ScriptPath $serviceScript
 
     $results['gate1_poc_fails']       = ($poc1 -eq 1)
     $results['gate1_not_harness_err'] = ($poc1 -ne 2)
     $results['gate1_service_healthy'] = ($svc1 -eq 0)
+
+    # Keep the vulnerable-box output when gate 1 says the PoC never fired --
+    # that is the "scores a PASS while testing nothing" class and the output
+    # is the only way to tell why.
+    if ($poc1 -ne 1) { $results['gate1_output'] = ($poc1Out -split "`n" | Select-Object -Last 25) -join "`n" }
     Write-Host "  poc=$poc1 (want 1)  service=$svc1 (want 0)"
     if ($poc1 -eq 2) { Write-Warning '  PoC returned 2 = HARNESS ERROR. Not evidence; fix the tooling first.' }
 
@@ -178,9 +192,20 @@ function Test-ScenarioGates {
             if ($poc2 -eq 0) { break }
         }
 
+        $poc2Out = $script:LastPocOutput
         $svc2 = Invoke-GuestScript -Target $serviceTarget -ScriptPath $serviceScript
         $results['gate2_solvable'] = ($poc2 -eq 0 -and $svc2 -eq 0)
         Write-Host "  poc=$poc2 (want 0)  service=$svc2 (want 0)"
+
+        # The single most valuable diagnostic in this whole harness. When a
+        # correct fix is applied and the PoC still reports vulnerable, the
+        # tool's own words usually name the denial signature the PoC failed to
+        # match -- which is the fix, and is otherwise invisible.
+        if ($poc2 -ne 0) {
+            $results['gate2_output'] = ($poc2Out -split "`n" | Select-Object -Last 25) -join "`n"
+            Write-Host '  --- PoC output after fix (denial signature likely here) ---'
+            ($poc2Out -split "`n" | Select-Object -Last 12) | ForEach-Object { "    $($_.TrimEnd())" }
+        }
     }
 
     # ---------- GATE 3: sabotage ----------
