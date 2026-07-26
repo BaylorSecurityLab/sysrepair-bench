@@ -76,6 +76,35 @@ function New-CloudInitSeedIso {
     $template = Join-Path $CloudInitDir 'user-data.template'
     if (-not (Test-Path $template)) { throw "New-CloudInitSeedIso: $template not found" }
 
+    # oscdimg fails with a bare "exit code 1" if it cannot delete an existing
+    # target. The real message is buried in its stdout:
+    #
+    #   ERROR: Could not delete existing file "C:\srb\seed.iso"
+    #   Error 32: The process cannot access the file because it is being used
+    #             by another process.
+    #
+    # Two things hold it: a Mount-DiskImage left attached after inspecting the
+    # seed, and -- more often -- a VM still having it in a DVD drive. Release
+    # both, then delete and VERIFY. An earlier version used
+    # -ErrorAction SilentlyContinue here, so a failed delete passed silently
+    # and surfaced later as an opaque oscdimg exit code.
+    if (Test-Path -LiteralPath $OutputIsoPath) {
+        Dismount-DiskImage -ImagePath $OutputIsoPath -ErrorAction SilentlyContinue | Out-Null
+
+        foreach ($vm in (Get-VM -ErrorAction SilentlyContinue)) {
+            Get-VMDvdDrive -VMName $vm.Name -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $OutputIsoPath } |
+                ForEach-Object {
+                    Write-Host "[attacker] releasing $OutputIsoPath from $($vm.Name)'s DVD drive"
+                    Set-VMDvdDrive -VMName $vm.Name -ControllerNumber $_.ControllerNumber `
+                        -ControllerLocation $_.ControllerLocation -Path $null -ErrorAction SilentlyContinue
+                }
+        }
+
+        Start-Sleep -Seconds 1
+        Remove-Item -LiteralPath $OutputIsoPath -Force -ErrorAction Stop
+    }
+
     $pubkey = (Get-Content -LiteralPath $PublicKeyPath -Raw).Trim()
     $rendered = (Get-Content -LiteralPath $template -Raw) -replace '__SSH_PUBKEY__', $pubkey
 
@@ -83,8 +112,45 @@ function New-CloudInitSeedIso {
     $staging = Join-Path ([IO.Path]::GetTempPath()) "srb-cidata-$PID"
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     try {
-        Set-Content -LiteralPath (Join-Path $staging 'user-data') -Value $rendered -Encoding utf8 -NoNewline
-        Copy-Item -LiteralPath (Join-Path $CloudInitDir 'meta-data') -Destination $staging
+        # MUST be written WITHOUT a BOM. PowerShell 5.1's `-Encoding utf8`
+        # emits UTF-8 *with* BOM, and those three bytes sit in front of the
+        # `#cloud-config` marker on line 1. cloud-init then fails to recognise
+        # the payload format and silently ignores the whole file.
+        #
+        # The failure is deceptive: meta-data still applies, so the guest comes
+        # up with the right hostname and looks configured, while nothing from
+        # user-data lands -- no vagrant user, no SSH key. The only symptom is
+        # "Permission denied (publickey)" on a host that otherwise boots fine.
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllText((Join-Path $staging 'user-data'), $rendered, $utf8NoBom)
+
+        # Same for the copies -- rewrite rather than Copy-Item so a BOM in the
+        # source file cannot reach the seed either.
+        foreach ($f in 'meta-data', 'network-config') {
+            $srcFile = Join-Path $CloudInitDir $f
+            if (Test-Path $srcFile) {
+                $text = [IO.File]::ReadAllText($srcFile) -replace "^﻿", ''
+                [IO.File]::WriteAllText((Join-Path $staging $f), $text, $utf8NoBom)
+            }
+        }
+
+        # network-config is the supported NoCloud mechanism for addressing.
+        # Without it the guest boots, cloud-init runs, but the static lab
+        # address never comes up -- ARP for 10.20.30.10 stays Incomplete.
+        # Dropping a netplan file via write_files and calling `netplan apply`
+        # in runcmd is NOT equivalent: it rewrites config after the interface
+        # is already up. (Copied above, BOM-stripped, along with meta-data.)
+        if (-not (Test-Path (Join-Path $CloudInitDir 'network-config'))) {
+            Write-Warning 'New-CloudInitSeedIso: no network-config in the seed; the guest will come up on DHCP only.'
+        }
+
+        # Fail loudly if the payload marker is not the very first bytes --
+        # this is what a BOM breaks, and it is invisible in any text editor.
+        $firstBytes = [IO.File]::ReadAllBytes((Join-Path $staging 'user-data'))[0..12]
+        $marker = -join ($firstBytes | ForEach-Object { [char]$_ })
+        if ($marker -notmatch '^#cloud-config') {
+            throw "New-CloudInitSeedIso: user-data does not begin with '#cloud-config' (got '$marker'). A BOM or stray leading whitespace will make cloud-init ignore the entire file."
+        }
 
         # -j1 adds a Joliet tree alongside ISO9660. Without it oscdimg writes
         # plain ISO9660, which does not preserve case, so the files land as
@@ -97,9 +163,9 @@ function New-CloudInitSeedIso {
         # -n is deliberately NOT passed: oscdimg rejects it alongside -j1
         # ("With -j1 and -j2, cannot use -n, -nt, or -d"). Joliet already
         # allows the long names -n would have provided.
-        & $oscdimgPath -lCIDATA -j1 $staging $OutputIsoPath
+        $oscOut = & $oscdimgPath -lCIDATA -j1 $staging $OutputIsoPath 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) {
-            throw "New-CloudInitSeedIso: oscdimg failed with exit code $LASTEXITCODE"
+            throw "New-CloudInitSeedIso: oscdimg failed with exit code $LASTEXITCODE`nstaging: $staging`nfiles: $((Get-ChildItem $staging -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join ', ')`noutput:`n$oscOut"
         }
         Write-Host "[attacker] seed ISO written to $OutputIsoPath"
     }
@@ -137,13 +203,49 @@ function Convert-CloudImageToVhdx {
         Remove-Item -LiteralPath $VhdxPath -Force
     }
 
+    $raw = [IO.Path]::ChangeExtension($VhdxPath, '.qemu.vhdx')
+    if (Test-Path -LiteralPath $raw) { Remove-Item -LiteralPath $raw -Force }
+
     Write-Host "[attacker] converting cloud image -> VHDX (this takes a minute)"
-    & $qemu convert -f qcow2 -O vhdx -o subformat=dynamic $ImagePath $VhdxPath
+    & $qemu convert -f qcow2 -O vhdx -o subformat=dynamic $ImagePath $raw
     if ($LASTEXITCODE -ne 0) { throw "Convert-CloudImageToVhdx: qemu-img convert failed ($LASTEXITCODE)" }
 
-    # Cloud images ship ~3.5 GB; grow so there is room for the tooling image.
+    # qemu-img writes a SPARSE file, and Hyper-V refuses to attach one:
+    #
+    #   Failed to Power on with Error 'The requested operation could not be
+    #   completed due to a virtual disk system limitation. Virtual hard disk
+    #   files must be uncompressed and unencrypted and must not be sparse.'
+    #
+    # Convert-VHD cannot be used to fix it -- it refuses to READ a sparse VHDX
+    # with the same error. Sparseness is an NTFS file attribute, not something
+    # inside the VHDX, so the fix is a plain dense byte copy: a FileStream
+    # write allocates every block and the destination inherits no sparseness.
+    Write-Host '[attacker] rewriting densely (qemu-img output is sparse; Hyper-V rejects sparse VHDX)'
+    if (Test-Path -LiteralPath $VhdxPath) { Remove-Item -LiteralPath $VhdxPath -Force }
+
+    $src = [IO.File]::OpenRead($raw)
+    try {
+        $dst = [IO.File]::Create($VhdxPath)
+        try {
+            # Preallocate so NTFS never marks the destination sparse.
+            $dst.SetLength($src.Length)
+            $dst.Position = 0
+            $src.CopyTo($dst, 4MB)
+            $dst.Flush($true)
+        }
+        finally { $dst.Dispose() }
+    }
+    finally { $src.Dispose() }
+
+    Remove-Item -LiteralPath $raw -Force -ErrorAction SilentlyContinue
+
+    if ((Get-Item -LiteralPath $VhdxPath -Force).Attributes -band [IO.FileAttributes]::SparseFile) {
+        throw "Convert-CloudImageToVhdx: $VhdxPath is still sparse; Hyper-V will refuse to start the VM"
+    }
+
+    # Cloud images ship small; grow so there is room for the tooling image.
     Resize-VHD -Path $VhdxPath -SizeBytes $ResizeToBytes -ErrorAction SilentlyContinue
-    Write-Host "[attacker] VHDX ready: $([math]::Round((Get-Item $VhdxPath).Length/1GB,2)) GB on disk"
+    Write-Host "[attacker] VHDX ready, dense: $([math]::Round((Get-Item $VhdxPath).Length/1GB,2)) GB"
 }
 
 function New-AttackerVMFromCloudImage {

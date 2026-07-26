@@ -1,0 +1,45 @@
+# NoCloud network configuration (cloud-init network-config v2).
+#
+# This is the CORRECT mechanism for the lab address, and it replaces an
+# earlier attempt that used write_files to drop a netplan file plus a
+# `netplan apply` in runcmd. That approach left the guest unreachable:
+# cloud-init demonstrably ran (it set the hostname to attacker01) but the
+# static address never came up, and ARP for 10.20.30.10 stayed Incomplete
+# while the DC and CA answered normally.
+#
+# cloud-init consumes this file during boot and renders netplan itself,
+# before networking is brought up -- rather than rewriting config after the
+# interface has already been configured and hoping a later `netplan apply`
+# takes effect.
+#
+# Matched by DRIVER, not interface name: Ubuntu cloud images use predictable
+# names, so the Hyper-V NIC may enumerate as eth0, enp0s3 or similar depending
+# on bus position, and a config keyed to a literal name is silently inert when
+# it differs. hv_netvsc is the Hyper-V synthetic NIC driver and is stable.
+#
+# dhcp4 stays enabled so the VM still works on SRB-Build during the bake,
+# where it needs internet for docker.io; the static address is what it uses
+# once moved to the isolated SRB-Lab segment.
+
+version: 2
+ethernets:
+  srblab:
+    match:
+      driver: hv_netvsc
+    # DHCP-supplied DNS is deliberately NOT suppressed. During the bake the VM
+    # sits on SRB-Build and must resolve archive.ubuntu.com to install
+    # docker.io; forcing resolution to the DC (10.20.30.5) there makes every
+    # apt call fail -- observed as `apt-get install` exiting 100 after 500
+    # seconds of DNS timeouts, which in turn fails cloud-init's whole
+    # package stage.
+    #
+    # On SRB-Lab there is no DHCP server, so the static address and the DC
+    # nameserver below are what the guest uses.
+    dhcp4: true
+    addresses:
+      - 10.20.30.10/24
+    nameservers:
+      search:
+        - corp.local
+      addresses:
+        - 10.20.30.5
