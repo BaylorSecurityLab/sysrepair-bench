@@ -3,5 +3,5 @@
   "id": "meta4-adv-05",
   "inject":         { "target": "dc", "script": "inject.ps1" },
   "verify_poc":     { "target": "attacker", "script": "verify-poc.sh" },
-  "verify_service": { "target": "dc", "script": "verify-service.ps1" }
+  "verify_service": { "target": "ca", "script": "verify-service.ps1" }
 }
