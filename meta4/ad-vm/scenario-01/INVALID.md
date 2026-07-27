@@ -72,8 +72,49 @@ to detect.
    is no live exploit to distinguish a restarted service from an unrestarted
    one.
 
-Option 3 keeps a gradeable scenario without misrepresenting it. Option 1 is the
-only one that preserves a real Zerologon exploit.
+## Option 3 was attempted and does not work either (2026-07-27)
 
-**Do not "fix" this by loosening the check.** The check is now correct; the
+Before excluding the scenario, the reframe was tested behaviourally rather than
+assumed. The idea was to grade the one thing that *is* configurable on this
+image — whether the DC still accepts an UNSIGNED Netlogon secure channel — by
+calling `NetrServerAuthenticate3` with negotiate flags that omit
+`NETLOGON_NEG_AUTHENTICATED_RPC` (0x40000000) and watching for
+`STATUS_DOWNGRADE_DETECTED`.
+
+Measured against the live DC in both states:
+
+| DC state | `FullSecureChannelProtection` | probe result |
+|---|---|---|
+| after `inject.ps1` (weakened) | 0, allow-list `*` | `STATUS_ACCESS_DENIED` |
+| after `reference-fix.ps1` (enforced) | 1, allow-list removed | `STATUS_ACCESS_DENIED` |
+
+**Identical in both states.** The registry values do not change any response
+observable from the network, so there is nothing for a behavioural check to
+grade. A configuration-reading check could tell the two apart, but that is the
+config-only defect this suite exists to eliminate — and per gate 4 it would be
+scored as one.
+
+The deeper reason is that Zerologon's fix is **in code, not in configuration**.
+The August 2020 patch changed how `NetrServerAuthenticate3` validates the
+client credential; no registry setting reinstates the flaw.
+`VulnerableChannelAllowList` governs whether unsigned channels are *permitted*,
+which is a different weakness, and this image does not expose it differently
+over the wire.
+
+## Resolution: EXCLUDED, not failed
+
+`Invoke-FullGateRun` now skips any scenario directory containing this file and
+records it as `EXCLUDED` with the reason, rather than running it and emitting a
+verdict.
+
+That distinction matters. Left in the run, scenario-01 reported gate 1 FAILED,
+which reads as "this scenario is broken and someone should fix the check". The
+check is correct; the vulnerability is absent from the image. Excluding it says
+so directly and stops it diluting the suite's pass rate with a failure nobody
+can act on.
+
+Restoring it needs **option 1** — media predating the February 2021 enforcement
+— and `IMAGES.md` would have to record why an out-of-date image is required.
+
+**Do not "fix" this by loosening the check.** The check is correct; the
 vulnerability is absent.

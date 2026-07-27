@@ -34,16 +34,43 @@ function Invoke-FullGateRun {
         Write-Host "# scenario-$id  ($($ScenarioId.IndexOf($id) + 1) of $($ScenarioId.Count))"
         Write-Host ("#" * 70)
 
-        try {
-            $r = Test-ScenarioGates -ScenarioId $id
-        }
-        catch {
-            Write-Warning "scenario-$id threw: $($_.Exception.Message.Split([char]10)[0])"
+        # A scenario carrying INVALID.md is EXCLUDED, not run.
+        #
+        # "This scenario cannot be induced on the current image" and "this
+        # scenario's check is broken" are different states, and running the
+        # former produces the latter's output. scenario-01 (Zerologon) reported
+        # gate 1 FAILED on every run, which reads as a defect someone should go
+        # and fix -- when in fact its check is correct and the vulnerability is
+        # simply absent from a Server 2019 build that postdates the February
+        # 2021 enforcement. Excluding it says so directly instead of diluting
+        # the pass rate with a failure nobody can act on.
+        #
+        # INVALID.md is required to state the evidence and what restoring the
+        # scenario would take; see scenario-01/INVALID.md for the shape.
+        $invalidPath = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) "scenario-$id") 'INVALID.md'
+        if (Test-Path $invalidPath) {
+            $reason = (Select-String -Path $invalidPath -Pattern '^\*\*Status:' -List).Line
+            if (-not $reason) { $reason = 'marked INVALID; see INVALID.md' }
+            Write-Warning "scenario-$id EXCLUDED -- $reason"
             $r = [pscustomobject]@{
                 Scenario   = "scenario-$id"
-                Validated  = $false
-                Gates      = @{ error = $_.Exception.Message.Split([char]10)[0] }
+                Validated  = 'EXCLUDED'
+                Gates      = [ordered]@{ excluded_reason = $reason }
                 HasFixture = $true
+            }
+        }
+        else {
+            try {
+                $r = Test-ScenarioGates -ScenarioId $id
+            }
+            catch {
+                Write-Warning "scenario-$id threw: $($_.Exception.Message.Split([char]10)[0])"
+                $r = [pscustomobject]@{
+                    Scenario   = "scenario-$id"
+                    Validated  = $false
+                    Gates      = @{ error = $_.Exception.Message.Split([char]10)[0] }
+                    HasFixture = $true
+                }
             }
         }
 
