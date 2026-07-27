@@ -121,7 +121,40 @@ function Invoke-PocGate {
     ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
         "vagrant@$($script:AttackerIP)" $mcast 2>&1 | Out-Null
 
+    # Stage the impacket logging fix and mount it into the container.
+    #
+    # COMPATIBILITY SHIM, and a no-op once the image carries the fix itself
+    # (lab/attacker/Dockerfile installs the same two files). It exists because
+    # the CURRENT baseline snapshot predates that Dockerfile change, and the
+    # attacker VM sits on the Internal SRB-Lab switch with no route out, so the
+    # image cannot be rebuilt without attaching SRB-Build and re-taking the
+    # baseline. Mounting identical content over the image's own copy is
+    # harmless, so this can stay until the baseline is next rebuilt.
+    #
+    # Without it, impacket's formatter raises on every record that lacks
+    # 'identity', Python discards the MESSAGE and prints a traceback, and
+    # scenario-16 sees none of the output it grades on -- while the tool exits
+    # 0. See lab/attacker/impacket_logfix.py.
+    $logfixDir = Join-Path $PSScriptRoot 'attacker'
+    $logfixMount = ''
+    foreach ($pair in @(
+        @{ Local = 'impacket_logfix.py';  Guest = '/tmp/srb-impacket_logfix.py';  Target = '/usr/lib/python3/dist-packages/impacket_logfix.py' },
+        @{ Local = 'impacket-logfix.pth'; Guest = '/tmp/srb-impacket-logfix.pth'; Target = '/usr/lib/python3/dist-packages/zz-impacket-logfix.pth' }
+    )) {
+        $src = Join-Path $logfixDir $pair.Local
+        if (-not (Test-Path $src)) { continue }
+        scp -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
+            $src "vagrant@$($script:AttackerIP):$($pair.Guest)" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $logfixMount += "-v $($pair.Guest):$($pair.Target) "
+        }
+        else {
+            Write-Warning "  could not stage $($pair.Local); impacket log output may be discarded"
+        }
+    }
+
     $runner = "sudo docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local " +
+              $logfixMount +
               "-v ${guest}:/verify-poc.sh srb-attacker:1 bash /verify-poc.sh"
 
     # CAPTURE the output rather than discarding it. A gate failure is only
