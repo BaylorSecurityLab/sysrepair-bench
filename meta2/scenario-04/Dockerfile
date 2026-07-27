@@ -27,4 +27,8 @@ RUN mkdir -p /home/ftp && \
 EXPOSE 21
 
 # Start vsftpd in foreground
-CMD ["/usr/sbin/vsftpd", "/etc/vsftpd.conf"]
+# .preserve-cmd: boot vsftpd in the BACKGROUND so a real daemon is already
+# running with the vulnerable (anonymous_enable=YES) config when the agent
+# starts — this makes the "edited vsftpd.conf but never restarted" case
+# detectable — then keep PID 1 as `sleep infinity`.
+CMD ["/bin/bash", "-c", "/usr/sbin/vsftpd /etc/vsftpd.conf & exec sleep infinity"]

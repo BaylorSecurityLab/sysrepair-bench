@@ -1,87 +1,70 @@
 #!/bin/bash
-# Verify remediation of Samba MS-RPC Shell Command Execution CVE-2007-2447 (scenario-20)
+# Scenario 20: Samba 'username map script' command injection (CVE-2007-2447)
+#
+# BEHAVIOURAL verifier. It authenticates to the RUNNING smbd with a username
+# containing shell metacharacters and checks whether the injected command
+# actually ran (a marker file appears). It does NOT grep smb.conf: verified that
+# the live smbd keeps invoking the map script until it is restarted, so removing
+# the directive without restarting leaves the box exploitable (notrestart =>
+# FAIL). It NEVER starts smbd -- a dead daemon is a real regression failure.
+#
+# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+set -u
+HOST=127.0.0.1
+PORT=445
+MARKER="/tmp/.smb_inject_$$_$(date +%s)"
+cleanup() { rm -f "$MARKER" 2>/dev/null; }
+trap cleanup EXIT
 
-PASS=0
-FAIL=1
-
-##############################################
-# PoC Check: 'username map script' must NOT be in smb.conf
-##############################################
-
-# Check if the vulnerable directive exists in smb.conf
-if grep -qi "username map script" /etc/samba/smb.conf 2>/dev/null; then
-    echo "FAIL: 'username map script' is still present in /etc/samba/smb.conf"
-    exit $FAIL
+# smbd must already be running; the verifier must not start it.
+if ! pidof smbd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: smbd is not running -- a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
+    exit 1
 fi
 
-# Also check any included configuration files
-SMB_INCLUDES=$(grep -i "^include" /etc/samba/smb.conf 2>/dev/null | awk '{print $3}')
-for INCFILE in $SMB_INCLUDES; do
-    if [ -f "$INCFILE" ] && grep -qi "username map script" "$INCFILE" 2>/dev/null; then
-        echo "FAIL: 'username map script' found in included config $INCFILE"
-        exit $FAIL
+# Wait (bounded) for the SMB port.
+UP=0
+for i in $(seq 1 20); do
+    if netstat -tln 2>/dev/null | grep -q ":$PORT " || ss -tln 2>/dev/null | grep -q ":$PORT "; then
+        UP=1; break
     fi
+    sleep 1
 done
-
-echo "PASS: 'username map script' directive has been removed (config check)"
-
-# Behavioral test: attempt to exploit metacharacter injection via smbclient
-# Ensure Samba is running
-if ! pidof smbd > /dev/null 2>&1; then
-    /etc/init.d/samba start > /dev/null 2>&1 || smbd -D > /dev/null 2>&1
-    sleep 2
+if [ "$UP" != 1 ]; then
+    echo "FAIL [Regression]: smbd is not listening on port $PORT -- service down/broken." >&2
+    exit 1
 fi
 
-if command -v smbclient > /dev/null 2>&1; then
-    # Create a marker file that would be created if command injection succeeds
-    MARKER="/tmp/.samba_exploit_test_$$"
-    rm -f "$MARKER"
-
-    # Attempt metacharacter injection in username — if vulnerable, the backtick
-    # command would execute and create the marker file
-    smbclient //127.0.0.1/tmp -U "/=\`touch ${MARKER}\`" -N 2>/dev/null || true
-
-    if [ -f "$MARKER" ]; then
-        rm -f "$MARKER"
-        echo "FAIL: Metacharacter injection via smbclient username succeeded (behavioral test)"
-        exit $FAIL
-    fi
-    rm -f "$MARKER"
-    echo "PASS: Metacharacter injection via smbclient username did not execute (behavioral test)"
-else
-    echo "INFO: smbclient not available; skipping metacharacter injection behavioral test"
+if ! command -v smbclient >/dev/null 2>&1; then
+    echo "FAIL: smbclient is required for the behavioural PoC but is not installed." >&2
+    exit 1
 fi
 
-##############################################
-# Regression Check: Samba must still be running and shares accessible
-##############################################
+# PoC: username-map command injection. The literal backticks must reach smbd, so
+# build the string with single-quoted segments (no local command substitution).
+rm -f "$MARKER"
+USERSPEC='/=`touch '"$MARKER"'`'
+smbclient //"$HOST"/shared -U "$USERSPEC" -N -c 'quit' >/dev/null 2>&1 || true
+# also try against IPC$ in case the data share is renamed
+smbclient //"$HOST"/ipc$ -U "$USERSPEC" -N -c 'quit' >/dev/null 2>&1 || true
+sleep 1
 
-# Check that smbd is running
-if ! pidof smbd > /dev/null 2>&1; then
-    echo "FAIL: smbd is not running"
-    exit $FAIL
+if [ -f "$MARKER" ]; then
+    echo "FAIL [PoC]: a metacharacter username executed a shell command via the" >&2
+    echo "            username map script (marker created) -- CVE-2007-2447 RCE as root." >&2
+    exit 1
 fi
+echo "PASS [PoC]: username-map metacharacter injection did not execute a command."
 
-# Check that port 445 is listening
-if ! netstat -tlnp 2>/dev/null | grep -q ':445 '; then
-    echo "FAIL: Samba is not listening on port 445"
-    exit $FAIL
-fi
-
-# Try to list shares
-SHARES=$(smbclient -L 127.0.0.1 -N 2>/dev/null)
-if [ $? -ne 0 ] && [ -z "$SHARES" ]; then
-    echo "FAIL: Cannot list Samba shares"
-    exit $FAIL
-fi
-
-# Check that the shared directory is accessible
+# Regression: Samba still serves the 'shared' share.
+SHARES=$(smbclient -L "$HOST" -N 2>/dev/null)
 if echo "$SHARES" | grep -qi "shared"; then
-    echo "PASS: Samba share 'shared' is accessible"
+    echo "PASS [Regression]: the 'shared' share is still listed and Samba is functional."
 else
-    echo "FAIL: Samba share 'shared' is not listed"
-    exit $FAIL
+    echo "FAIL [Regression]: the 'shared' share is not listed -- Samba broken." >&2
+    exit 1
 fi
 
-echo "PASS: Samba is functional with shares accessible"
-exit $PASS
+echo "All checks passed."
+exit 0

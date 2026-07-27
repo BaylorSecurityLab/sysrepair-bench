@@ -1,69 +1,56 @@
 #!/bin/bash
-# Verification script for Scenario 13: phpinfo() Exposed
-# Check 1 (PoC): /phpinfo.php should NOT be accessible (expect 404 or 403)
-# Check 2 (Regression): PHP should still work on Apache
+# Scenario 13: phpinfo() Exposed (information disclosure)
+#
+# BEHAVIOURAL verifier. It requests /phpinfo.php from the RUNNING Apache and
+# checks the live response for phpinfo() output. It does NOT grep the file or
+# config, and it NEVER starts Apache -- a config edited but not reloaded leaves
+# the live page exposed, and a dead daemon is a real failure.
+#
+# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+set -u
+HOST=127.0.0.1
+PORT=80
 
-##############################################################################
-# Ensure Apache is running for the checks
-##############################################################################
-apache2ctl start 2>/dev/null
-sleep 1
+http_get() {  # $1 = path -> raw HTTP response
+    printf "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n" "$1" "$HOST" \
+        | nc -w 5 "$HOST" "$PORT" 2>/dev/null
+}
 
-##############################################################################
-# PoC Check: phpinfo.php should not be accessible
-##############################################################################
-
-PHPINFO_RESPONSE=$(printf "GET /phpinfo.php HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" | \
-    nc -w 5 127.0.0.1 80 2>/dev/null)
-
-PHPINFO_STATUS=$(echo "$PHPINFO_RESPONSE" | head -1)
-
-if echo "$PHPINFO_STATUS" | grep -qE "200 OK"; then
-    # Got 200 -- check if it actually contains phpinfo output
-    if echo "$PHPINFO_RESPONSE" | grep -qi "phpinfo\|PHP Version\|PHP License"; then
-        echo "FAIL: phpinfo.php is accessible and exposes PHP configuration."
-        exit 1
-    else
-        echo "PASS: /phpinfo.php returns 200 but does not contain phpinfo output."
-    fi
-elif echo "$PHPINFO_STATUS" | grep -qE "404|403"; then
-    echo "PASS: phpinfo.php is not accessible (got: $PHPINFO_STATUS)."
-else
-    # Fallback: check if the file still exists on disk
-    if [ -f /var/www/phpinfo.php ]; then
-        if grep -q 'phpinfo' /var/www/phpinfo.php 2>/dev/null; then
-            echo "FAIL: phpinfo.php still exists in web root with phpinfo() call."
-            exit 1
-        else
-            echo "PASS: phpinfo.php exists but no longer contains phpinfo()."
-        fi
-    else
-        echo "PASS: phpinfo.php has been removed from web root."
-    fi
+if ! pgrep -x apache2 >/dev/null 2>&1; then
+    echo "FAIL [Regression]: apache2 is not running -- a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
+    exit 1
 fi
 
-##############################################################################
-# Regression Check: PHP should still work on Apache
-##############################################################################
+# Wait (bounded) for the daemon to answer before probing.
+UP=0
+for i in $(seq 1 20); do
+    if echo "$(http_get /)" | grep -q "HTTP/"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != 1 ]; then
+    echo "FAIL [Regression]: Apache did not answer on port $PORT -- service down/broken." >&2
+    exit 1
+fi
 
-PHP_RESPONSE=$(printf "GET /test.php HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" | \
-    nc -w 5 127.0.0.1 80 2>/dev/null)
+# PoC: fetch /phpinfo.php and look for the tell-tale phpinfo() output.
+PHPINFO=$(http_get /phpinfo.php)
+STATUS=$(echo "$PHPINFO" | head -1 | tr -d '\r')
+if echo "$PHPINFO" | grep -qiE "<title>phpinfo\(\)|PHP Version [0-9]|PHP License|This program is free software"; then
+    echo "FAIL [PoC]: /phpinfo.php still returns phpinfo() output ($STATUS)" >&2
+    echo "            -- the full PHP/OS configuration is disclosed to the network." >&2
+    exit 1
+fi
+echo "PASS [PoC]: /phpinfo.php does not disclose phpinfo() output ($STATUS)."
 
-if echo "$PHP_RESPONSE" | grep -q "PHP is working"; then
-    echo "PASS: PHP is functioning correctly on Apache."
+# Regression: PHP still executes for legitimate pages.
+TEST=$(http_get /test.php)
+if echo "$TEST" | grep -q "PHP is working"; then
+    echo "PASS [Regression]: PHP still executes (test.php)."
 else
-    # Fallback: check if Apache and PHP module are running
-    if pgrep -x apache2 > /dev/null 2>&1; then
-        if apache2ctl -M 2>/dev/null | grep -q 'php'; then
-            echo "PASS: Apache is running with PHP module loaded."
-        else
-            echo "FAIL: PHP module is not loaded in Apache."
-            exit 1
-        fi
-    else
-        echo "FAIL: Apache is not running."
-        exit 1
-    fi
+    echo "FAIL [Regression]: legitimate PHP page /test.php no longer works" >&2
+    echo "                   (got: $(echo "$TEST" | head -1 | tr -d '\r'))." >&2
+    exit 1
 fi
 
 echo "All checks passed."

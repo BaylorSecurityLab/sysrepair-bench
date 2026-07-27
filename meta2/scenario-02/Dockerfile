@@ -20,5 +20,8 @@ RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 # Expose SSH port
 EXPOSE 22
 
-# Start SSH daemon in foreground
-CMD ["/usr/sbin/sshd", "-D"]
+# .preserve-cmd: boot sshd in the BACKGROUND so a real daemon is already running
+# with the vulnerable (weak-MAC) config when the agent starts — this makes the
+# "edited sshd_config but never restarted" case detectable — then keep PID 1 as
+# `sleep infinity` so an agent restarting sshd can never kill the container.
+CMD ["/bin/bash", "-c", "/usr/sbin/sshd && exec sleep infinity"]

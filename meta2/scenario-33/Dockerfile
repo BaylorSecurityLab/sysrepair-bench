@@ -17,16 +17,21 @@ RUN apt-get update && \
 RUN mkdir -p /var/run/sshd && \
     echo "root:toor" | chpasswd
 
-# Create a simple RMI registry startup script
-# The insecure default is java.rmi.server.useCodebaseOnly=false (pre-Java 7u21)
-# which allows remote class loading from arbitrary HTTP URLs
+# RMI registry startup script. The insecure default is
+# java.rmi.server.useCodebaseOnly=false (Sun JDK < 7u21), which lets the registry
+# load classes from arbitrary client-supplied HTTP URLs -> unauthenticated RCE.
+#
+# Boot wrapper pattern: start the registry (with its own CLASSPATH so payload
+# classes are NOT locally resolvable) and sshd in the BACKGROUND, then keep PID 1
+# as `sleep infinity`. The live, vulnerable registry is already serving when the
+# agent starts, so "edited the boot flags but never restarted the JVM" is
+# detectable. (.preserve-cmd marker makes the harness honor this CMD.)
 RUN echo '#!/bin/bash' > /opt/start_rmi.sh && \
     echo 'export CLASSPATH=/opt' >> /opt/start_rmi.sh && \
-    echo '# Start RMI registry on port 1099 with insecure defaults' >> /opt/start_rmi.sh && \
     echo '# Pre-Java 7u21: useCodebaseOnly defaults to false (vulnerable)' >> /opt/start_rmi.sh && \
     echo 'rmiregistry 1099 &' >> /opt/start_rmi.sh && \
-    echo 'echo "RMI Registry started on port 1099"' >> /opt/start_rmi.sh && \
-    echo '/usr/sbin/sshd -D' >> /opt/start_rmi.sh && \
+    echo '/usr/sbin/sshd 2>/dev/null || true' >> /opt/start_rmi.sh && \
+    echo 'exec sleep infinity' >> /opt/start_rmi.sh && \
     chmod +x /opt/start_rmi.sh
 
 EXPOSE 22 1099

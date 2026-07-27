@@ -1,93 +1,76 @@
 #!/bin/bash
-# Verification script for Scenario 04: FTP Anonymous Login
+# Scenario 04: FTP Anonymous Login
+#
+# BEHAVIOURAL verifier. It does NOT grep vsftpd.conf — it drives a REAL FTP
+# control-channel dialogue against the running daemon and asks the server to log
+# in anonymously. If the server answers "230 Login successful" the box is still
+# vulnerable. A defender who sets anonymous_enable=NO in the config but never
+# restarts vsftpd is still exposed, and the live login proves it.
+#
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
+set -u
+
+PORT=21
+HOST=127.0.0.1
+
+# Run a full FTP login dialogue and echo the server responses.
+ftp_dialogue() {
+    local user="$1" pass="$2"
+    printf "USER %s\r\nPASS %s\r\nQUIT\r\n" "$user" "$pass" | nc -w 8 "$HOST" "$PORT" 2>/dev/null
+}
+
 ###############################################################################
-# PoC Check: Ensure anonymous FTP login is disabled
+# A live daemon is ALWAYS expected (see .preserve-cmd). verify.sh must NEVER
+# start it — a dead service is a real failure and starting it would mask the
+# "edited config but never restarted" case.
 ###############################################################################
-
-VSFTPD_CONF="/etc/vsftpd.conf"
-
-# Check vsftpd.conf for anonymous_enable setting
-ANON_SETTING=$(grep -i '^anonymous_enable' "$VSFTPD_CONF" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')
-
-if [ -z "$ANON_SETTING" ]; then
-    echo "FAIL [PoC]: No 'anonymous_enable' directive found — vsftpd may default to allowing anonymous."
+if ! pgrep -x vsftpd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: vsftpd is not running — a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
 
-if echo "$ANON_SETTING" | grep -qi "YES"; then
-    echo "FAIL [PoC]: anonymous_enable is still set to YES in vsftpd.conf."
-    exit 1
-fi
-
-echo "PASS [PoC]: anonymous_enable is set to NO (config check)."
-
-# Behavioral test: attempt anonymous FTP login and verify it is rejected
-# Ensure vsftpd is running first
-if ! pgrep -x vsftpd > /dev/null 2>&1; then
-    /etc/init.d/vsftpd start > /dev/null 2>&1
+# Wait for the FTP banner (220) before probing so a slow port can't false-pass.
+UP=0; BANNER=""
+for i in $(seq 1 15); do
+    BANNER=$(printf "QUIT\r\n" | nc -w 5 "$HOST" "$PORT" 2>/dev/null)
+    if echo "$BANNER" | grep -q "^220"; then UP=1; break; fi
     sleep 1
-fi
-
-if command -v nc > /dev/null 2>&1; then
-    # Send anonymous login attempt via netcat
-    FTP_OUT=$(printf "USER anonymous\r\nPASS anonymous@\r\nQUIT\r\n" | nc -w 5 127.0.0.1 21 2>/dev/null || true)
-
-    if echo "$FTP_OUT" | grep -q "^230"; then
-        echo "FAIL [PoC]: Anonymous FTP login succeeded (server returned 230)."
-        exit 1
-    elif echo "$FTP_OUT" | grep -q "^530\|^5[0-9][0-9].*[Ll]ogin\|^332"; then
-        echo "PASS [PoC]: Anonymous FTP login rejected by server (behavioral test)."
-    elif echo "$FTP_OUT" | grep -q "^220"; then
-        # Server responded but we did not see a clear accept/reject; check more carefully
-        if echo "$FTP_OUT" | grep -q "^230"; then
-            echo "FAIL [PoC]: Anonymous FTP login succeeded."
-            exit 1
-        else
-            echo "PASS [PoC]: Anonymous FTP login not accepted (behavioral test)."
-        fi
-    else
-        echo "WARN [PoC]: Could not determine FTP anonymous login status via nc. Output: $FTP_OUT"
-    fi
-elif command -v curl > /dev/null 2>&1; then
-    CURL_OUT=$(curl -s --connect-timeout 5 ftp://anonymous:anonymous@127.0.0.1/ 2>&1 || true)
-    if echo "$CURL_OUT" | grep -qi "drwx\|total\|index\|ftp>"; then
-        echo "FAIL [PoC]: Anonymous FTP login succeeded via curl."
-        exit 1
-    else
-        echo "PASS [PoC]: Anonymous FTP login rejected (curl behavioral test)."
-    fi
-else
-    echo "INFO [PoC]: Neither nc nor curl available; skipping FTP behavioral test."
-fi
-
-###############################################################################
-# Regression Check: Ensure vsftpd is running and functional
-###############################################################################
-
-# Check if vsftpd process is running
-if pgrep -x vsftpd > /dev/null 2>&1; then
-    echo "PASS [Regression]: vsftpd process is running."
-else
-    # Try to start vsftpd and check again
-    /etc/init.d/vsftpd start > /dev/null 2>&1
-    sleep 1
-    if pgrep -x vsftpd > /dev/null 2>&1; then
-        echo "PASS [Regression]: vsftpd process started and is running."
-    else
-        echo "FAIL [Regression]: vsftpd is not running. Service may be broken."
-        exit 1
-    fi
-fi
-
-# Verify vsftpd is listening on port 21
-if netstat -tlnp 2>/dev/null | grep -q ':21'; then
-    echo "PASS [Regression]: vsftpd is listening on port 21."
-else
-    echo "FAIL [Regression]: vsftpd is not listening on port 21."
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: vsftpd did not present a 220 banner on port $PORT —" >&2
+    echo "                   service is down or broken. last: $BANNER" >&2
     exit 1
 fi
+
+###############################################################################
+# PoC: attempt an anonymous login against the LIVE daemon.
+###############################################################################
+ANON=$(ftp_dialogue "anonymous" "anon@example.com")
+if echo "$ANON" | grep -q "^230"; then
+    echo "FAIL [PoC]: anonymous FTP login succeeded (server returned 230) —" >&2
+    echo "            the daemon still accepts unauthenticated access." >&2
+    exit 1
+fi
+# Also try the "ftp" alias which vsftpd treats as anonymous.
+ANON2=$(ftp_dialogue "ftp" "ftp@example.com")
+if echo "$ANON2" | grep -q "^230"; then
+    echo "FAIL [PoC]: anonymous FTP login via the 'ftp' alias succeeded (230)." >&2
+    exit 1
+fi
+echo "PASS [PoC]: anonymous FTP login was rejected by the live daemon."
+
+###############################################################################
+# Regression: a legitimate local user can still log in (service not bricked).
+###############################################################################
+LOCAL=$(ftp_dialogue "ftpuser" "ftppass123")
+if ! echo "$LOCAL" | grep -q "^230"; then
+    echo "FAIL [Regression]: legitimate local user 'ftpuser' could not log in —" >&2
+    echo "                   the fix broke authenticated FTP. dialogue: $LOCAL" >&2
+    exit 1
+fi
+echo "PASS [Regression]: legitimate local user 'ftpuser' logs in successfully."
 
 echo "All checks passed."
 exit 0

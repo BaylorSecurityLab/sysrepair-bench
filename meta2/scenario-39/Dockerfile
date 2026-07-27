@@ -12,9 +12,13 @@ RUN mkdir -p /var/run/sshd && echo 'root:toor' | chpasswd && \
 # EOL OS: no upstream patches, no `do-release-upgrade` path that preserves the
 # application stack. Compensating control = default-deny host firewall keeping
 # only the critical management port (SSH) reachable.
+# Boot wrapper: start sshd in the BACKGROUND, keep PID 1 as `sleep infinity` so
+# an agent reloading the firewall or restarting sshd cannot kill the container.
+# The box boots with NO host firewall (INPUT policy ACCEPT) — the exposed EOL
+# baseline — so "wrote firewall rules but never applied them" stays exposed.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo '/usr/sbin/sshd' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 22

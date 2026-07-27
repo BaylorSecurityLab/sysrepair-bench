@@ -18,17 +18,20 @@ RUN mkdir -p /var/run/sshd /root/.vnc && \
     chmod 600 /root/.vnc/passwd
 
 # Vulnerable start: VNC bound to all interfaces on :5900 (no SSH tunnel required).
-# Compensating control: bind to 127.0.0.1 so access is only possible after SSH-tunneling.
+# Compensating control: bind to 127.0.0.1 (Xvnc `-localhost`) so access is only
+# possible after SSH-tunnelling. The socket binding is fixed when Xvnc starts, so
+# "touched the policy marker but never restarted VNC" stays exposed and detectable.
+# Boot wrapper keeps PID 1 as `sleep infinity`.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo '/usr/sbin/sshd' >> /start.sh && \
     echo 'if [ -f /root/.vnc/bound-local ]; then' >> /start.sh && \
-    echo '  vncserver :0 -interface 127.0.0.1 -geometry 1024x768 > /dev/null 2>&1 || \\' >> /start.sh && \
+    echo '  vncserver :0 -localhost -geometry 1024x768 > /dev/null 2>&1 || \\' >> /start.sh && \
     echo '    (while true; do nc -l -p 5900 -s 127.0.0.1 > /dev/null 2>&1; done &)' >> /start.sh && \
     echo 'else' >> /start.sh && \
     echo '  vncserver :0 -geometry 1024x768 > /dev/null 2>&1 || \\' >> /start.sh && \
     echo '    (while true; do nc -l -p 5900 > /dev/null 2>&1; done &)' >> /start.sh && \
     echo 'fi' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 22 5900

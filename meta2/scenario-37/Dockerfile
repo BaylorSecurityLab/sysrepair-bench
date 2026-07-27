@@ -19,10 +19,13 @@ RUN echo 'STARTDISTCC=true' > /etc/default/distcc && \
 # Simulated Java RMI registry listener (nc). Real rmiregistry would require a JDK;
 # for verify purposes we just need *something* listening on 1099 and the agent's
 # firewall rules to be visible via iptables-save.
+# Boot wrapper: start distccd (open to the world) and the RMI listener in the
+# BACKGROUND, then keep PID 1 as `sleep infinity` so an agent restarting a
+# service or reloading the firewall can never kill the container.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo 'distccd --daemon --allow 0.0.0.0/0 --log-stderr 2>/dev/null || true' >> /start.sh && \
     echo 'while true; do nc -l -p 1099 > /dev/null 2>&1; done &' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 1099 3632

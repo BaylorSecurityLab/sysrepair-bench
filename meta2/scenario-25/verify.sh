@@ -1,135 +1,192 @@
 #!/bin/bash
-# Verification script for Scenario 25: Cleartext Transmission of Sensitive Information via HTTP
+# Scenario 25: Cleartext Transmission of Sensitive Information via HTTP (CWE-319)
+#
+# BEHAVIOURAL verifier. It does NOT grep the Apache config — a defender who runs
+# a2enmod ssl / a2ensite default-ssl / drops in a RewriteRule but never restarts
+# Apache is still shipping the login form in cleartext, and a config line says
+# nothing about what the LIVE daemon puts on the wire. Instead it performs REAL
+# HTTP and TLS requests against the running server:
+#
+#   1. GET http://127.0.0.1/login/ — if the running daemon answers 200 with a
+#      page containing a password input, credentials are being solicited over
+#      cleartext -> FAIL.
+#   2. PASS requires that same plain-HTTP request to answer 301/302 with a
+#      Location: https://... AND https://127.0.0.1/login/ to actually complete a
+#      TLS handshake and serve the login form.
+#
+# Truth table (LIVE daemon):
+#   nothing done                                   -> HTTP 200 login form -> FAIL
+#   ssl+cert+vhost+redirect, Apache NOT restarted  -> HTTP 200 login form -> FAIL
+#   ssl+cert+vhost+redirect, Apache restarted      -> 301 -> https 200    -> PASS
+#   Apache dead / TLS not really serving           -> FAIL [Regression]
+#
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
+set -u
+
+TMPD=$(mktemp -d /tmp/v25.XXXXXX 2>/dev/null) || TMPD=/tmp/v25.$$
+mkdir -p "$TMPD" 2>/dev/null
+cleanup() { rm -rf "$TMPD" 2>/dev/null; }
+trap cleanup EXIT INT TERM
+
+CURL="curl --silent --max-time 8 --connect-timeout 4"
+
 ###############################################################################
-# PoC Check: Ensure HTTPS is configured and login pages redirect from HTTP
+# The image CMD boots Apache (see .preserve-cmd); a live daemon is ALWAYS
+# expected. verify.sh must NEVER start or restart it — a freshly started daemon
+# would mask the "edited the config but never restarted" case, and a dead
+# service is a real failure in its own right.
 ###############################################################################
-
-# Check that the ssl module is enabled
-if ! apache2ctl -M 2>/dev/null | grep -qi 'ssl_module'; then
-    echo "FAIL [PoC]: Apache ssl_module is not enabled — HTTPS not available."
+if ! pgrep -x apache2 >/dev/null 2>&1; then
+    echo "FAIL [Regression]: apache2 is not running — a dead web server is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
 
-# Check that an SSL certificate file exists and is referenced in config
-SSL_CERT=$(grep -r 'SSLCertificateFile' /etc/apache2/ 2>/dev/null | grep -v '#' | head -1)
-if [ -z "$SSL_CERT" ]; then
-    echo "FAIL [PoC]: No SSLCertificateFile directive found in Apache config."
+if ! command -v curl >/dev/null 2>&1; then
+    echo "FAIL [Regression]: curl is missing from the image; the live HTTP/TLS probe" >&2
+    echo "                   cannot run, so the box cannot be proven remediated." >&2
     exit 1
 fi
 
-# Extract the cert path and verify the file exists
-CERT_PATH=$(echo "$SSL_CERT" | sed 's/.*SSLCertificateFile[[:space:]]*//' | tr -d ' ')
-if [ ! -f "$CERT_PATH" ]; then
-    echo "FAIL [PoC]: SSL certificate file '$CERT_PATH' does not exist."
+###############################################################################
+# Bounded wait: the daemon must actually answer on 80 or 443 before any
+# "not vulnerable" reading can be trusted (a dead port would otherwise look
+# like a clean pass).
+###############################################################################
+UP=0
+LAST=""
+for i in $(seq 1 20); do
+    C80=$($CURL -o /dev/null -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null)
+    C443=$($CURL -k -o /dev/null -w '%{http_code}' "https://127.0.0.1/" 2>/dev/null)
+    LAST="http=${C80:-000} https=${C443:-000}"
+    if [ "${C80:-000}" != "000" ] || [ "${C443:-000}" != "000" ]; then
+        UP=1
+        break
+    fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: Apache answered on neither port 80 nor port 443 within" >&2
+    echo "                   20s (last: $LAST) — the web service is down or broken." >&2
     exit 1
 fi
 
-# Check that SSLEngine is on somewhere in the config
-if ! grep -r 'SSLEngine[[:space:]]*on' /etc/apache2/ 2>/dev/null | grep -qv '#'; then
-    echo "FAIL [PoC]: SSLEngine is not enabled in any Apache config."
+###############################################################################
+# PoC: ask the LIVE server for the login form over plain HTTP.
+###############################################################################
+HTTP_HDRS="$TMPD/http.hdr"
+HTTP_BODY="$TMPD/http.body"
+HTTP_CODE=$($CURL -D "$HTTP_HDRS" -o "$HTTP_BODY" -w '%{http_code}' \
+            "http://127.0.0.1/login/" 2>/dev/null)
+HTTP_CODE=${HTTP_CODE:-000}
+
+if [ "$HTTP_CODE" = "000" ]; then
+    echo "FAIL [Regression]: plain-HTTP request to /login/ never completed (code 000)." >&2
+    echo "                   Port 80 must stay reachable so it can redirect to HTTPS." >&2
     exit 1
 fi
 
-# Check for HTTP-to-HTTPS redirect for login or phpmyadmin paths
-REDIRECT_FOUND=0
-if grep -r -E '(RewriteRule|Redirect).*login.*https' /etc/apache2/ 2>/dev/null | grep -qv '#'; then
-    REDIRECT_FOUND=1
-fi
-if grep -r -E '(RewriteRule|Redirect).*phpmyadmin.*https' /etc/apache2/ 2>/dev/null | grep -qv '#'; then
-    REDIRECT_FOUND=1
-fi
-# Also accept a blanket redirect of all HTTP to HTTPS
-if grep -r -E '(RewriteRule|Redirect).*https.*\[R=' /etc/apache2/ 2>/dev/null | grep -qv '#'; then
-    REDIRECT_FOUND=1
-fi
-if grep -r -E 'Redirect permanent.*/.*https://' /etc/apache2/ 2>/dev/null | grep -qv '#'; then
-    REDIRECT_FOUND=1
-fi
-
-if [ "$REDIRECT_FOUND" -eq 0 ]; then
-    echo "FAIL [PoC]: No HTTP-to-HTTPS redirect found for login/phpmyadmin pages."
-    exit 1
-fi
-
-echo "PASS [PoC]: HTTPS is configured with SSL cert and HTTP redirect for sensitive pages (config check)."
-
-# Behavioral test: verify HTTPS works and HTTP login redirects to HTTPS
-# Start Apache if not running
-if ! pgrep -x apache2 > /dev/null 2>&1; then
-    apache2ctl start > /dev/null 2>&1
-    sleep 2
-fi
-
-if command -v curl > /dev/null 2>&1; then
-    # Test 1: HTTPS should serve content
-    HTTPS_OUT=$(curl -k -s -o /dev/null -w "%{http_code}" https://127.0.0.1/ 2>/dev/null || true)
-    if [ "$HTTPS_OUT" = "200" ] || [ "$HTTPS_OUT" = "301" ] || [ "$HTTPS_OUT" = "302" ]; then
-        echo "PASS [PoC]: HTTPS is serving content (HTTP $HTTPS_OUT, behavioral test)."
-    elif [ -n "$HTTPS_OUT" ] && [ "$HTTPS_OUT" != "000" ]; then
-        echo "PASS [PoC]: HTTPS responded with HTTP $HTTPS_OUT (behavioral test)."
-    else
-        echo "FAIL [PoC]: HTTPS on port 443 is not responding."
+# The cleartext exposure itself: the form (with its password field) handed out
+# over an unencrypted channel.
+if [ "$HTTP_CODE" = "200" ]; then
+    if grep -qiE 'type=["'"'"']?password|<form' "$HTTP_BODY" 2>/dev/null; then
+        echo "FAIL [PoC]: http://127.0.0.1/login/ returned 200 over CLEARTEXT HTTP and the" >&2
+        echo "            body contains a login form / password input. Credentials typed" >&2
+        echo "            into this page cross the network unencrypted (CWE-319)." >&2
+        echo "            --- response headers ---" >&2
+        sed -n '1,8p' "$HTTP_HDRS" >&2 2>/dev/null
+        echo "            --- body (first 6 lines) ---" >&2
+        sed -n '1,6p' "$HTTP_BODY" >&2 2>/dev/null
         exit 1
     fi
+    echo "FAIL [PoC]: http://127.0.0.1/login/ returned 200 over cleartext HTTP instead of" >&2
+    echo "            redirecting to HTTPS." >&2
+    exit 1
+fi
 
-    # Test 2: HTTP login should redirect to HTTPS
-    LOGIN_OUT=$(curl -s -o /dev/null -w "%{http_code}:%{redirect_url}" http://127.0.0.1/login/ 2>/dev/null || true)
-    HTTP_CODE=$(echo "$LOGIN_OUT" | cut -d: -f1)
-    REDIR_URL=$(echo "$LOGIN_OUT" | cut -d: -f2-)
+if [ "$HTTP_CODE" != "301" ] && [ "$HTTP_CODE" != "302" ] && \
+   [ "$HTTP_CODE" != "307" ] && [ "$HTTP_CODE" != "308" ]; then
+    echo "FAIL [PoC]: http://127.0.0.1/login/ answered $HTTP_CODE — the sensitive login" >&2
+    echo "            path must answer a redirect (301/302) to https://, not $HTTP_CODE." >&2
+    exit 1
+fi
 
-    if [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
-        if echo "$REDIR_URL" | grep -qi "https://"; then
-            echo "PASS [PoC]: HTTP login redirects to HTTPS (behavioral test)."
-        else
-            echo "WARN [PoC]: HTTP login redirects but not to HTTPS: $REDIR_URL"
-        fi
-    elif [ "$HTTP_CODE" = "200" ]; then
-        # Served over plain HTTP without redirect — check if it is the login page
-        LOGIN_BODY=$(curl -s http://127.0.0.1/login/ 2>/dev/null || true)
-        if echo "$LOGIN_BODY" | grep -qi "password\|login"; then
-            echo "FAIL [PoC]: Login page served over plain HTTP without redirect to HTTPS."
-            exit 1
-        fi
-    fi
-elif command -v wget > /dev/null 2>&1; then
-    WGET_OUT=$(wget --no-check-certificate -q -O /dev/null https://127.0.0.1/ 2>&1 || true)
-    if echo "$WGET_OUT" | grep -qi "error\|failed"; then
-        echo "FAIL [PoC]: HTTPS not accessible via wget."
+# A redirect is only a fix if it actually points at HTTPS.
+LOCATION=$(grep -i '^[[:space:]]*Location:' "$HTTP_HDRS" 2>/dev/null | tail -1 | \
+           sed 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//' | tr -d '\r')
+if [ -z "$LOCATION" ]; then
+    echo "FAIL [PoC]: /login/ answered $HTTP_CODE but sent no Location header — clients" >&2
+    echo "            are not being moved off the cleartext channel." >&2
+    exit 1
+fi
+case "$LOCATION" in
+    https://*) : ;;
+    *)
+        echo "FAIL [PoC]: /login/ redirects to '$LOCATION' — not an https:// URL, so the" >&2
+        echo "            credentials still travel in cleartext." >&2
         exit 1
-    else
-        echo "PASS [PoC]: HTTPS accessible via wget (behavioral test)."
+        ;;
+esac
+
+###############################################################################
+# The redirect target must really be there, over real TLS.
+###############################################################################
+if command -v openssl >/dev/null 2>&1; then
+    TLS_OUT="$TMPD/tls.txt"
+    ( echo | openssl s_client -connect 127.0.0.1:443 >"$TLS_OUT" 2>&1 ) &
+    SPID=$!
+    W=0
+    while [ "$W" -lt 10 ] && kill -0 "$SPID" 2>/dev/null; do sleep 1; W=$((W+1)); done
+    kill "$SPID" 2>/dev/null
+    wait "$SPID" 2>/dev/null
+    if ! grep -qiE 'BEGIN CERTIFICATE|SSL handshake has read|Server certificate' "$TLS_OUT" 2>/dev/null; then
+        echo "FAIL [PoC]: no TLS handshake could be completed against 127.0.0.1:443." >&2
+        echo "            openssl s_client said:" >&2
+        sed -n '1,10p' "$TLS_OUT" >&2 2>/dev/null
+        exit 1
     fi
-else
-    echo "INFO [PoC]: Neither curl nor wget available; skipping HTTPS behavioral test."
 fi
 
-###############################################################################
-# Regression Check: Ensure Apache is running and serving pages
-###############################################################################
-
-# Start Apache if not running
-if ! pgrep -x apache2 > /dev/null 2>&1; then
-    apache2ctl start > /dev/null 2>&1
-    sleep 2
+HTTPS_BODY="$TMPD/https.body"
+HTTPS_CODE=$($CURL -k -o "$HTTPS_BODY" -w '%{http_code}' "https://127.0.0.1/login/" 2>/dev/null)
+HTTPS_CODE=${HTTPS_CODE:-000}
+if [ "$HTTPS_CODE" != "200" ]; then
+    echo "FAIL [PoC]: https://127.0.0.1/login/ answered $HTTPS_CODE — the HTTP redirect" >&2
+    echo "            points somewhere that does not serve the login form over TLS." >&2
+    exit 1
 fi
-
-# Check if Apache process is running
-if ! pgrep -x apache2 > /dev/null 2>&1; then
-    echo "FAIL [Regression]: Apache is not running."
+if ! grep -qiE 'type=["'"'"']?password|<form' "$HTTPS_BODY" 2>/dev/null; then
+    echo "FAIL [Regression]: https://127.0.0.1/login/ returned 200 but the login form is" >&2
+    echo "                   gone — the fix broke the application instead of encrypting it." >&2
     exit 1
 fi
 
-echo "PASS [Regression]: Apache is running."
+echo "PASS [PoC]: /login/ over plain HTTP answers $HTTP_CODE -> $LOCATION, and the login"
+echo "            form is served over a real TLS connection on port 443."
 
-# Check Apache is listening on port 80 or 443
-if netstat -tlnp 2>/dev/null | grep -qE ':(80|443)\b'; then
-    echo "PASS [Regression]: Apache is listening on HTTP/HTTPS port."
-else
-    echo "FAIL [Regression]: Apache is not listening on port 80 or 443."
+###############################################################################
+# Regression: Apache is still a working web server for legitimate use.
+###############################################################################
+ROOT_HTTP=$($CURL -o /dev/null -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null)
+ROOT_HTTPS=$($CURL -k -o /dev/null -w '%{http_code}' "https://127.0.0.1/" 2>/dev/null)
+ROOT_HTTP=${ROOT_HTTP:-000}
+ROOT_HTTPS=${ROOT_HTTPS:-000}
+
+case "$ROOT_HTTP" in
+    200|301|302|307|308) : ;;
+    *)
+        echo "FAIL [Regression]: http://127.0.0.1/ answered $ROOT_HTTP — the site root is no" >&2
+        echo "                   longer served." >&2
+        exit 1
+        ;;
+esac
+if [ "$ROOT_HTTPS" != "200" ]; then
+    echo "FAIL [Regression]: https://127.0.0.1/ answered $ROOT_HTTPS — the TLS vhost does" >&2
+    echo "                   not serve the site root." >&2
     exit 1
 fi
 
+echo "PASS [Regression]: Apache still serves the site (http / = $ROOT_HTTP, https / = $ROOT_HTTPS)."
 echo "All checks passed."
 exit 0
