@@ -207,8 +207,29 @@ applications, or run the lab with fewer machines via -Members.
     Start-Sleep -Seconds 20
     Sync-LabClocks -Machines ($Members | Where-Object { $_ -in 'ca', 'ws' }) | Out-Null
 
-    $rest = foreach ($m in $Members) {
+    # 'ws' before 'ca': the CA probe checks the RPC endpoint FROM corp-ws01,
+    # because the CA cannot detect its own unreachability (see Test-CaReady).
+    # Probing in the caller's order would ask ws01 a question before ws01 was
+    # up and score the CA unreachable on the strength of the wrong machine.
+    $ordered = @($Members | Where-Object { $_ -eq 'ws' }) +
+               @($Members | Where-Object { $_ -ne 'ws' })
+
+    $rest = foreach ($m in $ordered) {
         Wait-LabMachineReady -Machine $m -TimeoutSeconds $OtherTimeoutSeconds
+    }
+
+    # CertSvc registers its RPC endpoints once, at service start. Resuming a
+    # snapshot can bring it up before the network is ready, leaving it bound to
+    # ncalrpc only -- healthy to every local check, invisible to every remote
+    # one. Waiting cannot fix that; only a restart re-registers. Retry once,
+    # then let the throw below report it.
+    $caResult = $rest | Where-Object { $_.Machine -eq 'ca' }
+    if ($caResult -and -not $caResult.Ready -and $caResult.FailedProbe -eq 'ca-rpc-endpoint') {
+        Write-Warning '[boot] CA is up locally but has no TCP RPC endpoint; restarting CertSvc'
+        if (Repair-CaRpcEndpoint) {
+            $rest = @($rest | Where-Object { $_.Machine -ne 'ca' }) +
+                    @(Wait-LabMachineReady -Machine ca -TimeoutSeconds $OtherTimeoutSeconds)
+        }
     }
 
     $results = @($dc) + @($rest)

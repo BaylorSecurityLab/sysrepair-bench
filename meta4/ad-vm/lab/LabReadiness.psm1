@@ -74,7 +74,7 @@ function Test-DcReady {
 function Test-CaReady {
     param([string] $VMName)
 
-    Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
+    $local = Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
         $s = Get-Service -Name CertSvc -ErrorAction SilentlyContinue
         if (-not $s -or $s.Status -ne 'Running') { return 'service:CertSvc' }
 
@@ -84,6 +84,81 @@ function Test-CaReady {
         if (-not (Test-ComputerSecureChannel)) { return 'secure-channel' }
         return $null
     }
+    if ($local) { return $local }
+
+    # --- REMOTE RPC endpoint, probed from a DIFFERENT machine ---
+    #
+    # Everything above runs ON the CA, so its certutil -ping goes over local
+    # RPC (ncalrpc) and stays green even when the CA is unreachable to every
+    # other host in the lab. That blind spot is not hypothetical: on the
+    # 2026-07-26 gate run scenarios 07-10 all reported the CA healthy -- one of
+    # them by successfully ISSUING a certificate with certreq -- while certipy
+    # on the attacker got, for every request:
+    #
+    #   Failed to resolve dynamic endpoint 91AE6020-9E3C-11CF-8D7C-00AA00C091BE
+    #   ept_s_not_registered
+    #
+    # ept_s_not_registered is the endpoint mapper's own answer, so port 135 was
+    # reachable and epmapper simply had no ICertRequestD to hand out: CertSvc
+    # had registered ncalrpc but never a TCP endpoint. That is what happens when
+    # the service starts before the network stack has settled -- precisely what
+    # resuming a snapshot does.
+    #
+    # Probing from corp-ws01 forces the request through epmapper + ICertRequestD
+    # over TCP, which is the exact path the PoCs use, using only in-box tooling.
+    try {
+        $remote = Invoke-Command -VMName 'corp-ws01' -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
+            certutil -ping -config 'corp-ca01.corp.local\corp-ca01-CA' 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { return 'ca-rpc-endpoint' }
+            return $null
+        }
+    }
+    catch {
+        # A probe that cannot run is not a probe that passed.
+        return "ca-rpc-probe-unavailable:$($_.Exception.Message -replace '\s+', ' ')"
+    }
+    if ($remote) { return $remote }
+
+    return $null
+}
+
+function Repair-CaRpcEndpoint {
+    <#
+    .SYNOPSIS
+        Re-registers the CA's TCP RPC endpoint by restarting CertSvc.
+
+    .DESCRIPTION
+        Remedy for the 'ca-rpc-endpoint' condition Test-CaReady detects. When
+        CertSvc starts before the network is up it registers only ncalrpc, and
+        no amount of waiting makes it advertise a TCP endpoint -- the
+        registration happens once, at service start. Restarting the service
+        with the network already up is what actually fixes it.
+
+        Deliberately separate from Test-CaReady: a readiness probe that mutates
+        the thing it measures cannot be trusted to report what it found.
+    #>
+    param(
+        [string] $VMName = 'corp-ca01',
+        [int]    $TimeoutSeconds = 180
+    )
+
+    Write-Host '[Repair-CaRpcEndpoint] restarting CertSvc to re-register its TCP endpoint'
+    Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
+        Restart-Service CertSvc -Force
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        $probe = Test-CaReady -VMName $VMName
+        if (-not $probe) {
+            Write-Host '[Repair-CaRpcEndpoint] CA now answers over TCP RPC'
+            return $true
+        }
+    }
+
+    Write-Warning "[Repair-CaRpcEndpoint] CA still not answering over TCP RPC after ${TimeoutSeconds}s"
+    return $false
 }
 
 function Test-WsReady {
@@ -186,4 +261,4 @@ function Wait-LabMachineReady {
     }
 }
 
-Export-ModuleMember -Function Wait-LabMachineReady, Test-DcReady, Test-CaReady, Test-WsReady, Test-AttackerReady
+Export-ModuleMember -Function Wait-LabMachineReady, Test-DcReady, Test-CaReady, Test-WsReady, Test-AttackerReady, Repair-CaRpcEndpoint
