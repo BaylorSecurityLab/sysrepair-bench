@@ -112,8 +112,22 @@ Publish-LabTemplate -TemplateName 'ESC3-Agent' -DisplayName 'Lab ESC3 Agent' `
     -Attrs $agentAttrs -EnrollGroups @('Domain Users')
 
 # ESC3-User: the impersonatable target, enrollable on-behalf-of via an RA signature.
+#
+# THE NAME FLAG MUST REQUEST A UPN SAN, or the attack produces a useless
+# certificate. With 0x80000000 alone (SUBJECT_REQUIRE_DIRECTORY_PATH) the CA
+# builds a subject DN and no subjectAltName, so the on-behalf-of certificate
+# names nobody. Measured on the live lab: both enrollments succeeded and
+# certipy reported
+#     [*] Got certificate without identity
+# for the on-behalf-of step, so the ESC3 chain completed mechanically while
+# yielding a certificate that cannot authenticate as Administrator -- and the
+# PoC correctly refused to call that a successful attack.
+#
+# 0x02000000 is CT_FLAG_SUBJECT_ALT_REQUIRE_UPN: it tells the CA to populate
+# the SAN from the AD account the request is made ON BEHALF OF, which is the
+# entire point of ESC3.
 $userAttrs = @{
-    'msPKI-Certificate-Name-Flag'   = 0x80000000
+    'msPKI-Certificate-Name-Flag'   = 0x82000000   # DIRECTORY_PATH | SUBJECT_ALT_REQUIRE_UPN
     'msPKI-Enrollment-Flag'         = 0
     'msPKI-Private-Key-Flag'        = 0
     'msPKI-Template-Minor-Revision' = 1
