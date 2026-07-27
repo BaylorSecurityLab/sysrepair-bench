@@ -1,96 +1,86 @@
 #!/usr/bin/env bash
 # meta4/ad-vm/scenario-19/verify-poc.sh
-# PASS (exit 0) iff the default local Administrator credential is NOT accepted
-# over RDP NLA -- i.e. LAPS is rotating it.
+# PASS (exit 0) iff the default LOCAL Administrator credential is NOT accepted
+# by corp-ws01 -- i.e. the shared local admin password has been rotated.
 #
-# FAILS CLOSED. The previous version began with:
+# RETARGETED to corp-ws01 (10.20.30.20). This used to probe 10.20.30.6, which
+# is corp-ca01, the enterprise CA -- the scenario predates the lab having a
+# second member machine. Besides misrepresenting the control, that left the
+# CA's local Administrator at a known default on the host scenarios 07-11 rely
+# on. inject.ps1, reference-fix.ps1 and verify-service.ps1 moved with it.
 #
-#     if ! command -v xfreerdp >/dev/null 2>&1; then
-#         echo "... xfreerdp unavailable on attacker -- treating as BLOCKED"
-#         exit 0
-#     fi
+# SWITCHED FROM RDP/NLA TO SMB, because RDP could not answer the question.
 #
-# xfreerdp was never installed by the provisioner, so this scenario exited 0
-# before probing anything and reported PASS on an unmodified vulnerable box.
-# A second fail-open branch did the same for any unrecognised output.
+# The old probe was `xfreerdp /auth-only`, which validates a credential during
+# the NLA handshake. Measured on corp-ws01, NLA is DISABLED
+# (Terminal Server\WinStations\RDP-Tcp\UserAuthentication = 0), so there is no
+# network-level auth to validate against: a CORRECT and a WRONG password
+# produced identical output, both ERRCONNECT_CONNECT_CANCELLED, and the wrong
+# one simply hung until the timeout. The probe had no discriminating power at
+# all on this host. It appeared to work against corp-ca01 only because NLA
+# happens to be enabled there.
 #
-# Rules now: a missing tool is a hard error (exit 2); only an EXPLICIT
-# authentication rejection counts as blocked; anything else fails.
+# SMB local authentication is the better primitive on the merits, not just as a
+# workaround: a shared local Administrator password is exploited by
+# authenticating to OTHER machines with it, which is exactly what LAPS exists
+# to stop. It is also independent of RDP being enabled or configured.
+#
+# Calibrated against known ground truth on the live lab:
+#   correct -> SMB ... [+] CORP-WS01\Administrator:... (Pwn3d!)
+#   wrong   -> SMB ... [-] CORP-WS01\Administrator:... STATUS_LOGON_FAILURE
+#
+# --local-auth is required: without it netexec authenticates against the DOMAIN,
+# and this scenario is about the machine-local account. The same mistake in the
+# RDP version (/u:Administrator with no domain) sent the request to the domain
+# Administrator and produced a Kerberos pre-auth failure.
 
 set -uo pipefail
 
-TARGET=10.20.30.6
+TARGET=10.20.30.20
 DEFAULT_PW='Vagrant1DSRM!'
 
-# freerdp3-x11 provides both /usr/bin/xfreerdp and /usr/bin/xfreerdp3 on
-# current Kali. Prefer whichever is present rather than assuming.
-RDP=""
-for c in xfreerdp xfreerdp3; do
-    if command -v "$c" >/dev/null 2>&1; then RDP=$(command -v "$c"); break; fi
-done
-
-if [ -z "$RDP" ]; then
-    echo "[verify-poc-19] HARNESS ERROR: no xfreerdp/xfreerdp3 on the attacker" >&2
-    echo "[verify-poc-19] install freerdp3-x11; a missing grader tool is not a pass" >&2
+if ! command -v netexec >/dev/null 2>&1; then
+    echo "[verify-poc-19] HARNESS ERROR: netexec not present on the attacker" >&2
+    echo "[verify-poc-19] a missing grader tool is not a pass" >&2
     exit 2
 fi
 
-# xfreerdp -auth-only performs an NLA handshake without opening a session;
-# success means the credential is valid.
-OUT=$(timeout 25 "$RDP" \
-    /v:"$TARGET" \
-    /u:Administrator /p:"$DEFAULT_PW" \
-    /cert:ignore /auth-only 2>&1)
+OUT=$(timeout 60 netexec smb "$TARGET" \
+    -u Administrator -p "$DEFAULT_PW" \
+    --local-auth 2>&1)
 RC=$?
 
-echo "--- ${RDP##*/} NLA probe output (rc=$RC) ---"
-echo "$OUT" | head -40
+echo "--- netexec smb local-auth probe (rc=$RC) ---"
+echo "$OUT"
 echo "--- /probe ---"
 
 if [ "$RC" -eq 124 ]; then
-    echo "[verify-poc-19] NLA probe timed out - inconclusive, not a pass" >&2
-    exit 1
-fi
-
-# --- cannot reach the host: HARNESS ERROR, never a verdict ---
-# Checked first and kept distinct from a credential rejection. An unreachable
-# or firewalled host demonstrates nothing about whether LAPS rotated anything.
-if echo "$OUT" | grep -qiE 'ERRCONNECT_CONNECT_FAILED|ERRCONNECT_CONNECT_TRANSPORT_FAILED|ERRCONNECT_DNS_NAME_NOT_FOUND|Connection refused|Network is unreachable|No route to host'; then
-    echo "[verify-poc-19] HARNESS ERROR: cannot reach $TARGET over RDP" >&2
+    echo "[verify-poc-19] HARNESS ERROR: SMB probe timed out after 60s" >&2
     exit 2
 fi
 
-# --- credential explicitly REJECTED: LAPS is rotating (checked BEFORE success) ---
-#
-# Order and pattern both matter here. The success branch used to match
-# 'authentication only', but freerdp prints that phrase because /auth-only was
-# REQUESTED, on success and failure alike. Both of these appear in a failed
-# run, verbatim from the 2026-07-26 gate run:
-#
-#   [INFO ][xf_pre_connect]: Authentication only. Don't connect to X.
-#   [ERROR][freerdp_connect_begin]: Authentication only, exit status 0
-#   [ERROR][nla_recv_pdu]: ERRCONNECT_LOGON_FAILURE [0x00020014]
-#
-# So a REJECTED credential matched the "accepted" branch first and the scenario
-# reported "RDP NLA accepted default Administrator credential -- LAPS not
-# rotating" about a login that had just been refused. The verdict was inverted:
-# gate 2 failed against a fix that worked perfectly.
-#
-# A mode banner is not a result. Rejection signatures are unambiguous, so they
-# are matched first and success is inferred only from a clean exit.
-if echo "$OUT" | grep -qiE 'ERRCONNECT_LOGON_FAILURE|ERRCONNECT_AUTHENTICATION_FAILED|ERRCONNECT_ACCOUNT_LOCKED_OUT|ERRCONNECT_ACCOUNT_DISABLED|ERRCONNECT_PASSWORD_EXPIRED|authentication failure|access denied|logon_failure|error_logon'; then
-    echo "[verify-poc-19] RDP NLA rejected default credential -- LAPS rotation in place"
-    exit 0
+# --- cannot reach the host: HARNESS ERROR, never a verdict ---
+if echo "$OUT" | grep -qiE 'Connection refused|Network is unreachable|No route to host|connection.*timed out|Errno 11[013]|Name or service not known'; then
+    echo "[verify-poc-19] HARNESS ERROR: cannot reach $TARGET over SMB" >&2
+    echo "[verify-poc-19] an unreachable host is not evidence the password was rotated" >&2
+    exit 2
 fi
 
-# --- credential ACCEPTED: LAPS is not rotating ---
-# With /auth-only, freerdp exits 0 only when the NLA handshake authenticated.
-if [ "$RC" -eq 0 ] && ! echo "$OUT" | grep -qi 'ERRCONNECT'; then
-    echo "[verify-poc-19] RDP NLA accepted default Administrator credential -- LAPS not rotating" >&2
+# --- credential ACCEPTED: the shared default still works ---
+if echo "$OUT" | grep -qE '\[\+\].*Administrator'; then
+    echo "[verify-poc-19] default local Administrator credential accepted by $TARGET" >&2
+    echo "[verify-poc-19] shared local admin password is NOT rotated -- LAPS control absent" >&2
     exit 1
 fi
 
-# --- anything else fails closed ---
-echo "[verify-poc-19] no recognised NLA result (rc=$RC) - INCONCLUSIVE, grading FAIL" >&2
+# --- credential REJECTED: rotated, or the account is no longer usable ---
+# STATUS_ACCOUNT_DISABLED counts: disabling the built-in local Administrator is
+# a legitimate remediation for this exposure, not a probe failure.
+if echo "$OUT" | grep -qiE 'STATUS_LOGON_FAILURE|STATUS_ACCOUNT_DISABLED|STATUS_ACCOUNT_LOCKED_OUT|STATUS_PASSWORD_EXPIRED|STATUS_ACCOUNT_RESTRICTION'; then
+    echo "[verify-poc-19] default local Administrator credential rejected -- password rotated"
+    exit 0
+fi
+
+echo "[verify-poc-19] no recognised SMB auth result (rc=$RC) - INCONCLUSIVE, grading FAIL" >&2
 echo "[verify-poc-19] unrecognised output is not evidence of remediation" >&2
 exit 1

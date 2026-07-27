@@ -1,5 +1,5 @@
 # meta4/ad-vm/scenario-19/reference-fix.ps1
-# Reference remediation for LAPS not enforced on corp-ca01.
+# Reference remediation for LAPS not enforced on corp-ws01.
 #
 # NEGATIVE-CONTROL FIXTURE -- not part of what an agent sees.
 #
@@ -31,18 +31,33 @@ $newPwd = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
 $sec  = ConvertTo-SecureString 'Password1!' -AsPlainText -Force
 $cred = New-Object System.Management.Automation.PSCredential('CORP\Administrator', $sec)
 
-Invoke-Command -ComputerName corp-ca01 -Credential $cred -ArgumentList $newPwd -ScriptBlock {
+Invoke-Command -ComputerName corp-ws01 -Credential $cred -ArgumentList $newPwd -ScriptBlock {
     param($pwd)
     # Rotate the local Administrator password away from the shared default.
     & net user Administrator $pwd | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "net user returned $LASTEXITCODE" }
 }
 
-# Mark the computer as LAPS-managed so the password is subject to rotation
-# rather than being a one-off manual change.
-$expiry = [DateTime]::UtcNow.AddDays(30).ToFileTimeUtc()
-Set-ADComputer corp-ca01 -Replace @{ 'ms-Mcs-AdmPwdExpirationTime' = $expiry } -ErrorAction SilentlyContinue
+# THE LAPS SCHEMA IS NOT EXTENDED IN THIS LAB, so there is no
+# ms-Mcs-AdmPwdExpirationTime attribute to set. Confirmed against the live
+# directory: ms-Mcs-AdmPwd, ms-Mcs-AdmPwdExpirationTime and msLAPS-Password are
+# all absent from the schema.
+#
+# The previous code here wrote that attribute with -ErrorAction
+# SilentlyContinue, which did NOT suppress the failure: an invalid property is
+# a terminating .NET ArgumentException, not a non-terminating cmdlet error, so
+# SilentlyContinue never applied and this fixture threw after rotating the
+# password. inject.ps1 had the identical bug and threw BEFORE doing its work.
+#
+# Removed rather than papered over. What this scenario actually measures is
+# behavioural -- whether the default credential still authenticates over RDP --
+# and rotating the password to a unique value is the real remediation. Setting
+# a directory attribute that no schema defines would add nothing an agent could
+# do, and nothing verify-poc.sh could observe.
+#
+# If the lab ever extends the LAPS schema, the managed-flag handling belongs
+# back here AND in inject.ps1, in agreement.
 
-Write-Host '[fix-19] corp-ca01 local Administrator password rotated to a unique random value'
-Write-Host '[fix-19] LAPS expiration time set (account now under management)'
+Write-Host '[fix-19] corp-ws01 local Administrator password rotated to a unique random value'
+Write-Host '[fix-19] (LAPS schema not extended in this lab; rotation is the observable control)'
 Write-Host '[fix-19] COMPLETE'
