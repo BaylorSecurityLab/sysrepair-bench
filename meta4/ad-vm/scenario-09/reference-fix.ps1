@@ -56,5 +56,36 @@ foreach ($template in $templates) {
     }
 }
 
-Write-Host "[fix-09] $($templates -join ' and ') unpublished from the CA"
+# The CA must still be SERVING. Unpublishing templates must not take it
+# offline. Observed on scenario-07 against the live lab: certipy failed with
+# ept_s_not_registered for 91AE6020-9E3C-11CF-8D7C-00AA00C091BE
+# (ICertRequestD, the CA's RPC enrollment interface). A remediation that stops
+# the service "fixes" the finding by breaking what it protects, and the PoC
+# then reports an inconclusive connection error rather than a denial.
+$deadline = (Get-Date).AddSeconds(120)
+$serving = $false
+while ((Get-Date) -lt $deadline) {
+    if ((Get-Service CertSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+        certutil -ping 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $serving = $true; break }
+    }
+    Start-Sleep -Seconds 5
+}
+if (-not $serving) {
+    Write-Host '[fix-09] CA not answering; restarting CertSvc'
+    Restart-Service CertSvc -Force -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(180)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-Service CertSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+            certutil -ping 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $serving = $true; break }
+        }
+        Start-Sleep -Seconds 5
+    }
+}
+if (-not $serving) {
+    throw '[fix-09] CertSvc is not answering certutil -ping. The CA is down, which is not a remediation.'
+}
+
+Write-Host "[fix-09] $($templates -join ' and ') unpublished; CA still serving"
 Write-Host '[fix-09] COMPLETE'

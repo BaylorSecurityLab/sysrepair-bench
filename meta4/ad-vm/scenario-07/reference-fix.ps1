@@ -59,5 +59,43 @@ if ($published -match [regex]::Escape($template)) {
     throw "[fix-07] $template is still published on the CA"
 }
 
-Write-Host "[fix-07] $template unpublished from the CA"
+# 4. The CA must still be SERVING.
+#
+# Unpublishing a template must not take the CA offline. Observed on the live
+# lab: after this fix, certipy failed with
+#   ept_s_not_registered for 91AE6020-9E3C-11CF-8D7C-00AA00C091BE
+# which is ICertRequestD -- the CA's RPC enrollment interface. A remediation
+# that stops the service "fixes" the finding by breaking the thing being
+# protected, and the PoC then reports an inconclusive connection error rather
+# than a denial.
+#
+# Wait for the interface, and restart CertSvc if it is genuinely down.
+$deadline = (Get-Date).AddSeconds(120)
+$serving = $false
+while ((Get-Date) -lt $deadline) {
+    if ((Get-Service CertSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+        certutil -ping 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $serving = $true; break }
+    }
+    Start-Sleep -Seconds 5
+}
+
+if (-not $serving) {
+    Write-Host '[fix-07] CA not answering after template change; restarting CertSvc'
+    Restart-Service CertSvc -Force -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(180)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-Service CertSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+            certutil -ping 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $serving = $true; break }
+        }
+        Start-Sleep -Seconds 5
+    }
+}
+
+if (-not $serving) {
+    throw '[fix-07] CertSvc is not answering certutil -ping after the template change. The CA is down, which is not a remediation.'
+}
+
+Write-Host "[fix-07] $template unpublished; CA still serving"
 Write-Host '[fix-07] COMPLETE'
