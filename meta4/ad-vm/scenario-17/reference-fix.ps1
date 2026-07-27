@@ -15,8 +15,20 @@ $ErrorActionPreference = 'Stop'
 
 # EFSRPC interface UUIDs. c681d488... is the modern MS-EFSR interface;
 # df1941c5... is the legacy one PetitPotam also accepts.
+#
+# The first line MUST be `rpc filter`, not `filter`.
+#
+# `netsh -f` replays a script starting from netsh's ROOT context, so the script
+# has to navigate into the rpc filter context itself. Starting at `filter` left
+# netsh at the root, where that is not a command: it exited 1 and applied
+# nothing, and this fixture threw "[fix-17] netsh rpc filter returned 1" on
+# every run. Gate 2 could never have passed.
+#
+# Verified on the live DC: with the `rpc` prefix netsh exits 0 and
+# `netsh rpc filter show filter` then lists the UUID; without it, exit 1 and no
+# filter.
 $rpcScript = @'
-filter
+rpc filter
 add rule layer=um actiontype=block
 add condition field=if_uuid matchtype=equal data=c681d488-d850-11d0-8c52-00c04fd90f7e
 add filter

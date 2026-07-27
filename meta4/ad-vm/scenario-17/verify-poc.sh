@@ -55,9 +55,24 @@ if [ "$RC" -eq 124 ]; then
 fi
 
 # --- COERCION SUCCEEDED (checked FIRST, outranks any per-function denial) ---
+#
 # 'ERROR_BAD_NETPATH' is the success signal: the DC accepted the call and tried
-# to authenticate to the listener path, which is the coercion itself.
-if echo "$OUT" | grep -qiE 'Attack worked|ERROR_BAD_NETPATH|Using unpatched function'; then
+# to authenticate to the listener path, which IS the coercion.
+#
+# 'Using unpatched function' is deliberately NOT here, though it was at first.
+# It is PetitPotam announcing it will TRY another function, not a report that
+# one worked -- an intention, not an outcome. With the ADV210003 filter applied
+# the transcript reads:
+#
+#   [-] Got RPC_ACCESS_DENIED!! EfsRpcOpenFileRaw is probably PATCHED!
+#   [+] OK! Using unpatched function!
+#   [-] Sending EfsRpcEncryptFileSrv!          <- and then nothing, rc=0
+#
+# Every call was refused, yet matching that phrase reported the coercion
+# accepted -- reintroducing, in the opposite direction, exactly the confusion
+# between per-function chatter and the host's actual answer that this rewrite
+# existed to remove. Only an outcome counts.
+if echo "$OUT" | grep -qiE 'Attack worked|ERROR_BAD_NETPATH'; then
     echo "[verify-poc-17] EFSRPC coercion ACCEPTED -- PetitPotam still works" >&2
     echo "[verify-poc-17] ADV210003 RPC filter is NOT blocking EFSRPC" >&2
     exit 1
