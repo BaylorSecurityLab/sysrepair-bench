@@ -252,7 +252,21 @@ function Test-ScenarioGates {
     # ---------- GATE 4: not-restarted ----------
     Write-Host "`n=== scenario-$ScenarioId GATE 4: not-restarted ==="
     $noRestartFix = Join-Path $dir 'reference-fix-norestart.ps1'
-    if (-not (Test-Path $noRestartFix)) {
+
+    # A fixture may declare gate 4 inapplicable. Some remediations take effect
+    # immediately -- scenario-12's LDAPServerIntegrity is read per connection,
+    # so there is no config-only state for the gate to catch, and asserting
+    # otherwise scores a correct check as defective.
+    $declaresNA = $false
+    if (Test-Path $noRestartFix) {
+        $declaresNA = [bool](Select-String -Path $noRestartFix -Pattern 'GATE 4 (DOES )?NOT APPLIC' -Quiet)
+    }
+
+    if ($declaresNA) {
+        Write-Host '  fixture declares gate 4 not applicable (remediation is effective without a restart)'
+        $results['gate4_not_restarted'] = 'NOT-APPLICABLE-DECLARED'
+    }
+    elseif (-not (Test-Path $noRestartFix)) {
         Write-Warning '  no reference-fix-norestart.ps1 -- gate 4 not evaluated'
         $results['gate4_not_restarted'] = 'NOT-APPLICABLE-OR-MISSING'
     }
@@ -264,6 +278,24 @@ function Test-ScenarioGates {
         # vulnerable, so the PoC must still succeed.
         $results['gate4_not_restarted'] = ($poc4 -eq 1)
         Write-Host "  poc=$poc4 (want 1 -- config-only fix must NOT pass)"
+
+        # Capture the output when gate 4 fails. A failure has TWO possible
+        # meanings and they need opposite responses:
+        #
+        #   (a) the check really is config-only -- it read the setting rather
+        #       than exercising the service, which is a check defect; or
+        #   (b) the setting is LIVE and needs no restart, so the gate's premise
+        #       is wrong and the fixture asserts something false.
+        #
+        # Observed on scenario-12: LDAPServerIntegrity=2 took effect without
+        # restarting NTDS, because the value is consulted per connection. That
+        # is case (b) -- the scenario is fine and the FIXTURE is wrong.
+        # Without the output there is no way to tell (a) from (b).
+        if ($poc4 -ne 1) {
+            $results['gate4_output'] = ($script:LastPocOutput -split "`n" | Select-Object -Last 25) -join "`n"
+            Write-Host '  --- PoC output after config-only fix ---'
+            ($script:LastPocOutput -split "`n" | Select-Object -Last 8) | ForEach-Object { "    $($_.TrimEnd())" }
+        }
     }
 
     # COUNT the failures; do not negate a filtered pipeline.
