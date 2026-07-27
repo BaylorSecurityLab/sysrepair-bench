@@ -59,7 +59,7 @@ if rpc_unreachable "$AGENT"; then
 fi
 
 if [ ! -f alice.pfx ]; then
-    if echo "$AGENT" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll'; then
+    if echo "$AGENT" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA'; then
         echo "[verify-poc-09] alice cannot enrol in ESC3-Agent -- BLOCKED"
         exit 0
     fi

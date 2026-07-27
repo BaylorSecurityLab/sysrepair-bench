@@ -109,7 +109,7 @@ if [ -f administrator.pfx ]; then
 fi
 
 # --- explicitly blocked? ---
-if echo "$REQ" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|does not exist'; then
+if echo "$REQ" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|does not exist|CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA'; then
     echo "[verify-poc-07] alice denied ESC1 enrollment - PoC BLOCKED"
     exit 0
 fi

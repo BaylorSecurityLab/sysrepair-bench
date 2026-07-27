@@ -85,6 +85,26 @@ if [ -f administrator.pfx ]; then
     exit 1
 fi
 
+# --- SAN override IGNORED: the CA issued a cert for the REQUESTER ---
+#
+# This is what the remediation actually looks like, and it was unmatched.
+# Clearing EDITF_ATTRIBUTESUBJECTALTNAME2 does not make the CA REFUSE the
+# request -- it makes the CA disregard the attacker-supplied SAN and issue an
+# ordinary certificate built from the requester's own identity. Observed on
+# gate 2 of the 2026-07-27 run, with the fix correctly applied:
+#
+#   [*] Certificate object SID is 'S-1-5-21-...-1105'   (alice)
+#   [*] Saving certificate and private key to 'alice.pfx'
+#
+# No administrator.pfx, no error, and no denial string anywhere -- so the check
+# fell through to "no admin PFX and no recognised denial" and graded a working
+# fix as a failure. A certificate naming the requester instead of the target is
+# positive evidence that the override was refused.
+if [ -f alice.pfx ] || echo "$REQ" | grep -qiE "Saving certificate and private key to 'alice\.pfx'|UPN 'alice@corp\.local'"; then
+    echo "[verify-poc-10] CA ignored the supplied SAN and issued a cert for alice -- SAN override BLOCKED"
+    exit 0
+fi
+
 if echo "$REQ" | grep -qiE 'access_denied|enrollment.*denied|invalid.*request|denied by policy'; then
     echo "[verify-poc-10] CA rejected SAN override -- BLOCKED"
     exit 0

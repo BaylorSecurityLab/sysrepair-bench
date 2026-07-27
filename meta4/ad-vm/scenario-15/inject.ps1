@@ -39,4 +39,20 @@ foreach ($a in $adapters) {
     }
 }
 
-Write-Host "[inject-15] LLMNR + NBT-NS re-enabled on corp-ws01 lab NIC"
+# THE INJECT NEEDS A POLICY REFRESH FOR THE SAME REASON THE FIX DOES.
+#
+# EnableMulticast is read through Group Policy, not per query, so writing 1
+# here does not re-enable LLMNR on a host whose DNS client last picked up 0.
+# Without this, gate 3 (re-inject after the fix) leaves the host still silent
+# and the PoC correctly reports BLOCKED -- scoring the sabotage step as a
+# failure when it is the INJECT that did not take effect.
+#
+# This was masked during manual testing because I ran gpupdate by hand between
+# the steps; the 2026-07-27 gate run, which does not, failed scenario-15 at
+# gate 3.
+& gpupdate /force /target:computer | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "[inject-15] gpupdate returned $LASTEXITCODE; LLMNR may not actually be re-enabled"
+}
+
+Write-Host "[inject-15] LLMNR + NBT-NS re-enabled on corp-ws01 lab NIC (policy refreshed)"

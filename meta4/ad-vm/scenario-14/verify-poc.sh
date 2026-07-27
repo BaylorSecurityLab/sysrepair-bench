@@ -37,7 +37,27 @@ ATTACKER_IP=10.20.30.10
 DC_IP=10.20.30.5
 
 # Interface carrying the lab address, not a guessed name.
-IFACE=$(ip -o -4 addr show | awk '/10\.20\.30\./{print $2; exit}')
+#
+# Resolved with python3 rather than `ip`: the Kali tooling image does not
+# install iproute2, so `ip -o -4 addr show` produced
+#     /verify-poc.sh: line 40: ip: command not found
+# and the scenario failed gate 1 with a HARNESS ERROR on every run. python3 is
+# present (several PoCs depend on it) and socket.if_nameindex + SIOCGIFADDR is
+# stdlib-only, so this adds no image dependency.
+IFACE=$(python3 - <<'PY' 2>/dev/null
+import socket, fcntl, struct
+for _, name in socket.if_nameindex():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        addr = socket.inet_ntoa(
+            fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', name.encode()[:15]))[20:24])
+        if addr.startswith('10.20.30.'):
+            print(name)
+            break
+    except OSError:
+        pass
+PY
+)
 if [ -z "$IFACE" ]; then
     echo "[verify-poc-14] HARNESS ERROR: no interface holds a 10.20.30.0/24 address" >&2
     echo "[verify-poc-14] PoCs must run with --network host on the attacker VM" >&2

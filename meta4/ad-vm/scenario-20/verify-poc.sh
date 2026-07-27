@@ -80,7 +80,7 @@ if echo "$OUT" | grep -qiE 'password was changed successfully|password was reset
 fi
 
 # --- denied: SDProp is protecting the account ---
-if echo "$OUT" | grep -qiE 'access_denied|status_access_denied|insufficient.*right|ERROR_ACCESS_DENIED|STATUS_PRIVILEGE_NOT_HELD'; then
+if echo "$OUT" | grep -qiE 'access_denied|status_access_denied|insufficient.*right|ERROR_ACCESS_DENIED|STATUS_PRIVILEGE_NOT_HELD|is not allowed to set the password|not allowed to change the password'; then
     echo "[verify-poc-20] alice's pwd-reset denied -- PoC BLOCKED"
     exit 0
 fi
