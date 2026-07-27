@@ -101,6 +101,26 @@ function Invoke-PocGate {
     #
     # --dns is required because the daemon-level DNS pin was removed (it broke
     # image builds); the container gets the DC's resolver per-run instead.
+    # Ensure a multicast route exists before running anything.
+    #
+    # LLMNR (224.0.0.252) and mDNS are multicast, and an Ubuntu cloud image
+    # ships no 224.0.0.0/4 route, so sendto() fails at route lookup with
+    # ENETUNREACH before any interface selection happens. --network host does
+    # not help: the container shares the VM's namespace, including its missing
+    # route.
+    #
+    # On the 2026-07-26 run this surfaced as scenario-15 printing
+    # "OSError: [Errno 101] Network is unreachable" and then grading the DC
+    # BLOCKED -- a fail-open on a query that never left the host.
+    #
+    # `ip route replace` is idempotent, so this is safe to run per PoC, and
+    # doing it here rather than in cloud-init keeps the existing baseline
+    # snapshot usable instead of requiring an attacker-VM rebuild.
+    $mcast = "IF=`$(ip -o -4 addr show | awk '/10\.20\.30\./{print `$2; exit}'); " +
+             "[ -n `"`$IF`" ] && sudo ip route replace 224.0.0.0/4 dev `$IF || true"
+    ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
+        "vagrant@$($script:AttackerIP)" $mcast 2>&1 | Out-Null
+
     $runner = "sudo docker run --rm --network host --dns 10.20.30.5 --dns-search corp.local " +
               "-v ${guest}:/verify-poc.sh srb-attacker:1 bash /verify-poc.sh"
 
