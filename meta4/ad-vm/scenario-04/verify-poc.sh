@@ -80,7 +80,14 @@ EOF
 fi
 
 # --- explicitly blocked: the DC says pre-auth is required ---
-if grep -qiE 'user dave is not vulnerable|preauthentication required|does not have UF_DONT_REQUIRE_PREAUTH' out.txt; then
+# The exact string impacket emits is:
+#   [-] User dave doesn't have UF_DONT_REQUIRE_PREAUTH set
+# Note the CONTRACTION. An earlier version of this check matched "does not
+# have", which never fires, so a correctly remediated account graded
+# INCONCLUSIVE -> FAIL. Confirmed against the live lab by proof gate 2.
+# The pattern below is deliberately loose around the apostrophe so both
+# spellings match if impacket ever changes wording.
+if grep -qiE "user dave is not vulnerable|preauthentication required|(does not|doesn.t) have UF_DONT_REQUIRE_PREAUTH|UF_DONT_REQUIRE_PREAUTH set" out.txt; then
     echo "[verify-poc-04] dave requires Kerberos pre-authentication - PoC BLOCKED"
     exit 0
 fi
