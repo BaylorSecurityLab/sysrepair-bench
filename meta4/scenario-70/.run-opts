@@ -1,2 +1,1 @@
---security-opt seccomp=unconfined
---security-opt apparmor=unconfined
+--cap-add SYS_ADMIN
