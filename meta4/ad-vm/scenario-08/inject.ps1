@@ -17,15 +17,60 @@ function Publish-LabTemplate {
     $configNC = (Get-ADRootDSE).configurationNamingContext
     $tmplPath = "CN=$TemplateName,CN=Certificate Templates,CN=Public Key Services,CN=Services,$configNC"
 
-    if (-not (Test-ADObject -Identity $tmplPath -ErrorAction SilentlyContinue)) {
-        New-ADObject -Name $TemplateName -Path "CN=Certificate Templates,CN=Public Key Services,CN=Services,$configNC" `
+    # Test-ADObject DOES NOT EXIST -- the ActiveDirectory module ships only
+    # Get-/New-/Set-/Remove-ADObject. This threw CommandNotFoundException on
+    # every run, so the template was never created or published and the
+    # scenario was never actually set up. A -Filter search is used because
+    # -Identity throws when the object is absent, which is the normal case on a
+    # clean baseline.
+    $tmplParent = "CN=Certificate Templates,CN=Public Key Services,CN=Services,$configNC"
+    $existing = Get-ADObject -SearchBase $tmplParent -Filter "name -eq '$TemplateName'" `
+                             -Server corp-dc01 -ErrorAction SilentlyContinue
+    # A SCHEMA-VERSION-2 TEMPLATE NEEDS AN OID, A revision AND flags.
+    #
+    # Without msPKI-Cert-Template-OID the CA cannot resolve the request -- it
+    # maps V2 templates by OID, not by name -- so enrollment returns
+    # 0x80094800 CERTSRV_E_UNSUPPORTED_CERT_TYPE even though
+    # `certutil -SetCAtemplates` reports the template "Already present", and
+    # `certutil -CATemplates` fails with E_UNEXPECTED. Confirmed against the
+    # built-in User template, which carries all three where ours had none.
+    if (-not $existing) {
+        $oidContainer = "CN=OID,CN=Public Key Services,CN=Services,$configNC"
+        $forestArc = (Get-ADObject -Identity $oidContainer -Properties 'msPKI-Cert-Template-OID' `
+                                   -Server corp-dc01).'msPKI-Cert-Template-OID'
+        if (-not $forestArc) { throw "[inject] cannot read the forest template OID arc from $oidContainer" }
+
+        $templateOid = '{0}.{1}.{2}' -f $forestArc, (Get-Random -Minimum 1000000 -Maximum 99999999),
+                                                    (Get-Random -Minimum 1000000 -Maximum 99999999)
+
+        $oidName = "$TemplateName-OID"
+        if (-not (Get-ADObject -SearchBase $oidContainer -Filter "name -eq '$oidName'" `
+                               -Server corp-dc01 -ErrorAction SilentlyContinue)) {
+            New-ADObject -Name $oidName -Path $oidContainer -Type 'msPKI-Enterprise-Oid' `
+                -OtherAttributes @{
+                    'msPKI-Cert-Template-OID' = $templateOid
+                    'msPKI-OID-Attribute'     = 34
+                    'displayName'             = $DisplayName
+                } -Server corp-dc01
+        }
+
+        $Attrs = $Attrs.Clone()
+        $Attrs['msPKI-Cert-Template-OID'] = $templateOid
+        $Attrs['revision']                = 100
+        $Attrs['flags']                   = 66104
+
+        New-ADObject -Name $TemplateName -Path $tmplParent `
             -Type 'pKICertificateTemplate' -DisplayName $DisplayName -OtherAttributes $Attrs -Server corp-dc01
     } else {
         Set-ADObject -Identity $tmplPath -Replace $Attrs -Server corp-dc01
     }
 
-    # Publish on issuing CA so it's offered to enrollees.
-    certutil -SetCAtemplates +$TemplateName | Out-Null
+    # Publish on the issuing CA. certutil's exit code is checked -- this was
+    # piped to Out-Null with no check, so a failure here was invisible.
+    & certutil -SetCAtemplates +$TemplateName | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "[inject] certutil -SetCAtemplates +$TemplateName returned $LASTEXITCODE"
+    }
 
     # Grant enrollment ACL.
     $acl = Get-Acl "AD:$tmplPath"
@@ -52,7 +97,10 @@ $attrs = @{
     'msPKI-Private-Key-Flag'        = 0
     'msPKI-Template-Minor-Revision' = 1
     'msPKI-Template-Schema-Version' = 2
-    'pKIExtendedKeyUsage'           = @()                        # NO EKU == Any Purpose
+    # NO pKIExtendedKeyUsage KEY AT ALL. "No EKU" means the attribute is
+    # ABSENT, not present-and-empty: passing @() made New-ADObject reject the
+    # whole call with "Cannot validate argument on parameter 'OtherAttributes'.
+    # The argument collection is empty", so the ESC2 template was never created.
     'msPKI-Certificate-Application-Policy' = @('2.5.29.37.0')    # Any Purpose OID
     'pKIKeyUsage'                   = [byte[]](0x86)
     'msPKI-RA-Signature'            = 0

