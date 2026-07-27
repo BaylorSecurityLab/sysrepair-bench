@@ -610,6 +610,7 @@ Invoke-Pester .\tests -Output Detailed
 | `New-CloudInitSeedIso`: *"oscdimg.exe not found"* | ADK Deployment Tools not installed, or installed without that feature. See D3. |
 | Attacker VM boots with no SSH key and no static IP; every probe times out | Seed ISO built without Joliet, so cloud-init saw `USER-DATA` rather than `user-data`. The harness passes `-j1`; if building by hand, do the same. |
 | `docker build` fails at the tool gate | A tool some `verify-poc.sh` invokes is missing. That is the gate working — fix the image, do not remove the check. |
+| certipy fails with `ept_s_not_registered` for `91AE6020-9E3C-11CF-8D7C-00AA00C091BE`, yet `certutil -ping` on corp-ca01 succeeds and the CA still issues certificates locally | CertSvc registers its RPC endpoints **once, at service start**. Resuming a snapshot can start it before the network is up, so it binds `ncalrpc` only and never advertises a TCP endpoint. Every check *on* the CA stays green; nothing else in the lab can reach it. Waiting does not help — restart CertSvc (`Repair-CaRpcEndpoint`). `Start-LabOrdered` now detects and repairs this automatically. |
 
 ## Model provider credentials
 
