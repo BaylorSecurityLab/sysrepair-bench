@@ -64,6 +64,13 @@ EOF
         CRACK=$(timeout 30 hashcat -m 18200 -a 0 --quiet --potfile-path=/dev/null asrep.hashes wl 2>&1 || true)
         echo "--- hashcat (informational) ---"
         echo "$CRACK"
+        # Informational only here -- this scenario grades on whether the AS-REP
+        # was obtainable, not on crack success -- but say so plainly rather
+        # than letting a non-functional tool look like a clean run.
+        if echo "$CRACK" | grep -qiE 'No devices found/left|requires? this runtime|OpenCL.*not (found|available)'; then
+            echo "[verify-poc-04] note: hashcat has no usable OpenCL device; crack step skipped." >&2
+            echo "[verify-poc-04] this does NOT affect the verdict -- extracting the AS-REP is the exploit." >&2
+        fi
     else
         echo "[verify-poc-04] hashcat absent; skipping the informational crack step" >&2
     fi

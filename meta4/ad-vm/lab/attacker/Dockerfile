@@ -39,6 +39,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 # impacket-scripts provides the /usr/bin/impacket-* names the scenarios call.
 # python3-impacket alone ships only five of them, which is why the old
 # provisioner appeared to half-work.
+#
+# pocl-opencl-icd is REQUIRED, not optional. hashcat installs and runs but
+# cannot compute without an OpenCL device; in a container with no GPU it exits
+# after printing "Intel and AMD CPUs require this runtime: Intel CPU Runtime
+# for OpenCL or PoCL" and cracks nothing. Scenarios 03 and 04 then read
+# "nothing cracked" as "the password is strong" and returned exit 0 -- a PASS
+# on a demonstrably vulnerable box, with the hash successfully dumped. PoCL is
+# a CPU OpenCL implementation, so hashcat actually runs.
 # certipy-ad provides /usr/bin/certipy-ad directly -- scenarios 07-10's exact
 # path and name.
 # hashcat (S03, S04), responder (S14) and freerdp3-x11 (S19) were absent from
@@ -47,7 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip \
       impacket-scripts certipy-ad \
       netexec bloodhound.py \
-      responder freerdp3-x11 hashcat \
+      responder freerdp3-x11 hashcat pocl-opencl-icd ocl-icd-libopencl1 \
       nmap ldap-utils smbclient krb5-user \
       git curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*

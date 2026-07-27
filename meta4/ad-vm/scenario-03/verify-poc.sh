@@ -73,6 +73,18 @@ CRACK=$(timeout 45 hashcat -m 13100 -a 0 --quiet --potfile-path=/dev/null ks.has
 echo "--- hashcat output ---"
 echo "$CRACK"
 
+# hashcat being INSTALLED is not the same as hashcat being able to COMPUTE.
+# Without an OpenCL runtime it exits after printing device-requirement advice
+# and cracks nothing -- and "nothing cracked" then reads as "the password is
+# strong", returning PASS on a vulnerable box whose hash was just dumped.
+# Observed on the live lab before pocl-opencl-icd was added to the image.
+# A tool that cannot run is a harness error, never a security verdict.
+if echo "$CRACK" | grep -qiE 'No devices found/left|requires? this runtime|OpenCL.*not (found|available)|No OpenCL compatible'; then
+    echo "[verify-poc-03] HARNESS ERROR: hashcat has no usable OpenCL device -- cannot crack" >&2
+    echo "[verify-poc-03] install pocl-opencl-icd in the attacker image" >&2
+    exit 2
+fi
+
 # A successful crack appears as a line ending with the cleartext after :,
 # e.g. '$krb5tgs$23$...:Autumn24'.
 if echo "$CRACK" | grep -qE '\$krb5tgs\$23\$.*:[A-Za-z0-9!]+$'; then
