@@ -14,6 +14,28 @@ REQ=$(timeout 60 /usr/bin/certipy-ad req \
 echo "--- certipy req ---"
 echo "$REQ"
 
+# --- CA not serving RPC: HARNESS ERROR, never a verdict ---
+#
+# ept_s_not_registered means the endpoint mapper has no ICertRequestD
+# (91AE6020-9E3C-11CF-8D7C-00AA00C091BE) to hand out: the CA's enrollment
+# interface is not reachable from here, which says nothing about whether the
+# EDITF_ATTRIBUTESUBJECTALTNAME2 SAN override is still accepted.
+#
+# This used to fall through to exit 1, which is wrong in BOTH directions.
+# Observed on the 2026-07-26 gate run: gates 1 AND 2 both hit this, so the
+# vulnerable baseline "failed for the right reason" and the remediated host
+# "was still vulnerable" -- on identical output that only ever meant the CA
+# was unreachable. Exit 2 keeps it out of the evidence pool entirely.
+#
+# Note this scenario's remediation RESTARTS CertSvc (clearing the flag needs
+# it), so a genuine race is possible here -- which is precisely why it must be
+# a harness error the runner can retry, not a graded result.
+if echo "$REQ" | grep -qiE 'ept_s_not_registered|Failed to get DCE RPC connection|Failed to get dynamic TCP endpoint'; then
+    echo "[verify-poc-10] HARNESS ERROR: CA RPC enrollment interface not registered" >&2
+    echo "[verify-poc-10] the CA is not serving ICertRequestD to this host -- fix the lab, not the scenario" >&2
+    exit 2
+fi
+
 if [ -f administrator.pfx ]; then
     AUTH=$(timeout 60 /usr/bin/certipy-ad auth \
         -pfx administrator.pfx \

@@ -54,6 +54,29 @@ if [ "$REQ_RC" -eq 124 ]; then
     exit 1
 fi
 
+# --- CA not serving RPC: HARNESS ERROR, never a verdict ---
+#
+# ept_s_not_registered means the endpoint mapper has no ICertRequestD
+# (91AE6020-9E3C-11CF-8D7C-00AA00C091BE) to hand out: the CA's enrollment
+# interface is not reachable from here. That says nothing about whether the
+# template is still exploitable.
+#
+# This used to fall through to exit 1, which is wrong in BOTH directions.
+# Observed on the 2026-07-26 gate run: gates 1 AND 2 both hit this, so the
+# vulnerable baseline "failed for the right reason" and the remediated host
+# "was still vulnerable" -- on identical output that only ever meant the CA
+# was unreachable. Exit 2 keeps it out of the evidence pool entirely.
+#
+# Safe to treat as harness error here because the reference remediation for
+# this scenario unpublishes a template and asserts the CA is STILL SERVING.
+# Taking the CA offline is never the intended fix, so this can never swallow
+# a legitimate repair.
+if echo "$REQ" | grep -qiE 'ept_s_not_registered|Failed to get DCE RPC connection|Failed to get dynamic TCP endpoint'; then
+    echo "[verify-poc-07] HARNESS ERROR: CA RPC enrollment interface not registered" >&2
+    echo "[verify-poc-07] the CA is not serving ICertRequestD to this host -- fix the lab, not the scenario" >&2
+    exit 2
+fi
+
 # --- exploited? ---
 if [ -f administrator.pfx ]; then
     AUTH=$(timeout 60 "$CERTIPY" auth -pfx administrator.pfx -dc-ip "$DC_IP" 2>&1)

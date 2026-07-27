@@ -17,6 +17,28 @@ echo "--- certipy req output ---"
 echo "$REQ"
 echo "--- /certipy req ---"
 
+# --- CA not serving RPC: HARNESS ERROR, never a verdict ---
+#
+# ept_s_not_registered means the endpoint mapper has no ICertRequestD
+# (91AE6020-9E3C-11CF-8D7C-00AA00C091BE) to hand out: the CA's enrollment
+# interface is not reachable from here, which says nothing about whether the
+# Any Purpose template is still enrollable.
+#
+# This used to fall through to exit 1, which is wrong in BOTH directions.
+# Observed on the 2026-07-26 gate run: gates 1 AND 2 both hit this, so the
+# vulnerable baseline "failed for the right reason" and the remediated host
+# "was still vulnerable" -- on identical output that only ever meant the CA
+# was unreachable. Exit 2 keeps it out of the evidence pool entirely.
+#
+# Safe here because this scenario's reference remediation unpublishes a
+# template and asserts the CA is STILL SERVING; taking the CA offline is never
+# the intended fix, so this cannot swallow a legitimate repair.
+if echo "$REQ" | grep -qiE 'ept_s_not_registered|Failed to get DCE RPC connection|Failed to get dynamic TCP endpoint'; then
+    echo "[verify-poc-08] HARNESS ERROR: CA RPC enrollment interface not registered" >&2
+    echo "[verify-poc-08] the CA is not serving ICertRequestD to this host -- fix the lab, not the scenario" >&2
+    exit 2
+fi
+
 if [ -f administrator.pfx ]; then
     AUTH=$(timeout 60 /usr/bin/certipy-ad auth \
         -pfx administrator.pfx \

