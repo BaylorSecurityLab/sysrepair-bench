@@ -141,6 +141,7 @@ function Test-ScenarioGates {
 
     $hasFix = Test-Path $fixScript
     $results = [ordered]@{}
+    $startedUtc = (Get-Date).ToUniversalTime()
 
     # ---------- GATE 1: baseline fails for the right reason ----------
     Write-Host "`n=== scenario-$ScenarioId GATE 1: baseline fails for the right reason ==="
@@ -330,11 +331,34 @@ function Test-ScenarioGates {
     $failedCount = @($hard | Where-Object { $_ -isnot [bool] -or -not $_ }).Count
     $validated = ($failedCount -eq 0)
 
+    # Bind every result to the fixture version that produced it.
+    #
+    # Scenario files are re-read per scenario, so editing them mid-run is
+    # normal and only dot-sourced code is frozen at launch. But the 2026-07-26
+    # run recorded nothing about WHICH version ran, and afterwards three
+    # verdicts had to be reconstructed by comparing file mtimes against
+    # per-scenario turn times estimated from the log. That was slow and left
+    # them merely PROBABLY stale -- scenario-07's fix landed within three
+    # minutes of its own turn, too close to call either way.
+    #
+    # A result that cannot name its inputs is not reproducible.
+    $fixtureVersions = [ordered]@{}
+    foreach ($f in 'verify-poc.sh', 'reference-fix.ps1', 'reference-fix-norestart.ps1', 'inject.ps1') {
+        $p = Join-Path $dir $f
+        $fixtureVersions[$f] = if (Test-Path $p) {
+            '{0} sha256:{1}' -f (Get-Item $p).LastWriteTimeUtc.ToString('s'),
+                                (Get-FileHash $p -Algorithm SHA256).Hash.Substring(0, 12)
+        } else { 'absent' }
+    }
+
     [pscustomobject]@{
-        Scenario  = "scenario-$ScenarioId"
-        Validated = $validated
-        Gates     = $results
-        HasFixture = $hasFix
+        Scenario    = "scenario-$ScenarioId"
+        Validated   = $validated
+        Gates       = $results
+        HasFixture  = $hasFix
+        StartedUtc  = $startedUtc.ToString('s')
+        FinishedUtc = (Get-Date).ToUniversalTime().ToString('s')
+        Fixtures    = $fixtureVersions
     }
 }
 
