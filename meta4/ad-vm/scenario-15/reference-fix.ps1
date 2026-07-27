@@ -35,5 +35,25 @@ foreach ($iface in (Get-ChildItem -Path $ifRoot -ErrorAction SilentlyContinue)) 
 }
 if ($stillOn) { throw "[fix-15] NBT-NS still enabled on: $($stillOn -join ', ')" }
 
+# THE REGISTRY WRITE ALONE IS NOT ENOUGH -- the policy must be refreshed.
+#
+# EnableMulticast lives under the Policies key, which the DNS Client reads
+# through Group Policy rather than on every query. Measured on the live lab:
+# with EnableMulticast already 0, corp-ws01 kept answering LLMNR queries and
+# only went silent after a policy refresh.
+#
+# Restarting the service is NOT an option here: Dnscache is protected, and
+# Restart-Service fails with "Cannot open Dnscache service on computer '.'".
+# gpupdate is the supported way to make this take effect without a reboot.
+#
+# This is what makes gate 4 meaningful for THIS scenario, unlike 12, 13 and 19:
+# there is a real config-only state where the setting is correct and the host is
+# still poisonable. reference-fix-norestart.ps1 reproduces exactly that.
+& gpupdate /force /target:computer | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "[fix-15] gpupdate returned $LASTEXITCODE; the LLMNR policy may not be in effect"
+}
+
 Write-Host "[fix-15] LLMNR disabled and NBT-NS disabled on $changed interface(s)"
+Write-Host '[fix-15] policy refreshed -- the DNS client has picked up EnableMulticast=0'
 Write-Host '[fix-15] COMPLETE'

@@ -16,8 +16,21 @@ Set-ItemProperty -Path $dnsPolicy -Name 'EnableMulticast' -Value 1 -Type DWord
 
 # NetBIOS-over-TCP setting is per-NIC. Force "Default" (1) on the
 # host-only adapter so it follows the DHCP/registry default which is on.
-$adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
-    $_.InterfaceDescription -match 'Adapter 2' -or $_.Name -match 'hostonly|10\.20\.30'
+# Select the adapter by the ADDRESS IT HOLDS, not by name.
+#
+# This used to match on InterfaceDescription 'Adapter 2' or a name containing
+# 'hostonly' -- both VirtualBox conventions. Hyper-V names its adapters
+# "Ethernet" with description "Microsoft Hyper-V Network Adapter", so the
+# filter matched nothing and the NBT-NS half of this inject silently did
+# nothing on every run. Get-NetAdapter never errors on an empty match, so it
+# looked identical to success.
+$labIfIndexes = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -like '10.20.30.*' } |
+    Select-Object -ExpandProperty InterfaceIndex -Unique
+$adapters = Get-NetAdapter -ErrorAction SilentlyContinue |
+    Where-Object { $_.ifIndex -in $labIfIndexes }
+if (-not $adapters) {
+    throw '[inject-15] no adapter holds a 10.20.30.0/24 address; cannot enable NBT-NS'
 }
 foreach ($a in $adapters) {
     $tcpipKey = "HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces\Tcpip_$($a.InterfaceGuid)"
@@ -26,4 +39,4 @@ foreach ($a in $adapters) {
     }
 }
 
-Write-Host "[inject-15] LLMNR + NBT-NS re-enabled on DC private_network NIC"
+Write-Host "[inject-15] LLMNR + NBT-NS re-enabled on corp-ws01 lab NIC"
