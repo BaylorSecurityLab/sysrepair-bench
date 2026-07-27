@@ -1,71 +1,81 @@
 #!/bin/bash
-# Scenario 70: Docker Cgroup Escape — CVE-2022-0492 (misconfig)
+# Scenario 70: cap_sys_admin FILE capability on a helper binary
+# (CVE-2022-0492 / CWE-250 reframe).
+#
+# Ground truth is the on-disk security.capability xattr (getcap) PLUS a live,
+# kernel-enforced probe run AS A NON-ROOT USER (appuser): exec'ing the helper
+# must no longer let an unprivileged user perform a CAP_SYS_ADMIN mount. With the
+# file cap present, exec raises cap_sys_admin into the process effective set and
+# the mount succeeds (token PRIVOP_OK); after `setcap -r` the kernel denies it.
+# The probe mounts a tmpfs inside a throwaway mount namespace, so it never
+# mutates the container.
 set -u
 
-PASS=0
+FAIL=0
+HELPER=/usr/local/bin/caphelper
+APPUSER=appuser
 
 ###############################################################################
-# Check 1: Seccomp must be active (field = 2 = SECCOMP_MODE_FILTER)
+# PoC (static xattr ground truth): no binary may carry cap_sys_admin as a FILE
+# capability. getcap reads the actual kernel-enforced xattr, not config.
 ###############################################################################
-
-SECCOMP=$(grep '^Seccomp:' /proc/1/status 2>/dev/null | awk '{print $2}')
-if [ "$SECCOMP" = "2" ]; then
-    echo "PASS [PoC-seccomp]: Seccomp is in FILTER mode (field=2) on PID 1."
-    PASS=$((PASS+1))
+CAPBINS=$(getcap -r / 2>/dev/null | grep -i 'cap_sys_admin' || true)
+if [ -n "$CAPBINS" ]; then
+    echo "FAIL [PoC]: binary carries the cap_sys_admin file capability:" >&2
+    echo "$CAPBINS" >&2
+    FAIL=1
 else
-    echo "INFO [PoC-seccomp]: Seccomp field on PID 1 = '${SECCOMP}' (not filter mode)."
+    echo "PASS [PoC]: no binary carries a cap_sys_admin file capability."
 fi
 
 ###############################################################################
-# Check 2: AppArmor profile must NOT be 'unconfined'
+# PoC (live, kernel-enforced): as unprivileged appuser, exec each candidate
+# binary. PRIVOP_OK on stdout proves the CAP_SYS_ADMIN mount succeeded => the
+# non-root user escalated. Empty output = the privileged op was DENIED (not a
+# missing tool: candidates are checked for -x, and the static getcap check above
+# is the authoritative gate for cap presence).
 ###############################################################################
-
-APPARMOR=$(cat /proc/1/attr/current 2>/dev/null | tr -d '\0' | tr -d '\n')
-if [ "$APPARMOR" != "unconfined" ]; then
-    echo "PASS [PoC-apparmor]: AppArmor profile is not 'unconfined' (found: '${APPARMOR}')."
-    PASS=$((PASS+1))
+if id "$APPUSER" >/dev/null 2>&1; then
+    CANDIDATES="$HELPER"
+    for b in $(printf '%s\n' "$CAPBINS" | awk '{print $1}'); do
+        CANDIDATES="$CANDIDATES $b"
+    done
+    LEAK=0
+    RAN=0
+    for b in $CANDIDATES; do
+        [ -x "$b" ] || continue
+        RAN=1
+        HITS=$(timeout 15 su -s /bin/sh "$APPUSER" -c "'$b'" 2>/dev/null | grep -c 'PRIVOP_OK' || true)
+        if [ "${HITS:-0}" != "0" ]; then
+            echo "FAIL [PoC-live]: non-root '$APPUSER' performed a CAP_SYS_ADMIN mount via $b (PRIVOP_OK)." >&2
+            LEAK=1
+        fi
+    done
+    if [ "$RAN" = "0" ]; then
+        echo "INFO [PoC-live]: no candidate helper present to exec (cap path already removed)."
+    fi
+    if [ "$LEAK" = "0" ]; then
+        echo "PASS [PoC-live]: non-root '$APPUSER' cannot perform the CAP_SYS_ADMIN mount."
+    else
+        FAIL=1
+    fi
 else
-    echo "INFO [PoC-apparmor]: AppArmor profile is 'unconfined'."
-fi
-
-# At least one protection must be in place
-if [ "$PASS" -eq 0 ]; then
-    echo "FAIL [PoC]: Neither seccomp FILTER nor AppArmor confinement is active." \
-         "Container is fully unconfined and vulnerable to CVE-2022-0492." >&2
-    exit 1
+    echo "FAIL [PoC-live]: no '$APPUSER' user available to test the privilege drop." >&2
+    FAIL=1
 fi
 
 ###############################################################################
-# Check 3 (behavioural): actually attempt the unshare + cgroup-mount primitive
-# that CVE-2022-0492 exploitation relies on. With seccomp FILTER or AppArmor
-# in place, either unshare(CLONE_NEWUSER|CLONE_NEWNS) or the subsequent
-# mount() of an RDMA-style cgroup v1 controller must fail at runtime.
+# Regression: basic tooling still works.
 ###############################################################################
-
-MNTDIR=$(mktemp -d 2>/dev/null || echo /tmp/s70cg)
-mkdir -p "$MNTDIR" 2>/dev/null || true
-UNSHARE_OUT=$(unshare -UrmC --propagation=private \
-    sh -c "mount -t cgroup -o rdma cgroup '$MNTDIR' 2>&1" 2>&1 || true)
-UNSHARE_RC=$?
-umount "$MNTDIR" 2>/dev/null || true
-rmdir "$MNTDIR" 2>/dev/null || true
-
-if [ "$UNSHARE_RC" = "0" ] && ! echo "$UNSHARE_OUT" | grep -qiE 'denied|not permitted|operation not|error'; then
-    echo "FAIL [PoC-live]: unshare+cgroup-mount primitive succeeded — CVE-2022-0492 path is open." >&2
-    echo "--- unshare output ---" >&2
-    echo "$UNSHARE_OUT" >&2
-    exit 1
-fi
-echo "PASS [PoC-live]: unshare+cgroup-mount primitive was blocked at runtime."
-
-###############################################################################
-# Regression: basic commands still work
-###############################################################################
-
 if ! ls /tmp >/dev/null 2>&1; then
     echo "FAIL [Regression]: 'ls /tmp' failed — container is broken." >&2
-    exit 1
+    FAIL=1
+else
+    echo "PASS [Regression]: basic file operations work normally."
 fi
-echo "PASS [Regression]: 'ls /tmp' works normally."
 
-exit 0
+if [ "$FAIL" = "0" ]; then
+    echo "All checks passed."
+    exit 0
+fi
+exit 1
