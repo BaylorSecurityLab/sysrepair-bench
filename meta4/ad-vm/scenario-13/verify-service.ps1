@@ -12,7 +12,7 @@ try {
 
     $cfg = Get-SmbServerConfiguration
     if (-not $cfg.EnableSMB2Protocol) {
-        Write-Error "[verify-service-13] SMB2 disabled on server - DC service broken"
+        Write-Error "[verify-service-13] SMB2 disabled on corp-ws01 - file service broken"
         exit 1
     }
 

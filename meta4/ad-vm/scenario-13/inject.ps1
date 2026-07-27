@@ -11,4 +11,4 @@ Set-ItemProperty -Path $regPath -Name EnableSecuritySignature  -Value 1 -Type DW
 # Also reflect via SMB cmdlet for immediate effect without reboot.
 Set-SmbServerConfiguration -RequireSecuritySignature $false -Confirm:$false -Force
 
-Write-Host "[inject-13] SMB signing requirement disabled on DC"
+Write-Host "[inject-13] SMB signing requirement disabled on corp-ws01"
