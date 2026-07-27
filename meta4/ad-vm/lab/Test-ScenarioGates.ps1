@@ -187,6 +187,22 @@ function Test-ScenarioGates {
     else {
         Invoke-GuestScript -Target $injectTarget -ScriptPath $fixScript | Out-Null
 
+        # Re-gate readiness AFTER the fix, exactly as gate 1 does after inject.
+        #
+        # A remediation can restart a service, and a service being locally
+        # responsive is not the same as its remote endpoints being
+        # re-registered. Observed on scenarios 07-10: reference-fix-10 restarts
+        # CertSvc and polls `certutil -ping` until it answers LOCALLY, yet
+        # certipy connecting REMOTELY still got
+        #   ept_s_not_registered for 91AE6020-9E3C-11CF-8D7C-00AA00C091BE
+        # because the RPC endpoint mapper had not re-advertised ICertRequestD.
+        # The PoC then reported an inconclusive connection error and gate 2
+        # graded FAIL against a correct fix.
+        $postFix = Wait-LabMachineReady -Machine $serviceTarget -TimeoutSeconds 240
+        if (-not $postFix.Ready) {
+            Write-Warning "  target '$serviceTarget' not ready after the fix (probe: $($postFix.FailedProbe)) -- gate 2 result is unreliable"
+        }
+
         # Directory changes are not instantaneous from the attacker's point of
         # view. Removing alice's replication ACEs took longer than 10 seconds
         # to be reflected on the DRSUAPI path -- the PoC still succeeded at
