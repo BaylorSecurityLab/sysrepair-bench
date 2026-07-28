@@ -64,6 +64,50 @@ function Invoke-GuestScript {
     } catch { return 1 }
 }
 
+function Invoke-GuestPoc {
+    <#
+    .SYNOPSIS
+        Runs a Windows PoC on a guest and returns its REAL exit code plus output.
+
+    .DESCRIPTION
+        Invoke-GuestScript is not usable for a PoC: it collapses everything to
+        0 or 1, so `exit 2` (HARNESS ERROR) would be indistinguishable from
+        `exit 1` (vulnerable) -- the exact conflation the three-valued
+        convention exists to prevent.
+
+        `Invoke-Command -FilePath` also does not surface a script's `exit N` as
+        a status this side can read. The script is therefore written to the
+        guest and run as a child powershell.exe, whose PROCESS exit code is a
+        real number, and both it and the transcript come back.
+    #>
+    param([string] $Target, [string] $ScriptPath)
+
+    $vm   = $script:GateVM[$Target]
+    $text = Get-Content -LiteralPath $ScriptPath -Raw
+
+    try {
+        $r = Invoke-Command -VMName $vm -Credential $script:GateCred -ErrorAction Stop `
+                -ArgumentList $text -ScriptBlock {
+            param($text)
+            $p = Join-Path $env:TEMP ("srb-poc-{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
+            Set-Content -LiteralPath $p -Value $text -Encoding UTF8
+            try {
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p 2>&1 | Out-String
+                [pscustomobject]@{ Output = $out; ExitCode = $LASTEXITCODE }
+            }
+            finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+        }
+        return [pscustomobject]@{ Output = [string]$r.Output; ExitCode = [int]$r.ExitCode }
+    }
+    catch {
+        # Could not run the PoC at all. That is a harness error, never a verdict.
+        return [pscustomobject]@{
+            Output   = "Invoke-GuestPoc failed: $($_.Exception.Message)"
+            ExitCode = 2
+        }
+    }
+}
+
 function Invoke-PocGate {
     <#
     .SYNOPSIS
@@ -80,7 +124,33 @@ function Invoke-PocGate {
     #>
     param([string] $ScenarioDir)
 
-    $local = Join-Path $ScenarioDir 'verify-poc.sh'
+    # A PoC may run somewhere other than the attacker container.
+    #
+    # Almost every scenario here attacks over the network from Kali, and that
+    # is the right default -- a check that runs on the target can pass because
+    # of local state the network never sees (see Test-CaReady). But a scenario
+    # whose finding has NO network-observable signature cannot be graded that
+    # way at all, and scenario-01 is one: Netlogon secure-channel enforcement
+    # produces identical responses to an unauthenticated prober whether it is
+    # on or off.
+    #
+    # Rather than exclude such a scenario or fake a network probe for it,
+    # harness.json may name a Windows target and a .ps1 PoC, which then runs
+    # through PowerShell Direct exactly as inject/verify-service do. The
+    # scenario is responsible for saying plainly that it audits configuration
+    # rather than demonstrating an exploit.
+    $h = Get-Content (Join-Path $ScenarioDir 'harness.json') -Raw | ConvertFrom-Json
+    $pocTarget = if ($h.verify_poc.target) { $h.verify_poc.target } else { 'attacker' }
+    $pocScript = if ($h.verify_poc.script) { $h.verify_poc.script } else { 'verify-poc.sh' }
+
+    if ($pocTarget -ne 'attacker') {
+        $r = Invoke-GuestPoc -Target $pocTarget -ScriptPath (Join-Path $ScenarioDir $pocScript)
+        $script:LastPocOutput = $r.Output
+        Write-Host ($r.Output.TrimEnd())
+        return $r.ExitCode
+    }
+
+    $local = Join-Path $ScenarioDir $pocScript
     $guest = "/tmp/srb-gate-$([guid]::NewGuid().ToString('N')).sh"
 
     scp -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
