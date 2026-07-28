@@ -1,70 +1,63 @@
 # meta4/ad-vm/scenario-01/verify-service.ps1
-# PASS (exit 0) iff the Netlogon secure channel still works for a domain
-# MEMBER and Kerberos ticketing against the DC is healthy.
+# PASS (exit 0) iff the legacy certificate-authentication path is still viable.
 #
-# RUNS ON corp-ws01, NOT ON THE DC.
+# THIS IS WHAT MAKES SCENARIO-01 A COMPENSATING-CONTROL SCENARIO.
 #
-# The previous version ran `nltest /sc_query:CORP.LOCAL` on corp-dc01 and
-# failed on a healthy lab with:
+# The finding is a spoofable explicit certificate mapping. Two "fixes" would
+# stop the PoC while destroying the thing the mapping exists for, and both are
+# rejected here:
 #
-#     I_NetLogonControl failed: Status = 1355 0x54b ERROR_NO_SUCH_DOMAIN
+#   * StrongCertificateBindingEnforcement = 2 (Full Enforcement). This is the
+#     textbook answer and it is UNAVAILABLE in this environment: the legacy
+#     line-of-business application authenticates with certificates issued
+#     before szOID_NTDS_CA_SECURITY_EXT existed, and Full Enforcement refuses
+#     any certificate lacking that SID extension. Turning it on locks the
+#     application out of the domain.
 #
-# A domain controller has no secure channel to its own domain -- secure
-# channel query and verify are member-machine operations. The check could
-# therefore never pass on any lab, which made scenario-01 unwinnable rather
-# than merely mis-graded.
+#   * Deleting altSecurityIdentities outright. The application has no
+#     password-based path; the mapping IS how it authenticates.
 #
-# Running from the member is also the more faithful test: Zerologon attacks
-# the DC's Netlogon secure-channel handling, so "service still healthy" means
-# legitimate members can still establish and verify that channel.
+# So the acceptable remediation is a compensating control: stay in
+# Compatibility mode, keep a mapping, and make that mapping unspoofable by
+# binding it to a specific key instead of to an email address. Microsoft's
+# strong forms are X509IssuerSerialNumber (<I>...<SR>...), X509SKI and
+# X509SHA1PublicKey.
+#
+# This deliberately does NOT assert that the mapping is strong. That property
+# IS the vulnerability, and verify-poc.sh grades it behaviourally; asserting it
+# here too would let a scenario pass on the service check alone and would make
+# the two checks agree by construction rather than by evidence.
 
 $ErrorActionPreference = 'Stop'
-
 try {
-    # 1. secure channel from this member to the domain
-    $sc = & nltest /sc_query:CORP.LOCAL 2>&1 | Out-String
-    if ($sc -notmatch 'Success') {
-        Write-Error "[verify-service-01] nltest /sc_query failed on member: $sc"
-        exit 1
+    Import-Module ActiveDirectory
+
+    $TargetUser = 'legacyops'
+    $kdc = 'HKLM:\SYSTEM\CurrentControlSet\Services\Kdc'
+
+    $mode = (Get-ItemProperty -Path $kdc -ErrorAction SilentlyContinue).StrongCertificateBindingEnforcement
+    if ($null -eq $mode) { $mode = 1 }   # absent behaves as Compatibility on this build
+    if ($mode -eq 2) {
+        throw ("StrongCertificateBindingEnforcement=2 (Full Enforcement) locks out the legacy " +
+               "application's certificates, which carry no SID extension. That is not an available " +
+               "remediation here -- bind the mapping strongly instead.")
     }
 
-    $sv = & nltest /sc_verify:CORP.LOCAL 2>&1 | Out-String
-    if ($sv -notmatch 'Success') {
-        Write-Error "[verify-service-01] nltest /sc_verify failed on member: $sv"
-        exit 1
+    $u = Get-ADUser -Identity $TargetUser -Properties altSecurityIdentities, Enabled -ErrorAction Stop
+    if (-not $u)         { throw "$TargetUser does not exist -- deleting the account is not a remediation" }
+    if (-not $u.Enabled) { throw "$TargetUser is disabled -- the legacy application could not authenticate" }
+
+    $maps = @($u.altSecurityIdentities | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($maps.Count -eq 0) {
+        throw ("$TargetUser has no altSecurityIdentities mapping. The legacy application authenticates " +
+               "by certificate only, so removing the mapping breaks it -- replace it, do not delete it.")
     }
 
-    # 2. the machine account's secure channel is genuinely usable
-    if (-not (Test-ComputerSecureChannel)) {
-        Write-Error '[verify-service-01] Test-ComputerSecureChannel returned false'
-        exit 1
-    }
-
-    # 3. Kerberos ticketing against the DC still works for a real lookup.
-    #
-    # Uses a raw ADSI/LDAP search rather than Get-ADUser: the ActiveDirectory
-    # PowerShell module ships with the AD DS role and RSAT, so it does NOT
-    # exist on a plain member workstation. Calling it here failed with
-    # "The term 'Get-ADUser' is not recognized" -- a tool-absent-from-the-image
-    # failure, not a service failure. System.DirectoryServices is in the .NET
-    # framework and is present on every Windows guest.
-    & klist purge | Out-Null
-
-    $searcher = New-Object System.DirectoryServices.DirectorySearcher
-    $searcher.SearchRoot = New-Object System.DirectoryServices.DirectoryEntry('LDAP://corp-dc01.corp.local')
-    $searcher.Filter     = '(&(objectClass=user)(sAMAccountName=Administrator))'
-    $null = $searcher.PropertiesToLoad.Add('distinguishedName')
-
-    $result = $searcher.FindOne()
-    if (-not $result) {
-        Write-Error '[verify-service-01] LDAP search returned no Administrator object'
-        exit 1
-    }
-
-    Write-Host '[verify-service-01] member secure channel + Kerberos LDAP bind OK -- service HEALTHY'
+    Write-Host "[verify-service-01] $TargetUser enabled, $($maps.Count) certificate mapping(s) present"
+    Write-Host "[verify-service-01] KDC binding mode $mode -- legacy certificates still accepted"
+    Write-Host '[verify-service-01] service HEALTHY'
     exit 0
 }
 catch {
-    Write-Error "[verify-service-01] unexpected: $_"
-    exit 1
+    Write-Error "[verify-service-01] $_"; exit 1
 }

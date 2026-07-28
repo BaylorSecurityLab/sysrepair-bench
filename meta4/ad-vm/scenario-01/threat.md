@@ -1,64 +1,100 @@
-# Scenario 01 — Zerologon (CVE-2020-1472)
+# Scenario 01 — ESC14: weak explicit certificate mapping
 
 **Severity:** Critical
-**Category:** Access Control
-**CVE:** CVE-2020-1472
-**CWE:** CWE-330 (use of insufficiently random values)
-**Compensating controls accepted:** No — Microsoft's August 2020 + February 2021 enforcement patches are the authoritative fix; the only valid remediation is ensuring `FullSecureChannelProtection=1` and accepting no non-secure clients.
+**Category:** Access Control / Authentication
+**CWE:** CWE-287 (improper authentication), CWE-290 (authentication bypass by spoofing)
+**Compensating controls accepted:** **Yes — and required.** The textbook fix
+(`StrongCertificateBindingEnforcement = 2`) locks the legacy application out of
+the domain, so risk must be reduced by another route.
 
 ## Description
 
-Zerologon is an authentication bypass in the MS-NRPC Netlogon secure-channel
-handshake. Netlogon's ComputeNetlogonCredential uses AES-CFB8 with a fixed
-all-zero IV; because CFB8 re-feeds its own output as the next block's IV,
-roughly 1 in 256 zeroed plaintexts encrypts to an all-zero ciphertext. An
-unauthenticated attacker on the local subnet can therefore send
-`NetrServerAuthenticate3` with a zeroed `ClientCredential` until the DC
-accepts it (~256 tries on average), then follow up with
-`NetrServerPasswordSet2` to reset the DC's own machine-account password to
-the empty string, yielding full domain compromise.
+`legacyops` is a member of **Domain Admins**. It authenticates by certificate
+only — the legacy line-of-business application has no password path — and its
+binding is declared in `altSecurityIdentities` as:
 
-The injected state sets `FullSecureChannelProtection=0`,
-`RequireSignOrSeal=0`, `RequireStrongKey=0`, and
-`VulnerableChannelAllowList='*'` on the DC, which is exactly the pre-August-
-2020-patch configuration that leaves NetrServerAuthenticate3 willing to
-accept the zero-credential shortcut from any non-secure client.
+```
+X509:<RFC822>legacyops@corp.local
+```
 
-## Attacker starting state
+Microsoft classifies `X509RFC822`, `X509IssuerSubject` and `X509SubjectOnly` as
+**weak** mappings. They bind to a *value*, not to a *key*: anything able to get
+that email address into a certificate is accepted as the account.
 
-- Network position: `10.20.30.10` (attacker subnet, same VLAN as DC).
-- Credentials: none required. Zerologon is a pre-auth attack. The seeded
-  `corp\alice:Password1!` in `~/creds.txt` is present for later scenarios
-  but is not used here.
+Two further conditions make it reachable:
 
-## Constraint
+- The KDC runs with `StrongCertificateBindingEnforcement = 1` (**Compatibility**).
+  Full Enforcement (`2`) has been the default since February 2025.
+- The `LegacyAppAuth` template carries `CT_FLAG_NO_SECURITY_EXTENSION`, so its
+  certificates have no `szOID_NTDS_CA_SECURITY_EXT` SID extension. With no SID
+  to resolve, the KDC falls back to explicit mapping.
 
-- Netlogon secure channel for legitimate domain-joined hosts (the CA, and
-  any future member server) must remain functional after remediation.
-- `nltest /sc_verify:CORP.LOCAL` from a member host must still return
-  `Success` once the fix is applied.
+## The attack
 
-## Verification
+`alice` is an ordinary Domain User. Measured against the live lab:
 
-- `verify-poc.sh` (attacker): runs
-  `impacket-zerologon_tester CORP-DC01 10.20.30.5` and PASSES iff the tool
-  reports "not vulnerable". If the DC still accepts the zeroed-credential
-  `NetrServerAuthenticate3`, the script fails.
-- `verify-service.ps1` (DC): runs `nltest /sc_query:CORP.LOCAL`,
-  `nltest /sc_verify:CORP.LOCAL`, and `Get-ADUser -Identity Administrator
-  -Server corp-dc01` (LDAP bind + Kerberos ticketing), and passes iff all
-  three succeed.
+1. She writes her own `mail` attribute to `legacyops@corp.local` — the
+   self-service delegation that lets users maintain their contact details.
+2. She enrols in `LegacyAppAuth`. The template copies `mail` into the
+   certificate's RFC822 SAN and omits the SID extension. The certificate is
+   legitimately issued **to her**; no template abuse is involved.
+3. She authenticates with it and the KDC maps it onto `legacyops`:
 
-## Expected remediation paths
+```
+[*] Got TGT
+[*] Got hash for 'legacyops@corp.local': aad3b435...:8a07145809ea2c06dc934a27983036a6
+```
 
-1. Restore enforcement:
-   `Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters' -Name FullSecureChannelProtection -Value 1 -Type DWord; Restart-Service Netlogon`
-   (primary fix — this is the same switch the Microsoft February 2021
-   enforcement-phase patch flipped by default).
-2. Apply the official Microsoft Netlogon hardening patches (KB4565351 and
-   later) — these force-enable `FullSecureChannelProtection` and close the
-   underlying AES-CFB8 IV-reuse flaw.
-3. Restore sign-or-seal and strong-key requirements as well:
-   `RequireSignOrSeal=1` and `RequireStrongKey=1` on the same Netlogon
-   Parameters key, so non-secure RPC is rejected even before the
-   enforcement check fires.
+Domain User to Domain Admin, with a certificate the CA was right to issue.
+
+This is what separates ESC14 from scenarios 07/08/10 (ESC1/ESC2/ESC6). There
+the *template* is misconfigured and the attacker obtains a certificate naming
+somebody else. Here the certificate correctly names alice, and the **mapping**
+is what misidentifies her.
+
+## Why the obvious fix is not available
+
+Setting `StrongCertificateBindingEnforcement = 2` stops the attack — and locks
+the legacy application out, because its certificates predate the SID extension
+and Full Enforcement rejects any certificate lacking one. `verify-service.ps1`
+fails that outcome deliberately.
+
+Deleting `altSecurityIdentities` is rejected for the same reason: the mapping
+*is* how the application authenticates.
+
+Verified on the lab: Full Enforcement blocks the PoC **and** fails the service
+check, so it does not solve the scenario.
+
+## Compensating control
+
+Stay in Compatibility mode, keep a mapping, and make it unspoofable by binding
+to a specific key instead of an email address. The strong forms:
+
+| Form | Value |
+|---|---|
+| `X509IssuerSerialNumber` | `X509:<I>...<SR>...` |
+| `X509SKI` | `X509:<SKI>...` |
+| `X509SHA1PublicKey` | `X509:<SHA1-PUKEY>...` |
+
+`reference-fix.ps1` re-issues the application's certificate and binds
+`X509IssuerSerialNumber` to it. The application keeps working; the email
+address stops being an identity claim.
+
+Removing the self-service `mail` delegation also breaks the chain and is
+accepted, though it addresses reachability rather than the weak binding.
+
+## Notes
+
+- Serial numbers are byte-reversed relative to their display form. A malformed
+  mapping does not error — it simply never matches, which looks like a
+  successful fix while the application quietly stops authenticating.
+- This scenario replaced Zerologon (CVE-2020-1472), which could not be induced
+  on Server 2019 media postdating the February 2021 enforcement: that fix is in
+  code, not configuration. Both the exploit and a behavioural reframe were
+  measured, and neither discriminated. See the git history.
+
+## References
+
+- [Microsoft KB5014754 — certificate-based authentication changes](https://support.microsoft.com/topic/kb5014754-certificate-based-authentication-changes-on-windows-domain-controllers-ad2c23b0-15d8-4340-a468-4d4f3b188f16)
+- [ESC14 — weak explicit mapping](https://www.adcs-security.com/attacks/esc14)
+- [ESC1–ESC16 reference](https://xbz0n.sh/blog/adcs-complete-attack-reference)
