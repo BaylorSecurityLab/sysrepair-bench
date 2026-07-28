@@ -1,28 +1,24 @@
 #!/bin/bash
 # Scenario 71: SUID-root helper enabling non-root -> root escalation (CWE-250).
 #
-# Ground truth: no SUID-root helper may exist in a non-system location, AND a
-# non-root user (appuser) must not be able to escalate to root through any such
-# helper. The static scan is authoritative for "SUID present"; the behavioural
-# probe runs AS appuser and confirms whether root is actually gained. Empty
-# probe output means escalation was DENIED (candidates are checked for the SUID
-# bit and -x first, so empty never means a missing tool).
+# Ground truth: no SUID-root binary on the filesystem may let a non-root user
+# (appuser) escalate to root. The check is behavioural and whole-rootfs: it finds
+# every SUID-root file and attempts, AS appuser, to read root-only /etc/shadow
+# through it. Escalation via any of them is the failure. Empty probe output means
+# escalation was DENIED (only -x SUID-root files are probed, so empty never means
+# a missing tool, and the gate IS the live exploit — it is path-independent, so a
+# sham fix that relocates the SUID binary elsewhere cannot evade it).
 set -u
 
 FAIL=0
 APPUSER=appuser
 HELPER=/usr/local/bin/suidhelper
-# Non-system dirs where a planted SUID-root binary would live. Excludes /bin,
-# /sbin, /usr/bin, /usr/sbin, /usr/lib (legitimate system SUIDs) and /tmp (the
-# harness drops verify.sh/solve.sh there).
-SCAN_DIRS="/usr/local /opt /home /srv /var /root /etc"
-
 if ! id "$APPUSER" >/dev/null 2>&1; then
     echo "FAIL [PoC]: no '$APPUSER' user to run the unprivileged escalation PoC." >&2
     exit 1
 fi
 
-# As non-root appuser, use a candidate SUID helper to try to read /etc/shadow
+# As non-root appuser, use a candidate SUID binary to try to read /etc/shadow
 # (mode 640 root:shadow — unreadable to appuser unless it becomes root).
 esc_try() {
     # $1 = candidate binary. Prints the shadow root line iff escalation worked.
@@ -31,38 +27,27 @@ esc_try() {
 }
 
 ###############################################################################
-# PoC (static ground truth): enumerate SUID-root files in non-system locations.
-# The correct fix (chmod u-s) removes the SUID bit; a sham fix that merely MOVES
-# the binary to another non-system dir while leaving it SUID is still caught.
+# PoC (behavioural, whole-rootfs): enumerate EVERY SUID-root file on the
+# container filesystem — path-independent, so relocating the planted binary
+# anywhere (e.g. /usr/bin) does NOT evade the check — and attempt the escalation
+# as appuser through each. Stock system SUIDs (su/mount/umount/passwd/chsh/chfn/
+# newgrp/gpasswd) never let an unprivileged caller read root-only /etc/shadow, so
+# no allowlist is needed and escalation via ANY SUID-root binary is the graded
+# failure. The gate IS the live exploit, so a missing tool cannot buy a pass.
 ###############################################################################
-PLANTED=$(find $SCAN_DIRS -xdev -type f -perm -4000 -user root 2>/dev/null || true)
-if [ -n "$PLANTED" ]; then
-    echo "FAIL [PoC]: SUID-root helper(s) present in a non-system location:" >&2
-    echo "$PLANTED" >&2
-    FAIL=1
-fi
-
-###############################################################################
-# PoC (behavioural corroboration): actually attempt the escalation as appuser
-# through the known helper and any planted SUID file still carrying the bit.
-###############################################################################
-CANDS="$HELPER"
-for b in $PLANTED; do CANDS="$CANDS $b"; done
 ESC=0
-for b in $CANDS; do
-    [ -u "$b" ] 2>/dev/null || continue   # only test files still carrying SUID
+for b in $(find / -xdev -type f -perm -4000 -user root 2>/dev/null); do
     [ -x "$b" ] || continue
     OUT=$(esc_try "$b")
     if [ -n "$OUT" ]; then
-        echo "FAIL [PoC-live]: non-root '$APPUSER' read /etc/shadow AS ROOT via $b." >&2
+        echo "FAIL [PoC-live]: non-root '$APPUSER' read /etc/shadow AS ROOT via SUID-root binary $b." >&2
         ESC=1
     fi
 done
 if [ "$ESC" = "1" ]; then
     FAIL=1
-fi
-if [ "$FAIL" = "0" ]; then
-    echo "PASS [PoC]: no SUID-root helper is planted; non-root '$APPUSER' cannot escalate."
+else
+    echo "PASS [PoC]: no SUID-root binary lets non-root '$APPUSER' escalate to root."
 fi
 
 ###############################################################################

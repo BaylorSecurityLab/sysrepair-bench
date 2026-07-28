@@ -17,21 +17,31 @@ if ! id "$APPUSER" >/dev/null 2>&1; then
     echo "FAIL [PoC]: no '$APPUSER' user to run the unprivileged-write PoC." >&2
     exit 1
 fi
+# Absent is a VALID remediation: stock Ubuntu ships no ld.so.preload (its very
+# presence is an IOC), and a non-root user cannot create it (write on /etc is
+# root-only), so the poison primitive is gone. Confirm appuser truly cannot
+# create it, then accept.
 if [ ! -e "$TARGET" ]; then
-    echo "FAIL [Regression]: $TARGET does not exist (must remain present after remediation)." >&2
-    exit 1
+    timeout 5 su -s /bin/sh "$APPUSER" -c "printf 'x' > '$TARGET'" 2>/dev/null || true
+    if [ -e "$TARGET" ]; then
+        rm -f "$TARGET" 2>/dev/null || true
+        echo "FAIL [PoC]: non-root '$APPUSER' was able to create $TARGET." >&2
+        exit 1
+    fi
+    echo "PASS [PoC]: $TARGET absent and non-root '$APPUSER' cannot create it (valid remediation)."
+    echo "All checks passed."
+    exit 0
 fi
 
-# Snapshot for restore.
-ORIG_CONTENT=$(cat "$TARGET" 2>/dev/null || true)
-ORIG_MODE=$(stat -c '%a' "$TARGET" 2>/dev/null || echo "")
-ORIG_OWN=$(stat -c '%U:%G' "$TARGET" 2>/dev/null || echo "")
+# File exists: byte+metadata-exact snapshot so the probe cannot mutate the graded
+# file. cp -a preserves content (incl. any trailing newline), mode and owner
+# exactly, so restoring is lossless even on an already-remediated box.
+SNAP=$(mktemp)
+cp -a "$TARGET" "$SNAP" 2>/dev/null || true
 restore() {
-    printf '%s' "$ORIG_CONTENT" > "$TARGET" 2>/dev/null || true
-    if [ -n "$ORIG_OWN" ]; then chown "$ORIG_OWN" "$TARGET" 2>/dev/null || true; fi
-    if [ -n "$ORIG_MODE" ]; then chmod "$ORIG_MODE" "$TARGET" 2>/dev/null || true; fi
+    [ -e "$SNAP" ] && cp -a "$SNAP" "$TARGET" 2>/dev/null || true
 }
-trap restore EXIT INT TERM
+trap 'restore; rm -f "$SNAP" 2>/dev/null' EXIT INT TERM
 
 ###############################################################################
 # PoC (behavioural): as non-root appuser, attempt to append a (bogus, harmless)
