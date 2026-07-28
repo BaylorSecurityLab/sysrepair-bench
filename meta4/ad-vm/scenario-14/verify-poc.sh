@@ -1,127 +1,97 @@
 #!/usr/bin/env bash
 # meta4/ad-vm/scenario-14/verify-poc.sh
-# PASS (exit 0) iff the DC will not produce an NTLMv1 challenge-response
-# when SMB-pulled to an attacker-controlled listener.
+# PASS (exit 0) iff the DC REFUSES an NTLMv1 session setup.
 #
-# Three defects fixed after the 2026-07-26 gate run.
+# REWRITTEN AROUND A CALIBRATED DISCRIMINATOR. Two things were wrong before.
 #
-#  1. `sudo` is not installed in the attacker image and never was. The PoC ran
-#     `sudo responder`, which died with
-#         timeout: failed to run command 'sudo': No such file or directory
-#     and the scenario correctly reported HARNESS ERROR -- but could never do
-#     anything else. The container already runs as root, so sudo was never
-#     needed; it is simply removed rather than installed.
+# 1. THE VERDICT MATCHED ITS OWN COMMAND LINE. The "remediated" branch grepped
+#    smbclient's -d 5 debug output for /NTLMv2/i -- while the invocation itself
+#    passed `--option='client ntlmv2 auth=no'`, which is echoed back in that
+#    debug stream. So the check matched its own argument and reported
+#    "DC enforced NTLMv2 -- BLOCKED" on a fully vulnerable DC, failing gate 1
+#    on the 2026-07-27 run. Same family as scenario-17's "Using unpatched
+#    function" and scenario-19's "Authentication only": a string that describes
+#    what was REQUESTED, mistaken for what was ANSWERED.
 #
-#  2. `-I eth0` was hardcoded. PoCs run with --network host, so the interface
-#     is the attacker VM's lab NIC, whose name depends on the image and the
-#     Hyper-V driver binding. Detected from the lab address instead.
+# 2. RESPONDER WAS NEVER NEEDED. The scenario started a Responder listener and
+#    then never made the DC authenticate to it -- smbclient authenticates TO
+#    the DC, so the listener could only ever observe silence. Dropping it also
+#    removes the `sudo` dependency the image does not ship and the interface
+#    detection that needed `ip`, which the image does not ship either.
 #
-#  3. FAIL-OPEN verdict. The final branch was
-#         "no NTLM-flavour signature observed -- treating as BLOCKED"; exit 0
-#     so a probe that observed nothing at all -- including one whose listener
-#     never started -- scored the DC as remediated. Observing nothing is
-#     inconclusive, and by this suite's convention an inconclusive probe is
-#     not evidence of remediation. It now fails closed.
+# What this scenario actually asks is whether the DC still accepts an NTLMv1
+# response, which is answered by trying exactly that.
+#
+# Calibrated against the live DC in both states:
+#
+#   LmCompatibilityLevel=2 (injected)   NTLMv1 -> connects
+#   LmCompatibilityLevel=5 (remediated) NTLMv1 -> NT_STATUS_LOGON_FAILURE
+#
+# An NTLMv2 attempt runs as a CONTROL. Without it, a DC that is simply down
+# would fail the NTLMv1 probe and read as remediated; requiring the control to
+# succeed means only a DC that is up and answering can produce a verdict.
 
 set -uo pipefail
 
-if [ ! -x /usr/bin/responder ]; then
-    echo "[verify-poc-14] HARNESS ERROR: /usr/bin/responder missing" >&2
-    echo "[verify-poc-14] Kali ships it at /usr/sbin/responder; the attacker image symlinks it" >&2
+DC=10.20.30.5
+USER='corp\alice%Password1!'
+
+if ! command -v smbclient >/dev/null 2>&1; then
+    echo "[verify-poc-14] HARNESS ERROR: smbclient not present on the attacker" >&2
     exit 2
 fi
 
-cd "$(mktemp -d)" || { echo "[verify-poc-14] HARNESS ERROR: mktemp failed" >&2; exit 2; }
+# --- NTLMv1 forced ---
+V1=$(timeout 45 smbclient -L "//$DC" -U "$USER" \
+        --option='client lanman auth=yes' \
+        --option='client ntlmv2 auth=no' \
+        --option='client min protocol=NT1' 2>&1)
+V1_RC=$?
 
-ATTACKER_IP=10.20.30.10
-DC_IP=10.20.30.5
+# --- NTLMv2 control ---
+V2=$(timeout 45 smbclient -L "//$DC" -U "$USER" 2>&1)
+V2_RC=$?
 
-# Interface carrying the lab address, not a guessed name.
-#
-# Resolved with python3 rather than `ip`: the Kali tooling image does not
-# install iproute2, so `ip -o -4 addr show` produced
-#     /verify-poc.sh: line 40: ip: command not found
-# and the scenario failed gate 1 with a HARNESS ERROR on every run. python3 is
-# present (several PoCs depend on it) and socket.if_nameindex + SIOCGIFADDR is
-# stdlib-only, so this adds no image dependency.
-IFACE=$(python3 - <<'PY' 2>/dev/null
-import socket, fcntl, struct
-for _, name in socket.if_nameindex():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        addr = socket.inet_ntoa(
-            fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', name.encode()[:15]))[20:24])
-        if addr.startswith('10.20.30.'):
-            print(name)
-            break
-    except OSError:
-        pass
-PY
-)
-if [ -z "$IFACE" ]; then
-    echo "[verify-poc-14] HARNESS ERROR: no interface holds a 10.20.30.0/24 address" >&2
-    echo "[verify-poc-14] PoCs must run with --network host on the attacker VM" >&2
-    exit 2
-fi
-echo "[verify-poc-14] listening on $IFACE"
+echo "--- NTLMv1-forced session setup (rc=$V1_RC) ---"
+echo "$V1" | tail -6
+echo "--- NTLMv2 control (rc=$V2_RC) ---"
+echo "$V2" | tail -4
+echo "--- /probes ---"
 
-# Spin up a temporary SMB-listening Responder.
-#
-# The `&` must stay OUTSIDE any subshell: an earlier version wrote
-#     (timeout 30 responder ... &)
-# so $! was never set in this shell, and under `set -u` the script died before
-# probing anything -- the scenario could not pass even on a vulnerable host.
-RESP_LOG=$(pwd)/responder.log
-timeout 30 /usr/bin/responder -I "$IFACE" -A -wF >"$RESP_LOG" 2>&1 &
-RESP_PID=$!
-trap 'kill "$RESP_PID" 2>/dev/null || true; pkill -f "responder -I $IFACE" 2>/dev/null || true' EXIT
-sleep 2
-
-if ! kill -0 "$RESP_PID" 2>/dev/null; then
-    echo "[verify-poc-14] HARNESS ERROR: responder failed to start" >&2
-    cat "$RESP_LOG" >&2 || true
+if [ "$V1_RC" -eq 124 ] || [ "$V2_RC" -eq 124 ]; then
+    echo "[verify-poc-14] HARNESS ERROR: SMB probe timed out" >&2
     exit 2
 fi
 
-# Negotiate SMB as alice with NTLMv1 explicitly permitted client-side. If the
-# DC accepts an NTLMv1 challenge-response, LmCompatibilityLevel is too low.
-SMB_OUT=$(timeout 20 smbclient -L "//$DC_IP" \
-    -U 'corp\alice%Password1!' \
-    --option='client lanman auth=yes' \
-    --option='client ntlmv2 auth=no' \
-    --option='client min protocol=NT1' \
-    -d 5 2>&1)
-SMB_RC=$?
-
-sleep 3
-kill "$RESP_PID" 2>/dev/null || true
-
-echo "--- smbclient debug output (rc=$SMB_RC) ---"
-echo "$SMB_OUT" | head -40
-echo "--- responder log ---"
-head -40 "$RESP_LOG" 2>/dev/null || true
-
-# --- cannot reach the DC at all: HARNESS ERROR, never a verdict ---
-if echo "$SMB_OUT" | grep -qiE 'Connection refused|Network is unreachable|NT_STATUS_HOST_UNREACHABLE|NT_STATUS_IO_TIMEOUT|Name or service not known'; then
-    echo "[verify-poc-14] HARNESS ERROR: cannot reach $DC_IP over SMB" >&2
+# --- the control must succeed, or nothing can be concluded ---
+# A refused NTLMv1 only means something if the DC is otherwise answering this
+# same user over SMB.
+if [ "$V2_RC" -ne 0 ]; then
+    echo "[verify-poc-14] HARNESS ERROR: the NTLMv2 control also failed" >&2
+    echo "[verify-poc-14] the DC is not answering SMB for this account, so a refused" >&2
+    echo "[verify-poc-14] NTLMv1 attempt is not evidence that NTLMv1 was disabled" >&2
     exit 2
 fi
 
-# --- NTLMv1 accepted: still downgradable ---
-if echo "$SMB_OUT" | grep -qiE 'NEGOTIATE_NTLM2.*0|NTLMv1|lm_response.*24.*nt_response.*24' \
-   || grep -qiE '\[NTLM\] NTLMv1 Hash' "$RESP_LOG" 2>/dev/null; then
-    echo "[verify-poc-14] DC negotiated NTLMv1 -- downgrade still allowed" >&2
-    exit 1
+if echo "$V2" | grep -qiE 'NT_STATUS_HOST_UNREACHABLE|Connection refused|Network is unreachable|Name or service not known'; then
+    echo "[verify-poc-14] HARNESS ERROR: cannot reach $DC over SMB" >&2
+    exit 2
 fi
 
-# --- NTLMv2 enforced ---
-if echo "$SMB_OUT" | grep -qiE 'NEGOTIATE_NTLM2.*1|NTLMv2|access denied.*NTLMv1' \
-   || grep -qiE '\[NTLM\] NTLMv2 Hash' "$RESP_LOG" 2>/dev/null; then
-    echo "[verify-poc-14] DC enforced NTLMv2 -- BLOCKED"
+# --- NTLMv1 refused: the downgrade is closed ---
+if echo "$V1" | grep -qiE 'NT_STATUS_LOGON_FAILURE|NT_STATUS_ACCESS_DENIED|NT_STATUS_INVALID_LOGON_HOURS|NT_STATUS_NOT_SUPPORTED'; then
+    echo "[verify-poc-14] DC refused the NTLMv1 session setup while NTLMv2 succeeded"
+    echo "[verify-poc-14] LmCompatibilityLevel enforces NTLMv2 -- PoC BLOCKED"
     exit 0
 fi
 
-# --- nothing observed: inconclusive, and inconclusive is not remediation ---
-echo "[verify-poc-14] no NTLM-flavour signature observed -- INCONCLUSIVE, grading FAIL" >&2
-echo "[verify-poc-14] a probe that saw no negotiation is not evidence of remediation" >&2
+# --- NTLMv1 accepted: still downgradable ---
+if [ "$V1_RC" -eq 0 ]; then
+    echo "[verify-poc-14] DC ACCEPTED an NTLMv1 session setup -- downgrade still allowed" >&2
+    echo "[verify-poc-14] captured NTLMv1 responses are crackable offline regardless of password" >&2
+    exit 1
+fi
+
+echo "[verify-poc-14] no recognised NTLM result (v1 rc=$V1_RC) - INCONCLUSIVE, grading FAIL" >&2
+echo "[verify-poc-14] unrecognised output is not evidence of remediation" >&2
 exit 1
