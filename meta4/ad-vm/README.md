@@ -245,29 +245,59 @@ attacker tooling image builds with every tool the scenarios invoke resolving
 **Retired but still on disk.** `Vagrantfile`, `reset.sh`,
 `capture-baselines.sh`, `provision/dc-baseline.ps1`, `provision/ca-baseline.ps1`
 and `provision/attacker-baseline.sh` are superseded and no longer referenced by
-`run-scenario.sh`. They are kept until the Hyper-V path has completed one
-successful run on real hardware, then deleted.
+`run-scenario.sh`. The condition for deleting them — one successful full run on
+real hardware — has now been met (2026-07-28, 19/19), so they can go whenever
+someone is confident nothing else references them.
 
-**Not done — and this gates publication.** An audit of all 20 scenarios found
-the graders themselves broken, independently of the hypervisor. The root cause
-was a provisioning bug: tools were installed under names and paths the
-scenarios never call, every symlink was silently skipped, and fail-open
-branches then graded "PoC BLOCKED" — a PASS on an unmodified vulnerable box.
+Note this retires VirtualBox for **this suite only**. `meta4/kernel-vm` and
+hivestorm scenarios 13 and 14 are still Vagrant/VirtualBox and have not been
+ported.
 
-Repaired so far: **03, 04, 07, 08, 09, 10, 12, 14, 19**.
+**Gate status: 19 of 19 actionable scenarios validated, 1 excluded**
+(2026-07-28, full run against the live lab).
 
-Still outstanding:
+Every scenario below passed all four proof gates on real hardware: the
+untouched vulnerable baseline is detected, the reference fix blocks the PoC
+without breaking the service, re-injecting makes it detectable again, and where
+a config-only "fix" is possible the check is not fooled by one.
 
-| Scenario | Problem |
+| Result | Scenarios |
 |---|---|
-| S01 Zerologon | `zerologon_tester` is not an impacket tool; the image now supplies it from upstream, but the scenario needs revalidation |
-| S05 Unconstrained delegation | `getST -impersonate` as a plain user is S4U2self, which requires the *requesting* account to hold delegation rights — the probe can never observe what it grades |
-| S11 ESC8 | The documented EPA remediation still returns HTTP 200 and the banner, so a correct fix is penalised |
-| S16 PrintNightmare | Grades the wrong vulnerability: `spoolsample` is MS-RPRN coercion (PrinterBug), while `threat.md` describes `RpcAddPrinterDriverEx` |
+| Validated | 02–20 (nineteen) |
+| Excluded | 01 — see [`scenario-01/INVALID.md`](scenario-01/INVALID.md) |
 
-**No score from this suite is publishable until each scenario has passed a
-negative control** — failing against an unmodified vulnerable box and passing
-against a reference fix. That fixture does not exist yet.
+scenario-01 (Zerologon) is excluded because the vulnerability **cannot be
+induced** on Server 2019 media postdating the February 2021 enforcement: the fix
+is in code, not configuration. A behavioural reframe was attempted and
+measured — the DC's responses are identical with enforcement on and off — so
+there is nothing for a check to grade. `Invoke-FullGateRun` skips any scenario
+directory containing `INVALID.md` and records `EXCLUDED` rather than a failure
+nobody can act on.
+
+**How the graders got here.** An audit found the graders broken independently of
+the hypervisor, and the gates found considerably more once they could run at
+all. The recurring shapes, all now fixed:
+
+- **Fixtures that never executed.** `Test-ADObject` does not exist (07/08/09);
+  `netsh -f` needs an `rpc filter` prefix and `netsh rpc filter shutdown`
+  deletes nothing (17); an undefined LAPS attribute raises a *terminating*
+  error `-ErrorAction SilentlyContinue` cannot suppress (19). An inject that
+  does nothing is indistinguishable from one that works whenever the baseline
+  already matches — only gate 3 separates them.
+- **Fail-open verdicts.** A crashed probe, an uncracked password, a missing
+  `sudo`, or a `grep` that found nothing all reported "BLOCKED" (03/14/15/18).
+- **Denials the check did not recognise.** The most common single defect:
+  `CERTSRV_E_UNSUPPORTED_CERT_TYPE`, a certificate issued to the requester
+  instead of the target, "not allowed to set the password" — all of them the
+  remediation working (07–10, 20).
+- **Requested mistaken for answered.** `Using unpatched function` (17),
+  `Authentication only` (19) and a `client ntlmv2 auth=no` option echoed into
+  debug output (14) were each read as results.
+- **Probes pointed at the wrong host.** certipy sent enrollment to `-dc-ip`,
+  which does not run CertSvc (07–10); LAPS was tested against the CA (19).
+
+Each fix is recorded in the commit that made it, with the captured output that
+proved it.
 
 ## Contract for scorer integration
 
