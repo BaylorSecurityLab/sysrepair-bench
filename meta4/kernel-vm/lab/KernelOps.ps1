@@ -100,9 +100,20 @@ function Restore-KernelBaseline {
 
 
 function Get-KernelIpAddress {
-    (Get-VMNetworkAdapter -VMName $script:VmName -ErrorAction SilentlyContinue).IPAddresses |
-        Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -ne '127.0.0.1' } |
-        Select-Object -First 1
+    <#
+    .SYNOPSIS
+    The guest's lab address. Fixed, not discovered.
+
+    .DESCRIPTION
+    Discovery via Get-VMNetworkAdapter's IPAddresses depends on the Key-Value
+    Pair integration service, whose daemon (linux-cloud-tools-virtual) is absent
+    from stock Ubuntu cloud images -- KVP reports "No Contact" and the list comes
+    back empty, which is exactly how the first build appeared to hang. The lab
+    NIC is pinned to a known address, so this needs nothing from the guest.
+    #>
+    if (-not (Test-KernelVmExists)) { return $null }
+    if ((Get-VM -Name $script:VmName).State -ne 'Running') { return $null }
+    return $script:GuestIp
 }
 
 
@@ -198,6 +209,78 @@ function Get-KernelSshConfig {
         GuestIp      = (Get-KernelIpAddress)
         VmName       = $script:VmName
     } | ConvertTo-Json -Compress
+}
+
+
+function Copy-KernelScenarios {
+    <#
+    .SYNOPSIS
+    Replacement for the Vagrant `synced_folder "..", "/meta4"`.
+
+    .DESCRIPTION
+    Hyper-V has no synced-folder equivalent, so the scenario trees are copied in
+    over SSH instead. Deliberately a COPY, not a live mount: the Vagrant share
+    let a privileged scenario container write back into the host checkout, and
+    these scenarios run --privileged specifically to exercise kernel LPEs.
+
+    Only the directories asked for are copied, so a full-suite sync does not drag
+    ~300 scenarios onto the guest.
+    #>
+    [CmdletBinding()]
+    param([string[]] $Scenario = @('scenario-19','scenario-21','scenario-22','scenario-117'))
+
+    $ip = Get-KernelIpAddress
+    if (-not $ip) { throw 'Copy-KernelScenarios: VM has no IPv4 address.' }
+    $meta4 = Split-Path -Parent (Split-Path -Parent $PSCommandPath)   # ...\meta4
+    $target = "$($script:GuestUser)@$ip"
+    $sshArgs = @('-i', $script:KeyPath, '-o', 'StrictHostKeyChecking=no',
+                 '-o', 'UserKnownHostsFile=/dev/null', '-o', 'BatchMode=yes')
+
+    ssh @sshArgs $target 'sudo mkdir -p /meta4 && sudo chown $(id -u):$(id -g) /meta4' | Out-Null
+    foreach ($s in $Scenario) {
+        $src = Join-Path $meta4 $s
+        if (-not (Test-Path $src)) { throw "Copy-KernelScenarios: no such scenario '$src'" }
+        scp @sshArgs -r $src "${target}:/meta4/" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Copy-KernelScenarios: scp of $s failed ($LASTEXITCODE)" }
+        Write-Host "[kernel] copied $s -> /meta4/$s"
+    }
+}
+
+
+function Invoke-KernelScenarioTest {
+    <#
+    .SYNOPSIS
+    Build and run one scenario's verify.sh inside the VM, returning its exit code.
+
+    .DESCRIPTION
+    Pre-remediation, verify.sh is EXPECTED TO FAIL (non-zero) on a vulnerable
+    host -- that failure is the proof the CVE actually reproduces on this
+    kernel. A pass before remediation means the scenario is not exercising
+    anything, which is the silent-failure mode the pinned ABI exists to prevent.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Scenario)
+
+    $ip = Get-KernelIpAddress
+    if (-not $ip) { throw 'Invoke-KernelScenarioTest: VM has no IPv4 address.' }
+    $tag = ($Scenario -replace '[^a-z0-9]', '')
+    $remote = @"
+set -e
+cd /meta4
+sudo docker build -q -t $tag $Scenario >/dev/null
+set +e
+sudo docker run --rm --privileged $tag bash /verify.sh 2>&1 | tail -20
+echo "__EXIT__=`${PIPESTATUS[0]}"
+"@
+    $out = ssh -i $script:KeyPath -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
+               -o BatchMode=yes "$($script:GuestUser)@$ip" $remote 2>&1
+    $code = -1
+    if ($out -match '__EXIT__=(\d+)') { $code = [int]$Matches[1] }
+    [pscustomobject]@{
+        Scenario = $Scenario
+        ExitCode = $code
+        Output   = (($out | Where-Object { $_ -notmatch '__EXIT__=' }) -join "`n")
+    }
 }
 
 

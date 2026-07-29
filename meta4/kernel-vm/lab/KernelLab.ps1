@@ -17,11 +17,28 @@ GameOverlay fix (ABI 75) and the nf_tables fix (ABI 97). If the VM boots anythin
 >= 75 the scenarios silently stop being exploitable and verify.sh "passes" for
 the wrong reason -- so provision.sh hard-fails rather than continue.
 
-NETWORK LIFECYCLE, copied from New-AttackerVM: the bake needs the internet (apt,
-Docker's repo), but the lab segment SRB-Kernel is Internal with no route out. So
-the VM is created on SRB-Build (External), provisioned, and only then moved to
-SRB-Kernel. Building directly on the Internal switch makes apt fail in ways
-cloud-init reports only in the guest log.
+NETWORKING. Two NICs, on purpose:
+
+  eth0 -> 'Default Switch'  Hyper-V's NAT switch. DHCP + a route out for apt and
+                            Docker's repo during the bake.
+  eth1 -> SRB-Kernel        Internal, static 10.20.40.5. Always reachable from
+                            the host, so nothing depends on guest tooling.
+
+The first draft baked on SRB-Build (External) and moved the NIC afterwards,
+copying New-AttackerVM. That does not work on this host: SRB-Build is bridged to
+a *Wi-Fi* adapter, and Hyper-V External switches over wireless do not get the AP
+to accept the guest's MAC, so the guest never gets DHCP and apt hangs with no
+diagnostic. The NAT switch has no such problem.
+
+Nor can host-side IP discovery use Get-VMNetworkAdapter's IPAddresses: that is
+reported by the Key-Value Pair integration service, whose daemon
+(linux-cloud-tools-virtual) is absent from stock Ubuntu cloud images -- KVP shows
+"No Contact" and the list is empty. Hence the fixed address on eth1. The KVP
+package is installed anyway so the field works for anyone looking later.
+
+cloud-init matches the two NICs BY MAC, not by name: with two adapters, kernel
+naming (eth0/eth1 vs ens*/enp*) is not guaranteed stable, and a name glob would
+apply one config to both.
 
 .EXAMPLE
     . .\KernelLab.ps1
@@ -35,7 +52,7 @@ $script:KernelAbi       = 25
 $script:KernelVersion   = "5.15.0-$($script:KernelAbi)-generic"
 $script:CloudImage      = 'C:\LabSources\ISOs\jammy-server-cloudimg-amd64.img'
 $script:CloudImageSha   = '63dd101826bf6f45c74c4c2e0e0872cfeec4232cb1afcb8aeef8bc16f6c3b1e0'
-$script:BuildSwitch     = 'SRB-Build'
+$script:BuildSwitch     = 'Default Switch'   # NAT; External-over-WiFi does not work
 $script:LabSwitch       = 'SRB-Kernel'
 $script:GuestUser       = 'vagrant'   # kept: run.py's docker-context contract
 $script:GuestIp         = '10.20.40.5'
@@ -136,10 +153,18 @@ function New-KernelSeedIso {
     pinned kernel. It is installed as a systemd oneshot that disables itself.
     #>
     param([Parameter(Mandatory)][string] $IsoPath,
-          [Parameter(Mandatory)][string] $PublicKey)
+          [Parameter(Mandatory)][string] $PublicKey,
+          [Parameter(Mandatory)][string] $NatMac,
+          [Parameter(Mandatory)][string] $LabMac)
 
-    $stage1 = Get-Content (Join-Path $script:ScenarioDir 'install-old-kernel.sh') -Raw
-    $stage2 = Get-Content (Join-Path $script:ScenarioDir 'provision.sh') -Raw
+    # Read from disk, never inlined here. This is a DOUBLE-QUOTED here-string, so
+    # PowerShell would interpolate any $(...) or ${...} a shell script contains --
+    # an inlined script with $(dpkg-query ...) and || is a parse error, not a
+    # runtime surprise. Reading the file and splicing the finished string keeps
+    # shell syntax out of PowerShell's parser entirely.
+    $stage1  = Get-Content (Join-Path $script:ScenarioDir 'install-old-kernel.sh') -Raw
+    $stage1b = Get-Content (Join-Path $script:ScenarioDir 'harden-boot.sh') -Raw
+    $stage2  = Get-Content (Join-Path $script:ScenarioDir 'provision.sh') -Raw
     $indent = { param($t) ($t -split "`r?`n" | ForEach-Object { "      $_" }) -join "`n" }
 
     $userData = @"
@@ -154,6 +179,11 @@ users:
       - $PublicKey
 ssh_pwauth: false
 package_update: true
+packages:
+  # Provides hv_kvp_daemon. Without it Hyper-V's Key-Value Pair service reports
+  # "No Contact" and Get-VMNetworkAdapter returns no IPAddresses. Nothing here
+  # depends on that (eth1 has a fixed address) but it makes the VM introspectable.
+  - linux-cloud-tools-virtual
 
 write_files:
   - path: /usr/local/sbin/stage1-install-old-kernel.sh
@@ -164,6 +194,11 @@ $(& $indent $stage1)
     permissions: '0755'
     content: |
 $(& $indent $stage2)
+  - path: /usr/local/sbin/stage1b-harden-boot.sh
+    permissions: '0755'
+    content: |
+$(& $indent $stage1b)
+
   - path: /etc/systemd/system/srb-kernel-stage2.service
     permissions: '0644'
     content: |
@@ -184,6 +219,7 @@ $(& $indent $stage2)
 runcmd:
   - [ systemctl, enable, srb-kernel-stage2.service ]
   - [ /bin/bash, /usr/local/sbin/stage1-install-old-kernel.sh ]
+  - [ /bin/bash, /usr/local/sbin/stage1b-harden-boot.sh ]
 
 power_state:
   mode: reboot
@@ -197,25 +233,38 @@ instance-id: meta4-kernel-001
 local-hostname: meta4-kernel
 "@
 
-    # BOTH dhcp4 and a static address, deliberately. The bake runs on SRB-Build
-    # (External, has DHCP and a route out for apt); the VM then moves to
-    # SRB-Kernel (Internal, no DHCP server) where only the static address works.
-    # Carrying both means one config survives the move -- DHCP simply stops
-    # being answered and the static address remains.
+    # Matched BY MAC: with two NICs, kernel naming (eth0/eth1 vs ens*/enp*) is
+    # not guaranteed stable and a name glob would apply one config to both.
+    #
+    # nat: DHCP + default route, for apt during the bake.
+    # lab: fixed address on the Internal switch, the only thing host-side code
+    #      relies on. `optional: true` stops systemd-networkd-wait-online
+    #      blocking boot for ~2 min once the NAT NIC is later disconnected.
     #
     # This must be network-config, not a netplan file dropped via write_files +
     # `netplan apply` in runcmd: that rewrites config after the interface is
     # already up, and the lab address never comes up
     # (see meta4/ad-vm/lab/New-AttackerVM.ps1:137-145).
+    # LOWERCASE MACs. netplan/systemd match `macaddress` case-sensitively; an
+    # uppercase literal matches nothing, both interfaces stay unconfigured, and
+    # the guest boots with no network at all -- which looks identical to "the VM
+    # is hung" from the host (heartbeat OK, no ARP, no lease). Cost one build.
+    #
+    # No set-name: renaming buys nothing here and is another way for the match
+    # to fail. Names are irrelevant since nothing addresses them by name.
     $networkConfig = @"
 version: 2
 ethernets:
-  eth0:
+  nat:
     match:
-      name: "e*"
+      macaddress: "$($NatMac.ToLower())"
     dhcp4: true
-    dhcp4-overrides:
-      optional: true
+    optional: true
+  lab:
+    match:
+      macaddress: "$($LabMac.ToLower())"
+    dhcp4: false
+    optional: true
     addresses:
       - $($script:GuestCidr)
 "@
@@ -261,59 +310,137 @@ ethernets:
 }
 
 
-function New-KernelVm {
-    param([Parameter(Mandatory)][string] $VhdxPath,
-          [Parameter(Mandatory)][string] $IsoPath)
+# Static MACs. Hyper-V only assigns a dynamic MAC at first start, which is after
+# the seed ISO has to exist -- and cloud-init matches interfaces by MAC. Fixing
+# them here removes the ordering problem and makes rebuilds reproducible.
+$script:NatMac = '00:15:5D:40:05:01'
+$script:LabMac = '00:15:5D:40:05:02'
 
-    if (Get-VM -Name $script:KernelVmName -ErrorAction SilentlyContinue) {
-        Write-Host "[kernel] removing existing $($script:KernelVmName)"
-        Stop-VM -Name $script:KernelVmName -TurnOff -Force -ErrorAction SilentlyContinue
-        Remove-VM -Name $script:KernelVmName -Force
-    }
+
+function Remove-KernelVm {
+    <#
+    .SYNOPSIS
+    Tear down any existing VM. MUST run before the VHDX is rewritten.
+
+    .DESCRIPTION
+    A running VM holds an exclusive handle on its VHDX, so converting the cloud
+    image first fails with "the process cannot access the file ... because it is
+    being used by another process". Removing the VM is therefore the first step
+    of a rebuild, not part of VM creation.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-VM -Name $script:KernelVmName -ErrorAction SilentlyContinue)) { return }
+    Write-Host "[kernel] removing existing $($script:KernelVmName)"
+    Stop-VM -Name $script:KernelVmName -TurnOff -Force -ErrorAction SilentlyContinue
+    # Checkpoints keep their own differencing disks open; drop them first or the
+    # VHDX stays locked after the VM is gone.
+    Get-VMSnapshot -VMName $script:KernelVmName -ErrorAction SilentlyContinue |
+        Remove-VMSnapshot -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Remove-VM -Name $script:KernelVmName -Force
+    Start-Sleep -Seconds 2
+}
+
+
+function New-KernelVm {
+    param([Parameter(Mandatory)][string] $VhdxPath)
+
+    Remove-KernelVm
 
     # Gen 2 = UEFI. Ubuntu cloud images boot it, but Hyper-V's default secure
     # boot template is the Microsoft one and rejects shim -- use the UEFI CA.
-    $vm = New-VM -Name $script:KernelVmName -Generation 2 `
-                 -MemoryStartupBytes (4GB) -VHDPath $VhdxPath -SwitchName $script:BuildSwitch
+    New-VM -Name $script:KernelVmName -Generation 2 `
+           -MemoryStartupBytes (4GB) -VHDPath $VhdxPath -SwitchName $script:BuildSwitch | Out-Null
     Set-VM -Name $script:KernelVmName -ProcessorCount 2 -AutomaticCheckpointsEnabled $false
     Set-VMFirmware -VMName $script:KernelVmName -SecureBootTemplate 'MicrosoftUEFICertificateAuthority'
-    Add-VMDvdDrive -VMName $script:KernelVmName -Path $IsoPath
-    Set-VMFirmware -VMName $script:KernelVmName -FirstBootDevice (Get-VMHardDiskDrive -VMName $script:KernelVmName)
-    Write-Host "[kernel] created $($script:KernelVmName) on $($script:BuildSwitch)"
-    return $vm
+
+    # NIC 1 (created with the VM) = NAT; NIC 2 = the isolated lab segment.
+    Get-VMNetworkAdapter -VMName $script:KernelVmName |
+        Set-VMNetworkAdapter -StaticMacAddress ($script:NatMac -replace ':', '')
+    Add-VMNetworkAdapter -VMName $script:KernelVmName -SwitchName $script:LabSwitch `
+                         -StaticMacAddress ($script:LabMac -replace ':', '')
+
+    Write-Host "[kernel] created $($script:KernelVmName): nat=$($script:BuildSwitch) lab=$($script:LabSwitch)"
+}
+
+
+function Invoke-KernelSsh {
+    <#
+    .SYNOPSIS
+    Run a command in the guest. Never throws; returns exit code + output.
+
+    .DESCRIPTION
+    Exists because of a PowerShell 5.1 trap: with $ErrorActionPreference='Stop',
+    anything a NATIVE command writes to stderr is wrapped in an ErrorRecord and
+    becomes a TERMINATING error. A polling loop that ssh's into a guest which is
+    still booting therefore dies on the first "Connection timed out" instead of
+    retrying -- which is exactly how the first rebuild failed. Pinning the
+    preference to Continue for the duration of the call is the fix.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Command,
+          [int] $ConnectTimeout = 5)
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & ssh -i $script:KeyPath -o StrictHostKeyChecking=no `
+                     -o UserKnownHostsFile=/dev/null -o BatchMode=yes `
+                     -o ConnectTimeout=$ConnectTimeout `
+                     "$($script:GuestUser)@$($script:GuestIp)" $Command 2>&1
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output   = (($out | ForEach-Object { "$_" }) -join "`n").Trim()
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
 }
 
 
 function Wait-KernelProvisioned {
     <#
     .SYNOPSIS
-    Block until stage 2 has run. Reboot happens mid-flight, so poll the marker.
+    Block until stage 2 has run. A reboot happens mid-flight, so poll the marker
+    rather than assuming a single boot.
     #>
     param([int] $TimeoutMinutes = 40)
 
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     Write-Host "[kernel] waiting for provisioning (up to $TimeoutMinutes min; two boots)..."
+    $lastNote = Get-Date
     while ((Get-Date) -lt $deadline) {
-        $ip = Get-KernelIpAddress
-        if ($ip) {
-            $probe = ssh -i $script:KeyPath -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-                         -o ConnectTimeout=5 -o BatchMode=yes "$($script:GuestUser)@$ip" `
-                         'test -f /var/lib/srb-kernel-ready && uname -r' 2>$null
-            if ($LASTEXITCODE -eq 0 -and $probe) {
-                Write-Host "[kernel] provisioned; running kernel $probe"
-                return $probe.Trim()
-            }
+        $r = Invoke-KernelSsh -Command 'test -f /var/lib/srb-kernel-ready && uname -r'
+        if ($r.ExitCode -eq 0 -and $r.Output) {
+            Write-Host "[kernel] provisioned; running kernel $($r.Output)"
+            return $r.Output
+        }
+        if (((Get-Date) - $lastNote).TotalMinutes -ge 2) {
+            $reach = (Invoke-KernelSsh -Command 'true').ExitCode -eq 0
+            Write-Host ("[kernel] still provisioning... ssh={0}" -f $(if ($reach) { 'up, stage2 pending' } else { 'not up yet' }))
+            $lastNote = Get-Date
         }
         Start-Sleep -Seconds 20
     }
-    throw "Wait-KernelProvisioned: timed out after $TimeoutMinutes min. Check /var/log/srb-kernel-stage2.log in the guest."
+    throw "Wait-KernelProvisioned: timed out after $TimeoutMinutes min. Check /var/log/srb-kernel-stage2.log and /var/log/cloud-init-output.log in the guest."
 }
 
 
 function Get-KernelIpAddress {
-    (Get-VMNetworkAdapter -VMName $script:KernelVmName -ErrorAction SilentlyContinue).IPAddresses |
-        Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -ne '127.0.0.1' } |
-        Select-Object -First 1
+    <#
+    .SYNOPSIS
+    The guest's lab address. Fixed, not discovered.
+
+    .DESCRIPTION
+    Discovery via Get-VMNetworkAdapter's IPAddresses depends on the Key-Value
+    Pair integration service, whose daemon is absent from stock Ubuntu cloud
+    images -- KVP reports "No Contact" and the list is empty, which is exactly
+    how the first build of this VM appeared to hang. eth1 is pinned to a known
+    address instead, so this needs nothing from the guest.
+    #>
+    return $script:GuestIp
 }
 
 
@@ -344,14 +471,22 @@ function Install-KernelLab {
     [CmdletBinding()]
     param()
 
+    # First, before anything touches the VHDX: a running VM holds it open.
+    Remove-KernelVm
+
     Test-KernelCloudImage
     $pub  = (Get-Content (New-KernelSshKey) -Raw).Trim()
     $vhdx = Join-Path $script:VhdRoot "$($script:KernelVmName).vhdx"
     $iso  = Join-Path $script:VhdRoot "$($script:KernelVmName)-cidata.iso"
 
     Convert-KernelImageToVhdx -VhdxPath $vhdx
-    New-KernelSeedIso -IsoPath $iso -PublicKey $pub
-    New-KernelVm -VhdxPath $vhdx -IsoPath $iso | Out-Null
+    New-KernelSeedIso -IsoPath $iso -PublicKey $pub `
+                      -NatMac $script:NatMac -LabMac $script:LabMac
+    New-KernelVm -VhdxPath $vhdx
+
+    Add-VMDvdDrive -VMName $script:KernelVmName -Path $iso
+    Set-VMFirmware -VMName $script:KernelVmName `
+                   -FirstBootDevice (Get-VMHardDiskDrive -VMName $script:KernelVmName)
 
     Start-VM -Name $script:KernelVmName
     $running = Wait-KernelProvisioned
@@ -361,8 +496,13 @@ function Install-KernelLab {
     # cloud-init datasource from re-running on later boots.
     Get-VMDvdDrive -VMName $script:KernelVmName | Remove-VMDvdDrive
 
-    Write-Host "[kernel] moving NIC to $($script:LabSwitch)"
-    Connect-VMNetworkAdapter -VMName $script:KernelVmName -SwitchName $script:LabSwitch
+    # Cut the route out. The scenarios run privileged containers; they have no
+    # business reaching the internet once provisioning is done. The lab NIC
+    # (fixed address) is untouched, so host-side access is unaffected.
+    Write-Host '[kernel] disconnecting the NAT NIC; lab segment only from here'
+    Get-VMNetworkAdapter -VMName $script:KernelVmName |
+        Where-Object { $_.MacAddress -eq ($script:NatMac -replace ':', '') } |
+        Disconnect-VMNetworkAdapter
 
     Checkpoint-VM -Name $script:KernelVmName -SnapshotName 'baseline'
     Write-Host '[kernel] baseline checkpoint taken'
