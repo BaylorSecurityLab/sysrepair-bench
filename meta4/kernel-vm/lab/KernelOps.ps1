@@ -299,7 +299,11 @@ function Copy-KernelScenarios {
     ~300 scenarios onto the guest.
     #>
     [CmdletBinding()]
-    param([string[]] $Scenario = @('scenario-19','scenario-21','scenario-22','scenario-117'))
+    # THREE scenarios, not four. scenario-19 (Dirty Pipe) moved to
+    # meta4/dirtypipe-vm: CVE-2022-0847 is already fixed in 5.15.0-25, so on this
+    # VM it could only ever be graded in compensating-control mode. It is
+    # exercised as a real exploit on that VM's 5.13.0-27 kernel instead.
+    param([string[]] $Scenario = @('scenario-21','scenario-22','scenario-117'))
 
     $ip = Get-KernelIpAddress
     if (-not $ip) { throw 'Copy-KernelScenarios: VM has no IPv4 address.' }

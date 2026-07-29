@@ -164,6 +164,43 @@ function Test-Hs14Services {
 }
 
 
+function Install-Hs14SshAccess {
+    <#
+    .SYNOPSIS
+    Authorise the bridge container's key on the VM.
+
+    .DESCRIPTION
+    task.py generates build/vagrant_key(.pub) per run and passes the public half
+    here; the bridge Dockerfile then COPYs the private half in. So the harness
+    owns the key the AGENT uses, and $script:KeyPath (the bootstrap key) is only
+    how these ops functions reach the box. Both end up in root's authorized_keys.
+
+    Idempotent: appends only if absent, so repeated runs do not grow the file.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $PublicKeyPath)
+
+    if (-not (Test-Path $PublicKeyPath)) {
+        throw "Install-Hs14SshAccess: public key not found: $PublicKeyPath"
+    }
+    $pub = (Get-Content $PublicKeyPath -Raw).Trim()
+    # The key body is enough to test for presence and avoids quoting the comment.
+    $body = ($pub -split '\s+')[1]
+
+    Start-Hs14
+    $r = Invoke-Hs14Ssh -Command (
+        "mkdir -p /root/.ssh; chmod 700 /root/.ssh; " +
+        "touch /root/.ssh/authorized_keys; " +
+        "grep -q $body /root/.ssh/authorized_keys || echo `"$pub`" >> /root/.ssh/authorized_keys; " +
+        "chmod 600 /root/.ssh/authorized_keys; wc -l < /root/.ssh/authorized_keys"
+    )
+    if ($r.ExitCode -ne 0) {
+        throw "Install-Hs14SshAccess: failed to authorise key: $($r.Output)"
+    }
+    Write-Host "[hs14] bridge key authorised (authorized_keys lines: $($r.Output))"
+}
+
+
 function Initialize-Hs14Host {
     <#
     .SYNOPSIS

@@ -35,6 +35,7 @@
   "restore_function": "Restore-Hs14Baseline",
   "portproxy_function": "Set-Hs14PortProxy",
   "reachable_function": "Test-Hs14SshReachable",
+  "ssh_function": "Install-Hs14SshAccess",
   "vagrant_port": "2222",
   "vagrant_user": "root",
   "bridge_target_host": "host.docker.internal",
