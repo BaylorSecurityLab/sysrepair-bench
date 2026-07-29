@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Marks meta4/dirtypipe-vm as a Hyper-V-provisioned Docker HOST. run.py looks",
+    "for lab/hyperv.json under a `hyperv_vm:`/`vagrant_vm:` preset target and",
+    "drives these PowerShell entry points instead of `vagrant up`.",
+    "",
+    "WHY A SECOND KERNEL VM. Dirty Pipe (CVE-2022-0847) affects",
+    "5.8 <= k < 5.15.25 / 5.13.0-28 / 5.10.102. meta4-kernel pins 5.15.0-25,",
+    "which is 22.04 GA and ALREADY carries the fix -- so meta4/scenario-19 can",
+    "only be graded there in compensating-control mode (chattr +i on the SUID",
+    "marker), never as a real exploit. 20.04 HWE 5.13.0-27 is the last ABI before",
+    "USN-5317-1 landed the fix in -28, so the true kernel path is reachable here.",
+    "",
+    "Shares the SRB-Kernel Internal switch with meta4-kernel but takes",
+    "10.20.40.6 and host port 2225, so both VMs can be up at once.",
+    "",
+    "Secure Boot is OFF, deliberately: Ubuntu's shim revokes superseded signed",
+    "kernels to prevent exactly the downgrade this VM performs on purpose."
+  ],
+  "ops_script": "lab/DirtyPipeOps.ps1",
+  "build_script": "lab/DirtyPipeLab.ps1",
+  "vm_name": "meta4-dirtypipe",
+  "os": "linux",
+  "init_function": "Initialize-DirtyPipeHost",
+  "sshconfig_function": "Get-DirtyPipeSshConfig",
+  "restore_function": "Restore-DirtyPipeBaseline",
+  "abi_check_function": "Test-DirtyPipeAbi",
+  "sync_function": "Copy-DirtyPipeScenarios",
+  "kernel_abi": 27,
+  "kernel_version": "5.13.0-27-generic"
+}

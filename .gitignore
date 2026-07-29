@@ -77,3 +77,9 @@ testResults.xml
 meta4/ad-vm/gate-results.json
 
 gate-diagnostics.json
+
+# Hyper-V lab markers must be tracked. The blanket `*.json` rule above was
+# silently excluding them, which left task.py/run.py with nothing to key off on
+# a fresh clone -- every VM port looked like it had never been done.
+!hivestorm/*/lab/automatedlab.json
+!meta4/*/lab/hyperv.json
