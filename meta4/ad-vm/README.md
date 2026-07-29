@@ -242,12 +242,12 @@ baseline capture, and scenario dispatch with post-handoff grader staging. The
 attacker tooling image builds with every tool the scenarios invoke resolving
 *and executing*.
 
-**Retired but still on disk.** `Vagrantfile`, `reset.sh`,
-`capture-baselines.sh`, `provision/dc-baseline.ps1`, `provision/ca-baseline.ps1`
-and `provision/attacker-baseline.sh` are superseded and no longer referenced by
-`run-scenario.sh`. The condition for deleting them — one successful full run on
-real hardware — has now been met (2026-07-28, 19/19), so they can go whenever
-someone is confident nothing else references them.
+**Retired and deleted.** `Vagrantfile`, `reset.sh`, `capture-baselines.sh`,
+`provision/dc-baseline.ps1`, `provision/ca-baseline.ps1` and
+`provision/attacker-baseline.sh` were removed once the Hyper-V path completed a
+full run on real hardware (2026-07-29, 20/20). `run-scenario.sh` never
+referenced them; the remaining mentions in `lab/` and `provision/` are comments
+recording what each file superseded and why.
 
 Note this retires VirtualBox for **this suite only**. `meta4/kernel-vm` and
 hivestorm scenarios 13 and 14 are still Vagrant/VirtualBox and have not been
