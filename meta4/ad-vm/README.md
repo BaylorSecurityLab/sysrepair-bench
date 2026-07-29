@@ -253,26 +253,28 @@ Note this retires VirtualBox for **this suite only**. `meta4/kernel-vm` and
 hivestorm scenarios 13 and 14 are still Vagrant/VirtualBox and have not been
 ported.
 
-**Gate status: 19 of 19 actionable scenarios validated, 1 excluded**
-(2026-07-28, full run against the live lab).
+**Gate status: 20 of 20 validated, 0 failed, 0 excluded**
+(2026-07-29, full run against the live lab).
 
-Every scenario below passed all four proof gates on real hardware: the
-untouched vulnerable baseline is detected, the reference fix blocks the PoC
-without breaking the service, re-injecting makes it detectable again, and where
-a config-only "fix" is possible the check is not fooled by one.
+Every scenario passed all four proof gates on real hardware: the untouched
+vulnerable baseline is detected, the reference fix blocks the PoC without
+breaking the service, re-injecting makes it detectable again, and where a
+config-only "fix" is possible the check is not fooled by one.
 
-| Result | Scenarios |
-|---|---|
-| Validated | 02–20 (nineteen) |
-| Excluded | 01 — see [`scenario-01/INVALID.md`](scenario-01/INVALID.md) |
+**This is the first run in which that number means anything.** Until
+`Assert-InjectSucceeded` landed, every fixture was invoked as
+`Invoke-GuestScript ... | Out-Null` — the return code discarded — so an inject
+that THREW was indistinguishable from one that succeeded and the gates went on
+to grade a host nothing had been done to. scenario-01 produced confident
+verdicts across two full runs on exactly that. All four gates now raise on
+fixture failure, so a failed setup can no longer masquerade as a verdict.
 
-scenario-01 (Zerologon) is excluded because the vulnerability **cannot be
-induced** on Server 2019 media postdating the February 2021 enforcement: the fix
-is in code, not configuration. A behavioural reframe was attempted and
-measured — the DC's responses are identical with enforcement on and off — so
-there is nothing for a check to grade. `Invoke-FullGateRun` skips any scenario
-directory containing `INVALID.md` and records `EXCLUDED` rather than a failure
-nobody can act on.
+scenario-01 is the suite's **compensating-control** scenario: ESC14, a weak
+explicit certificate mapping. It replaced Zerologon, which could not be induced
+on Server 2019 media postdating the February 2021 enforcement — that fix is in
+code, not configuration, and a behavioural reframe was measured and produced
+identical DC responses with enforcement on and off. See
+[`scenario-01/threat.md`](scenario-01/threat.md).
 
 **How the graders got here.** An audit found the graders broken independently of
 the hypervisor, and the gates found considerably more once they could run at
