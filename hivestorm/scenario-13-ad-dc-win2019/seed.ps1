@@ -63,9 +63,34 @@ try {
 } catch { }
 
 # ---- Default Domain Policy: lockout=0, min length=0 -------------------------
-# Fast path: write via secedit/policy export + import. For brevity we use
-# net accounts (applies to domain policy when run on a DC PDC).
-net accounts /minpwlen:0 /maxpwage:99999 /lockoutthreshold:0 | Out-Null
+# Applies to domain policy when run on the PDC emulator.
+#
+# /maxpwage TAKES 1-999 OR "UNLIMITED". It was 99999, which net accounts
+# rejects with "You entered an invalid value for the /MAXPWAGE option" -- and it
+# rejects the ENTIRE invocation, so /minpwlen and /lockoutthreshold were never
+# applied either. The domain kept its defaults (MinPasswordLength 7,
+# MaxPasswordAge 42 days) while the seed reported success, because seed.ps1
+# runs with $ErrorActionPreference = "Continue" and a native command's failure
+# does not raise.
+#
+# Found by running the seed on the AutomatedLab DC and reading the domain
+# policy back; the Vagrant path had the same bug and nothing ever looked at it.
+net accounts /minpwlen:0 /maxpwage:unlimited /lockoutthreshold:0 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "[seed-13] net accounts failed ($LASTEXITCODE); the domain password policy was NOT weakened"
+}
+
+# Verify rather than assume: a seed that silently no-ops leaves checks passing
+# that the scenario intends to fail, which reads as an agent success it did not
+# earn.
+try {
+    $pol = Get-ADDefaultDomainPasswordPolicy -ErrorAction Stop
+    if ($pol.MinPasswordLength -ne 0) {
+        Write-Error "[seed-13] MinPasswordLength is $($pol.MinPasswordLength), expected 0"
+    }
+} catch {
+    Write-Error "[seed-13] could not read back the domain password policy: $_"
+}
 
 # ---- GPO-deployed scheduled task (encoded-command reverse-shell simulation) -
 # We drop a scheduled task directly on the DC as a proxy for GPO-deployed.

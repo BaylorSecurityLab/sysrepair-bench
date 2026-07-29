@@ -228,6 +228,89 @@ function Invoke-Hs13Seed {
     Write-Host '[hs13] seeded'
 }
 
+function Install-Hs13OpenSshServer {
+    <#
+    .SYNOPSIS
+        Install the OpenSSH Server capability, which needs temporary internet.
+
+    .DESCRIPTION
+        OpenSSH.Server is a Feature-on-Demand: Add-WindowsCapability fetches it
+        from Windows Update. The lab switch is INTERNAL by design and the DC has
+        no default route, so the call fails with a bare COMException that names
+        nothing useful.
+
+        This attaches the existing external build switch for the duration of the
+        install and detaches it again. The lab returns to being isolated -- an
+        AD scenario that can reach the internet is a different scenario, and
+        leaving the adapter attached would silently change what is being graded.
+
+        MUST be run BEFORE the baseline is captured. Restoring the baseline
+        resets the VM, so sshd has to be inside the snapshot; installing it
+        per-run would require internet on every run.
+    #>
+    param(
+        [string] $VMName = $script:Hs13VM,
+        [string] $BuildSwitch = 'SRB-Build',
+        [int]    $TimeoutSeconds = 600
+    )
+
+    # .ToString() ON THE GUEST. The DISM state is an enum, and PowerShell
+    # Direct serialises it to its numeric value: comparing the result against
+    # 'Installed' here yielded '4' -eq 'Installed' -> false, so a successful
+    # install reported as a failure. Convert while the enum still exists.
+    $already = Invoke-Command -VMName $VMName -Credential $script:Hs13Cred -ScriptBlock {
+        (Get-WindowsCapability -Online -Name 'OpenSSH.Server*').State.ToString()
+    }
+    if ($already -eq 'Installed') {
+        Write-Host '[hs13] OpenSSH Server already installed'
+        return
+    }
+
+    if (-not (Get-VMSwitch -Name $BuildSwitch -ErrorAction SilentlyContinue)) {
+        throw "[hs13] external switch '$BuildSwitch' not found; it is needed once to fetch the OpenSSH FoD"
+    }
+
+    $added = $false
+    try {
+        if (-not (Get-VMNetworkAdapter -VMName $VMName | Where-Object { $_.SwitchName -eq $BuildSwitch })) {
+            Add-VMNetworkAdapter -VMName $VMName -SwitchName $BuildSwitch -Name 'hs13-build'
+            $added = $true
+            Write-Host "[hs13] attached $BuildSwitch temporarily for the FoD download"
+        }
+
+        # Wait for the guest to actually get a route, not merely for the adapter
+        # to exist. DHCP on a Wi-Fi-backed external switch is not instant.
+        $deadline = (Get-Date).AddSeconds(180)
+        $online = $false
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $online = Invoke-Command -VMName $VMName -Credential $script:Hs13Cred -ScriptBlock {
+                [bool](Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+            }
+            if ($online) { break }
+        }
+        if (-not $online) { throw "[hs13] guest never obtained a default route via $BuildSwitch" }
+
+        Write-Host '[hs13] installing OpenSSH.Server (Feature on Demand)...'
+        $r = Invoke-Command -VMName $VMName -Credential $script:Hs13Cred -ScriptBlock {
+            $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' |
+                     Where-Object { $_.State -ne 'Installed' } | Select-Object -First 1
+            if ($cap) { Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+            (Get-WindowsCapability -Online -Name 'OpenSSH.Server*').State.ToString()
+        }
+        if ($r -ne 'Installed') { throw "[hs13] OpenSSH.Server state is '$r' after install" }
+        Write-Host '[hs13] OpenSSH Server installed'
+    }
+    finally {
+        if ($added) {
+            Get-VMNetworkAdapter -VMName $VMName |
+                Where-Object { $_.SwitchName -eq $BuildSwitch } |
+                Remove-VMNetworkAdapter
+            Write-Host "[hs13] detached $BuildSwitch -- lab is isolated again"
+        }
+    }
+}
+
 function Install-Hs13SshAccess {
     <#
     .SYNOPSIS
@@ -256,24 +339,29 @@ function Install-Hs13SshAccess {
 
     Wait-Hs13Ready | Out-Null
 
+    # sshd is a Feature-on-Demand and the lab is isolated, so it cannot be
+    # fetched here. Install-Hs13OpenSshServer handles the temporary external
+    # switch; calling it first makes this function work on a fresh lab instead
+    # of failing with a bare COMException from Add-WindowsCapability.
+    Install-Hs13OpenSshServer
+
     Invoke-Command -VMName $script:Hs13VM -Credential $script:Hs13Cred -ErrorAction Stop `
         -ArgumentList $pub -ScriptBlock {
         param($pub)
         $ErrorActionPreference = 'Stop'
         Import-Module ActiveDirectory
 
-        # --- domain account the bridge logs in as ---
-        $pw = ConvertTo-SecureString 'Vagrant1Bridge!' -AsPlainText -Force
-        if (-not (Get-ADUser -Filter "SamAccountName -eq 'vagrant'" -ErrorAction SilentlyContinue)) {
-            New-ADUser -Name 'vagrant' -SamAccountName 'vagrant' `
-                -AccountPassword $pw -Enabled $true -PasswordNeverExpires $true `
-                -Description 'Bridge-container SSH account (evaluation harness)'
-        } else {
-            Set-ADAccountPassword -Identity 'vagrant' -Reset -NewPassword $pw
-        }
-        if (-not (Get-ADGroupMember 'Domain Admins' | Where-Object { $_.SamAccountName -eq 'vagrant' })) {
-            Add-ADGroupMember -Identity 'Domain Admins' -Members 'vagrant'
-        }
+        # NO ACCOUNT IS CREATED. The bridge authenticates as the domain
+        # Administrator, which AutomatedLab already provisioned.
+        #
+        # A purpose-made `vagrant` domain account was tried first and sshd RESET
+        # the connection for it in every name form -- plain, UPN and DOMAIN\user
+        # -- immediately after SSH2_MSG_SERVICE_ACCEPT, while Administrator
+        # authenticated fine over the same key and the same authorized_keys
+        # file. Rather than chase a Windows OpenSSH 7.7 quirk, the scenario uses
+        # the account that works: already a domain admin with a profile, the
+        # privilege level a DC remediation needs anyway, and one less stray
+        # privileged account in a scenario that grades on unauthorized accounts.
 
         # --- OpenSSH Server ---
         $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' |

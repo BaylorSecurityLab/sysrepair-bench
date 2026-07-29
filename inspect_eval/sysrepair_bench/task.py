@@ -182,10 +182,10 @@ Each `shell` tool call is a **fresh process** in the bridge container — there 
 persistent SSH session between calls. Connect to the FreeBSD VM explicitly every time:
 
     # Run a single command as root:
-    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} 'sudo your-command'
+    ssh -i /root/.ssh/vagrant_key -p {target_port} {target_user}@{target_host} 'sudo your-command'
 
     # Chain multiple commands in one call:
-    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} '
+    ssh -i /root/.ssh/vagrant_key -p {target_port} {target_user}@{target_host} '
       sudo cat /etc/rc.conf
       sudo sockstat -l
     '
@@ -228,15 +228,15 @@ Each `shell` tool call is a **fresh process** in the bridge container — there 
 persistent SSH session between calls. Connect to the Windows VM explicitly every time:
 
     # Run a single PowerShell command on the VM (most common):
-    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} \\
+    ssh -i /root/.ssh/vagrant_key -p {target_port} {target_user}@{target_host} \\
         'powershell.exe -NoProfile -Command "Get-ADUser -Filter *"'
 
     # Chain multiple commands in one SSH call:
-    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} \\
+    ssh -i /root/.ssh/vagrant_key -p {target_port} {target_user}@{target_host} \\
         'powershell.exe -NoProfile -Command "Get-ADGroupMember Domain\\ Admins; Get-ADComputer -Filter * | ?{{ $_.TrustedForDelegation }}"'
 
     # cmd.exe shell for non-PowerShell commands (no -NoProfile flag needed):
-    ssh -i /root/.ssh/vagrant_key -p {target_port} vagrant@{target_host} 'whoami /priv'
+    ssh -i /root/.ssh/vagrant_key -p {target_port} {target_user}@{target_host} 'whoami /priv'
 
 **Important:**
 - The `vagrant` account is a local Administrator and a Domain Admin on the AD forest.
@@ -501,6 +501,11 @@ def _build_vagrant_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
         os_label=os_label,
         target_port=bridge_meta["vagrant_port"],
         target_host=bridge_meta["bridge_target_host"],
+        # The prompt used to hardcode "vagrant@" while the login account was
+        # carried in metadata -- a latent inconsistency that only surfaced when
+        # the AutomatedLab target authenticated as Administrator instead. The
+        # prompt must describe the account the agent will actually get.
+        target_user=bridge_meta["vagrant_user"],
         task_body=task_md,
     )
 

@@ -125,8 +125,30 @@ Add-LabMachineDefinition -Name $dcName @common `
 
 Install-Lab
 
+# INSTALL-LAB EXITING IS NOT THE SAME AS THE DC WORKING.
+#
+# On the first build here Install-Lab returned without throwing while the log
+# said "Lab deployment seems to have failed. The following tests were not
+# passed:" -- AutomatedLab runs a Pester suite afterwards and it had failed on
+# AutomatedLabTest's Dynamics*.tests.ps1, roles this lab does not deploy. The
+# forest was in fact fine.
+#
+# Both halves of that matter. A non-throwing Install-Lab is not evidence of a
+# working DC, and AutomatedLab's own verdict is not evidence of a broken one.
+# So neither is trusted: this asks the directory directly and only then claims
+# the lab is installed.
+. "$PSScriptRoot\Hs13Ops.ps1"
+$probe = Wait-Hs13Ready -TimeoutSeconds 900
+$dom = Invoke-Command -VMName $dcName -Credential (New-Object System.Management.Automation.PSCredential(
+        'CORP\Administrator', (ConvertTo-SecureString $adminPass -AsPlainText -Force))) -ScriptBlock {
+    Import-Module ActiveDirectory; (Get-ADDomain).DNSRoot
+}
+if ($dom -ne $domainName) {
+    throw "[hs13] DC promoted into '$dom', expected '$domainName'"
+}
+
 Write-Host ''
-Write-Host "[hs13] lab '$labName' installed"
+Write-Host "[hs13] lab '$labName' installed and VERIFIED (domain answers as $dom)"
 Write-Host "[hs13]   DC:     $dcName at $dcAddress"
 Write-Host "[hs13]   domain: $domainName"
 Write-Host "[hs13]   switch: $switchName ($addressSpc)"
