@@ -363,7 +363,7 @@ def _preflight_endpoint(cfg: dict) -> None:
     try:
         from openai import OpenAI
     except ImportError:
-        print(f"[preflight] {short}: openai SDK not installed — skipping check")
+        print(f"[preflight] {short}: openai SDK not installed - skipping check")
         return
 
     # Tunable via cfg so a slow first-byte (TLS/DNS warm-up on remote APIs
@@ -421,7 +421,7 @@ def _hyperv_ssh_config(vm_dir: Path, cfg_json: dict, ctx_name: str) -> str:
 
     init_fn = cfg_json.get("init_function", "Initialize-KernelHost")
     script = f". '{ops}'; {init_fn}"
-    print(f"[hyperv_vm] Bringing up {cfg_json['vm_name']} — restore, start, port proxy, ABI check…")
+    print(f"[hyperv_vm] Bringing up {cfg_json['vm_name']} - restore, start, port proxy, ABI check...")
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         capture_output=True, text=True,
@@ -483,7 +483,7 @@ def _ensure_vagrant_docker_host(cfg: dict) -> None:
             cwd=vm_dir, capture_output=True, text=True,
         )
         if ",running" not in status.stdout:
-            print(f"[vagrant_vm] {vm_dir.name} not running — `vagrant up` (this can take 10+ min on first run)…")
+            print(f"[vagrant_vm] {vm_dir.name} not running - `vagrant up` (this can take 10+ min on first run)...")
             subprocess.run(["vagrant", "up"], cwd=vm_dir, check=True)
 
         ssh_cfg = subprocess.run(
@@ -517,7 +517,10 @@ def _ensure_vagrant_docker_host(cfg: dict) -> None:
         capture_output=True, text=True,
     )
     if probe.returncode != 0:
-        print(f"[vagrant_vm] Creating docker context '{ctx_name}' → ssh://{ctx_name}")
+        # ASCII only. A Windows console is cp1252, and printing U+2192 there
+        # raises UnicodeEncodeError -- which killed the whole run at the point
+        # the docker context was being created, after the VM was already up.
+        print(f"[vagrant_vm] Creating docker context '{ctx_name}' -> ssh://{ctx_name}")
         subprocess.run(
             ["docker", "context", "create", ctx_name,
              "--docker", f"host=ssh://{ctx_name}",
