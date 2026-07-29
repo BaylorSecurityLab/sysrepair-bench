@@ -165,9 +165,74 @@ $acl.AddAccessRule((New-Object System.DirectoryServices.ActiveDirectoryAccessRul
     [Guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55')))
 Set-Acl "AD:$tmplDn" -AclObject $acl
 
-& certutil -config "corp-ca01.corp.local\corp-ca01-CA" -SetCAtemplates "+$LegacyTemplate" | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "[inject-01] certutil -SetCAtemplates +$LegacyTemplate returned $LASTEXITCODE"
+# PUBLISH BY WRITING THE DIRECTORY, NOT BY REMOTE certutil.
+#
+# `certutil -config <ca> -SetCAtemplates +<name>` run from the DC EXITS 0 AND
+# DOES NOTHING. Verified after a failed run: the template object was perfectly
+# well-formed (OID, revision, flags all set) while the CA's enrollment-services
+# object still listed only the eleven built-in templates, so every enrolment
+# returned CERTSRV_E_UNSUPPORTED_CERT_TYPE.
+#
+# Scenario 07/08/09 get away with the certutil form because their injects run
+# ON the CA, where it acts locally. This one runs on the DC, and a zero exit
+# code from a remote -SetCAtemplates means nothing at all.
+#
+# Publication IS the certificateTemplates attribute on
+# CN=<ca>,CN=Enrollment Services,... so writing it directly is both the real
+# mechanism and the one that can be verified afterwards.
+$caObjDn = "CN=corp-ca01-CA,CN=Enrollment Services,CN=Public Key Services,CN=Services,$configNC"
+$caObj = Get-ADObject -Identity $caObjDn -Properties certificateTemplates -Server corp-dc01 -ErrorAction Stop
+if ($caObj.certificateTemplates -notcontains $LegacyTemplate) {
+    Set-ADObject -Identity $caObjDn -Add @{ certificateTemplates = $LegacyTemplate } -Server corp-dc01
+}
+
+$caObj = Get-ADObject -Identity $caObjDn -Properties certificateTemplates -Server corp-dc01
+if ($caObj.certificateTemplates -notcontains $LegacyTemplate) {
+    throw "[inject-01] $LegacyTemplate is not in the CA's certificateTemplates after publishing"
+}
+
+# THE CA CACHES ITS TEMPLATE LIST -- publishing is not the same as serving.
+#
+# certutil reports the template published immediately, but CertSvc reads its
+# list at service start, so an enrolment moments later returns
+#   0x80094800 CERTSRV_E_UNSUPPORTED_CERT_TYPE
+# On the 2026-07-28 full run that is exactly what happened: gate 1 enrolled
+# nine seconds after this inject and was refused, so the PoC reported the
+# scenario remediated on a host where the attack path had never been built.
+#
+# It passed by hand only because the template had survived from an earlier
+# inject and the CA had restarted since -- the classic case of a fixture that
+# looks correct because the environment already happened to be in the state it
+# was supposed to create.
+#
+# So: restart CertSvc and do not return until the CA actually lists the
+# template. A fixture that cannot prove its own effect must fail, not hope.
+$caCred = New-Object System.Management.Automation.PSCredential('CORP\Administrator',
+              (ConvertTo-SecureString 'Password1!' -AsPlainText -Force))
+
+Invoke-Command -ComputerName corp-ca01 -Credential $caCred -ScriptBlock {
+    Restart-Service CertSvc -Force
+    $deadline = (Get-Date).AddSeconds(180)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        & certutil -ping 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { break }
+    }
+} | Out-Null
+
+# Confirm the CA is SERVING it, from the CA itself. `certutil -CATemplates`
+# run remotely is as unreliable as the -SetCAtemplates above, so ask locally.
+$deadline = (Get-Date).AddSeconds(180)
+$serving  = $false
+while ((Get-Date) -lt $deadline) {
+    $published = Invoke-Command -ComputerName corp-ca01 -Credential $caCred -ScriptBlock {
+        (& certutil -CATemplates 2>&1 | Out-String)
+    }
+    if ($published -match [regex]::Escape($LegacyTemplate)) { $serving = $true; break }
+    Start-Sleep -Seconds 5
+}
+if (-not $serving) {
+    throw "[inject-01] the CA is not serving $LegacyTemplate; the attack path does not exist and the scenario would grade as remediated"
 }
 
 # --- verify the inject actually took effect ---

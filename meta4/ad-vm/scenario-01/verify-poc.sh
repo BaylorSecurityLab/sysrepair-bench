@@ -125,7 +125,24 @@ fi
 
 PFX=$(ls -1 ./*.pfx 2>/dev/null | head -1 || true)
 if [ -z "$PFX" ]; then
-    if echo "$REQ" | grep -qiE 'access_denied|enrollment.*denied|CERTSRV_E_UNSUPPORTED_CERT_TYPE|template.*not found'; then
+    # CERTSRV_E_UNSUPPORTED_CERT_TYPE is a HARNESS ERROR here, not a denial.
+    #
+    # For scenarios 07-09 that message means the vulnerable template was
+    # unpublished -- the remediation. Here the legacy template is part of the
+    # SETUP, and the CA not serving it means the attack path was never built.
+    # Grading it as "blocked" reported the scenario remediated on a host where
+    # nothing had been injected, which is what failed gate 1 on the 2026-07-28
+    # run: the CA had not reloaded its template list after inject published it.
+    #
+    # Unpublishing the legacy template is also not an accepted fix for this
+    # scenario -- the legacy application depends on it -- so it must never
+    # produce a pass by this route.
+    if echo "$REQ" | grep -qiE 'CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA|template.*not found'; then
+        echo "[verify-poc-01] HARNESS ERROR: the CA is not serving the legacy template" >&2
+        echo "[verify-poc-01] the ESC14 attack path does not exist; inject did not take effect" >&2
+        exit 2
+    fi
+    if echo "$REQ" | grep -qiE 'access_denied|enrollment.*denied'; then
         echo "[verify-poc-01] alice denied enrolment in the legacy template -- PoC BLOCKED"
         exit 0
     fi

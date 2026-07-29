@@ -61,7 +61,35 @@ function Invoke-GuestScript {
     try {
         Invoke-Command -VMName $vm -Credential $script:GateCred -FilePath $ScriptPath -ErrorAction Stop | Out-Null
         return 0
-    } catch { return 1 }
+    } catch {
+        $script:LastGuestScriptError = $_.Exception.Message.Split([char]10)[0]
+        return 1
+    }
+}
+
+function Assert-InjectSucceeded {
+    <#
+    .SYNOPSIS
+        Fail loudly when an inject or fixture throws, instead of grading on.
+
+    .DESCRIPTION
+        Every call site used `Invoke-GuestScript ... | Out-Null`, which discards
+        the return code, so a fixture that threw was indistinguishable from one
+        that worked and the gates proceeded to grade a host nothing had been
+        done to.
+
+        This is the single most expensive defect class in this suite and it hid
+        here too: scenario-01 reported gate verdicts across two full runs while
+        its inject was failing to publish a certificate template. The PoC dutifully
+        reported "not vulnerable" about an attack path that had never been built.
+
+        A gate result computed after a failed setup is not a result. Raise.
+    #>
+    param([int] $Code, [string] $Phase, [string] $ScenarioId)
+    if ($Code -ne 0) {
+        $detail = if ($script:LastGuestScriptError) { $script:LastGuestScriptError } else { 'no detail captured' }
+        throw "scenario-$ScenarioId $Phase FAILED: $detail"
+    }
 }
 
 function Invoke-GuestPoc {
@@ -273,7 +301,8 @@ function Test-ScenarioGates {
                                  -Members ca,ws,attacker -ErrorAction Stop
         if ($r | Where-Object { -not $_.Ready }) { throw 'lab did not come up clean' }
     }
-    Invoke-GuestScript -Target $injectTarget -ScriptPath $injectScript | Out-Null
+    Assert-InjectSucceeded -Code (Invoke-GuestScript -Target $injectTarget -ScriptPath $injectScript) `
+                           -Phase 'inject (gate 1)' -ScenarioId $ScenarioId
     Start-Sleep -Seconds 10
 
     $poc1 = Invoke-PocGate -ScenarioDir $dir
@@ -309,7 +338,8 @@ function Test-ScenarioGates {
         $results['gate2_solvable'] = 'NO-FIXTURE'
     }
     else {
-        Invoke-GuestScript -Target $injectTarget -ScriptPath $fixScript | Out-Null
+        Assert-InjectSucceeded -Code (Invoke-GuestScript -Target $injectTarget -ScriptPath $fixScript) `
+                               -Phase 'reference-fix (gate 2)' -ScenarioId $ScenarioId
 
         # Re-gate readiness AFTER the fix, exactly as gate 1 does after inject.
         #
@@ -366,7 +396,8 @@ function Test-ScenarioGates {
         $results['gate3_sabotage'] = 'NO-FIXTURE'
     }
     else {
-        Invoke-GuestScript -Target $injectTarget -ScriptPath $injectScript | Out-Null
+        Assert-InjectSucceeded -Code (Invoke-GuestScript -Target $injectTarget -ScriptPath $injectScript) `
+                               -Phase 're-inject (gate 3)' -ScenarioId $ScenarioId
         Start-Sleep -Seconds 10
         $poc3 = Invoke-PocGate -ScenarioDir $dir
         $results['gate3_sabotage'] = ($poc3 -eq 1)
@@ -395,7 +426,8 @@ function Test-ScenarioGates {
         $results['gate4_not_restarted'] = 'NOT-APPLICABLE-OR-MISSING'
     }
     else {
-        Invoke-GuestScript -Target $injectTarget -ScriptPath $noRestartFix | Out-Null
+        Assert-InjectSucceeded -Code (Invoke-GuestScript -Target $injectTarget -ScriptPath $noRestartFix) `
+                               -Phase 'norestart fixture (gate 4)' -ScenarioId $ScenarioId
         Start-Sleep -Seconds 5
         $poc4 = Invoke-PocGate -ScenarioDir $dir
         # Config changed but service not restarted: the box is still
