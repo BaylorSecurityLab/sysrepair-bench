@@ -403,9 +403,12 @@ function Invoke-KernelSsh {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
+        # LogLevel=ERROR: ssh's "Warning: Permanently added ... known hosts"
+        # goes to stderr, which is merged into $out, so it would otherwise
+        # become the first line of a parsed result.
         $out = & ssh -i $script:KeyPath -o StrictHostKeyChecking=no `
                      -o UserKnownHostsFile=/dev/null -o BatchMode=yes `
-                     -o ConnectTimeout=$ConnectTimeout `
+                     -o LogLevel=ERROR -o ConnectTimeout=$ConnectTimeout `
                      "$($script:GuestUser)@$($script:GuestIp)" $Command 2>&1
         return [pscustomobject]@{
             ExitCode = $LASTEXITCODE
@@ -468,7 +471,7 @@ function Assert-KernelAbi {
     stop being exploitable, and verify.sh would "pass" for the wrong reason.
     #>
     param([Parameter(Mandatory)][string] $Running)
-    if ($Running -notmatch '^5\.15\.0-(\d+)-generic') {
+    if ($Running -notmatch '5\.15\.0-(\d+)-generic') {
         throw "Assert-KernelAbi: unexpected kernel '$Running'; wanted $($script:KernelVersion)"
     }
     $abi = [int]$Matches[1]

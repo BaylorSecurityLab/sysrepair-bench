@@ -30,13 +30,24 @@ apt-get install -y --no-install-recommends wget ca-certificates
 mkdir -p "$WORK"
 cd "$WORK"
 
-# Order matters: modules before the signed image, which depends on them.
 wget -q "${POOL}/linux-hwe-5.13/linux-modules-${ABI}-generic_${VER}_amd64.deb"
 wget -q "${POOL}/linux-signed-hwe-5.13/linux-image-${ABI}-generic_${VER}_amd64.deb"
 
 ls -la "$WORK"
-dpkg -i "linux-modules-${ABI}-generic_${VER}_amd64.deb"
-dpkg -i "linux-image-${ABI}-generic_${VER}_amd64.deb"
+
+# BOTH in ONE dpkg invocation. The dependency runs modules -> image
+# (linux-modules-X depends on "linux-image-X | linux-image-unsigned-X"), so
+# installing them one at a time fails whichever way round you try it: modules
+# first errors with "Package linux-image-... is not installed", and image first
+# would leave modules unconfigured. Passing both lets dpkg unpack the pair before
+# configuring either. `apt-get install` gets this right on its own, which is why
+# meta4/kernel-vm does not hit it -- only the direct-.deb path here does.
+#
+# This mattered: with `set -e`, the dpkg failure aborted stage 1, so harden-boot.sh
+# never ran and cloud-init's power_state rebooted straight back into focal's 5.4
+# GA kernel -- which is NOT vulnerable to Dirty Pipe (the bug arrived in 5.8).
+dpkg -i "linux-image-${ABI}-generic_${VER}_amd64.deb" \
+        "linux-modules-${ABI}-generic_${VER}_amd64.deb"
 apt-get -f install -y
 
 if [ ! -f "/boot/vmlinuz-${ABI}-generic" ]; then

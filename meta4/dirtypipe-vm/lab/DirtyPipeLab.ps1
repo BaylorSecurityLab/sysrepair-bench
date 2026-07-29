@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-Builds meta4-dirtypipe: Ubuntu 22.04 on Hyper-V pinned to kernel 5.13.0-27-generic,
+Builds meta4-dirtypipe: Ubuntu 20.04 on Hyper-V pinned to HWE kernel 5.13.0-27,
 with Docker, replacing the Vagrant/VirtualBox definition.
 
 .DESCRIPTION
@@ -12,7 +12,7 @@ patterns this script reuses.
 
 THE KERNEL IS THE POINT. meta4 scenarios S21 (GameOverlay, CVE-2023-2640/32629)
 and S22 (nf_tables UAF, CVE-2024-1086) run as containers INSIDE this VM so they
-share its kernel. ABI 25 (5.15.0-25, 22.04 GA, March 2022) predates the
+share its kernel. Dirty Pipe (CVE-2022-0847) affects 5.8 <= k < 5.13.0-28, so
 GameOverlay fix (ABI 75) and the nf_tables fix (ABI 97). If the VM boots anything
 >= 75 the scenarios silently stop being exploitable and verify.sh "passes" for
 the wrong reason -- so provision.sh hard-fails rather than continue.
@@ -21,7 +21,7 @@ NETWORKING. Two NICs, on purpose:
 
   eth0 -> 'Default Switch'  Hyper-V's NAT switch. DHCP + a route out for apt and
                             Docker's repo during the bake.
-  eth1 -> SRB-DirtyPipe        Internal, static 10.20.40.5. Always reachable from
+  eth1 -> SRB-Kernel        Internal, static 10.20.40.6. Always reachable from
                             the host, so nothing depends on guest tooling.
 
 The first draft baked on SRB-Build (External) and moved the NIC afterwards,
@@ -53,7 +53,7 @@ $script:DirtyPipeVersion   = "5.13.0-$($script:DirtyPipeAbi)-generic"
 $script:CloudImage      = 'C:\LabSources\ISOs\focal-server-cloudimg-amd64.img'
 $script:CloudImageSha   = '18f2977d77dfea1b74aee14533bd21c34f789139e949c57023b7364894b7e5e9'
 $script:BuildSwitch     = 'Default Switch'   # NAT; External-over-WiFi does not work
-$script:LabSwitch       = 'SRB-DirtyPipe'
+$script:LabSwitch       = 'SRB-Kernel'
 $script:GuestUser       = 'vagrant'   # kept: run.py's docker-context contract
 $script:GuestIp         = '10.20.40.6'
 $script:GuestCidr       = '10.20.40.6/24'
@@ -358,7 +358,7 @@ function New-DirtyPipeVm {
     #
     # Ubuntu's shim revokes superseded signed kernels (SBAT generation numbers,
     # and DBX for the worst cases) precisely to stop an attacker downgrading a
-    # patched machine to a vulnerable kernel. 5.15.0-25 is a March-2022 kernel
+    # patched machine to a vulnerable kernel. 5.13.0-27 is a Jan-2022 kernel
     # that current shim revokes -- which is Secure Boot working exactly as
     # designed. Booting a deliberately vulnerable kernel is this VM's whole
     # purpose, so the two goals are fundamentally incompatible.
@@ -403,9 +403,14 @@ function Invoke-DirtyPipeSsh {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
+        # LogLevel=ERROR: without it ssh prints "Warning: Permanently added ...
+        # to the list of known hosts" on first contact, and because stderr is
+        # merged into $out that warning becomes the FIRST line of the result --
+        # which broke Assert-DirtyPipeAbi's anchored version match even though
+        # the guest had booted the right kernel.
         $out = & ssh -i $script:KeyPath -o StrictHostKeyChecking=no `
                      -o UserKnownHostsFile=/dev/null -o BatchMode=yes `
-                     -o ConnectTimeout=$ConnectTimeout `
+                     -o LogLevel=ERROR -o ConnectTimeout=$ConnectTimeout `
                      "$($script:GuestUser)@$($script:GuestIp)" $Command 2>&1
         return [pscustomobject]@{
             ExitCode = $LASTEXITCODE
@@ -468,7 +473,9 @@ function Assert-DirtyPipeAbi {
     stop being exploitable, and verify.sh would "pass" for the wrong reason.
     #>
     param([Parameter(Mandatory)][string] $Running)
-    if ($Running -notmatch '^5\.15\.0-(\d+)-generic') {
+    # 5.13, not 5.15 -- this VM exists precisely because 5.15.0-25 already carries
+    # the Dirty Pipe fix. Unanchored so a stray leading line cannot break it.
+    if ($Running -notmatch '5\.13\.0-(\d+)-generic') {
         throw "Assert-DirtyPipeAbi: unexpected kernel '$Running'; wanted $($script:DirtyPipeVersion)"
     }
     $abi = [int]$Matches[1]

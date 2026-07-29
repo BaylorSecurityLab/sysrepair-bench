@@ -13,7 +13,7 @@ it over SSH. This provides the same contract without Vagrant:
     Get-DirtyPipeSshConfig     ~ vagrant ssh-config  (emits JSON for run.py)
 
 meta4 scenarios S21/S22 run as containers INSIDE this VM so they share its
-pinned 5.15.0-25 kernel; the host talks to its Docker daemon over SSH.
+pinned 5.13.0-27 kernel; the host talks to its Docker daemon over SSH.
 
 Build it first with DirtyPipeLab.ps1 :: Install-DirtyPipeLab.
 #>
@@ -160,7 +160,7 @@ function Set-DirtyPipePortProxy {
     Publish the guest's sshd on 127.0.0.1:<SshPort>.
 
     .DESCRIPTION
-    SRB-DirtyPipe is an Internal switch, so the guest is reachable from the host but
+    SRB-Kernel is an Internal switch, so the guest is reachable from the host but
     not from a container. Docker Desktop's `host.docker.internal` resolves to the
     host, so proxying here is what lets an in-container client reach the VM --
     the same trick HS13 uses on 2223.
@@ -208,7 +208,7 @@ function Test-DirtyPipeAbi {
     $r = Invoke-DirtyPipeSsh -Command 'uname -r'
     if ($r.ExitCode -ne 0) { throw "Test-DirtyPipeAbi: ssh failed: $($r.Output)" }
     $running = $r.Output
-    if ($running -notmatch '^5\.15\.0-(\d+)-generic') {
+    if ($running -notmatch '5\.13\.0-(\d+)-generic') {
         throw "Test-DirtyPipeAbi: unexpected kernel '$running'"
     }
     $abi = [int]$Matches[1]
@@ -299,7 +299,7 @@ function Copy-DirtyPipeScenarios {
     ~300 scenarios onto the guest.
     #>
     [CmdletBinding()]
-    param([string[]] $Scenario = @('scenario-19','scenario-21','scenario-22','scenario-117'))
+    param([string[]] $Scenario = @('scenario-19'))
 
     $ip = Get-DirtyPipeIpAddress
     if (-not $ip) { throw 'Copy-DirtyPipeScenarios: VM has no IPv4 address.' }
