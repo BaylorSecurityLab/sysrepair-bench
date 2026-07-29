@@ -531,7 +531,14 @@ def _build_vagrant_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
             "benchmark": scenario_dir.parent.name,
             "scenario": scenario_dir.name,
             "os": os_name,
-            "verify_script": "verify.sh",
+            # Derived from what the scenario actually ships, not hardcoded. The
+            # scorer has an OS-aware fallback (verify.ps1 on windows), but this
+            # key overrides it, so hardcoding "verify.sh" made the Windows AD DC
+            # scorer look for a file that does not exist and fail the sample
+            # AFTER the agent had done all its work.
+            "verify_script": (
+                "verify.ps1" if (scenario_dir / "verify.ps1").is_file() else "verify.sh"
+            ),
             "scorer": "hivestorm_weighted",
             **bridge_meta,
         },
