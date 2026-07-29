@@ -228,6 +228,132 @@ function Invoke-Hs13Seed {
     Write-Host '[hs13] seeded'
 }
 
+function Install-Hs13SshAccess {
+    <#
+    .SYNOPSIS
+        Give the bridge container the same SSH contract Vagrant used to provide.
+
+    .DESCRIPTION
+        The Inspect sandbox for S13 is a BRIDGE CONTAINER that SSHes into the
+        target; the agent never touches Hyper-V. Under Vagrant that worked
+        because VirtualBox NAT forwarded host 2223 to the guest's OpenSSH, and
+        a provisioner installed the pipeline's public key.
+
+        This reproduces that contract exactly -- account `vagrant`, port 2223 on
+        host.docker.internal, key at /root/.ssh/vagrant_key -- so
+        inspect_eval's solvers, scorer and task prompt need no changes at all.
+        Only the mechanism behind the contract moves from Vagrant to
+        AutomatedLab.
+
+        `vagrant` is a DOMAIN account, not a local one: this machine is a domain
+        controller, and promotion destroys the local SAM. Creating it locally
+        would fail, or worse, appear to succeed against a stale SAM.
+    #>
+    param([Parameter(Mandatory)] [string] $PublicKeyPath)
+
+    if (-not (Test-Path $PublicKeyPath)) { throw "[hs13] public key not found: $PublicKeyPath" }
+    $pub = (Get-Content -LiteralPath $PublicKeyPath -Raw).Trim()
+
+    Wait-Hs13Ready | Out-Null
+
+    Invoke-Command -VMName $script:Hs13VM -Credential $script:Hs13Cred -ErrorAction Stop `
+        -ArgumentList $pub -ScriptBlock {
+        param($pub)
+        $ErrorActionPreference = 'Stop'
+        Import-Module ActiveDirectory
+
+        # --- domain account the bridge logs in as ---
+        $pw = ConvertTo-SecureString 'Vagrant1Bridge!' -AsPlainText -Force
+        if (-not (Get-ADUser -Filter "SamAccountName -eq 'vagrant'" -ErrorAction SilentlyContinue)) {
+            New-ADUser -Name 'vagrant' -SamAccountName 'vagrant' `
+                -AccountPassword $pw -Enabled $true -PasswordNeverExpires $true `
+                -Description 'Bridge-container SSH account (evaluation harness)'
+        } else {
+            Set-ADAccountPassword -Identity 'vagrant' -Reset -NewPassword $pw
+        }
+        if (-not (Get-ADGroupMember 'Domain Admins' | Where-Object { $_.SamAccountName -eq 'vagrant' })) {
+            Add-ADGroupMember -Identity 'Domain Admins' -Members 'vagrant'
+        }
+
+        # --- OpenSSH Server ---
+        $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' |
+                 Where-Object { $_.State -ne 'Installed' }
+        if ($cap) { Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+
+        Set-Service -Name sshd -StartupType Automatic
+        if ((Get-Service sshd).Status -ne 'Running') { Start-Service sshd }
+
+        # --- authorised key ---
+        #
+        # Members of Administrators (which Domain Admins are, on a DC) are NOT
+        # read from the user's ~/.ssh/authorized_keys by default: sshd_config
+        # redirects them to this single file, and it must be owned by
+        # Administrators/SYSTEM with inheritance disabled or sshd silently
+        # refuses the key.
+        $akf = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+        $dir = Split-Path $akf -Parent
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+        $existing = if (Test-Path $akf) { Get-Content -LiteralPath $akf -Raw } else { '' }
+        if ($existing -notmatch [regex]::Escape($pub)) {
+            Add-Content -LiteralPath $akf -Value $pub -Encoding ascii
+        }
+
+        icacls $akf /inheritance:r | Out-Null
+        icacls $akf /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
+
+        # sshd caches nothing important, but restarting makes the key live
+        # immediately rather than at the next connection's discretion.
+        Restart-Service sshd -Force
+
+        "sshd=$((Get-Service sshd).Status) key_bytes=$((Get-Item $akf).Length)"
+    } | ForEach-Object { Write-Host "[hs13] $_" }
+}
+
+function Set-Hs13PortProxy {
+    <#
+    .SYNOPSIS
+        Forward host 2223 to the DC's SSH, reproducing VirtualBox's NAT rule.
+
+    .DESCRIPTION
+        The bridge container reaches the target as host.docker.internal:2223,
+        because that is what VirtualBox NAT gave it. The AutomatedLab DC instead
+        sits on an INTERNAL Hyper-V switch at 10.20.13.5, which a Docker Desktop
+        container has no route to.
+
+        A host portproxy restores the old contract rather than rewiring the
+        container's networking: the host listens on 2223 and forwards to the
+        lab. Port 2223 is kept deliberately -- scenario-14 uses 2222, and the
+        two must not collide.
+    #>
+    param([int] $ListenPort = 2223, [string] $TargetIp = '10.20.13.5', [int] $TargetPort = 22)
+
+    $existing = & netsh interface portproxy show v4tov4 2>&1 | Out-String
+    if ($existing -match "\s$ListenPort\s") {
+        & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=0.0.0.0 2>&1 | Out-Null
+    }
+    & netsh interface portproxy add v4tov4 `
+        listenport=$ListenPort listenaddress=0.0.0.0 `
+        connectport=$TargetPort connectaddress=$TargetIp 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "[hs13] netsh portproxy add returned $LASTEXITCODE" }
+
+    # Firewall: the listener is on the host, so the host must accept it.
+    $ruleName = "SRB-HS13-ssh-$ListenPort"
+    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort $ListenPort | Out-Null
+    }
+    Write-Host "[hs13] portproxy 0.0.0.0:$ListenPort -> ${TargetIp}:$TargetPort"
+}
+
+function Test-Hs13SshReachable {
+    param([int] $ListenPort = 2223)
+    try {
+        $c = Test-NetConnection -ComputerName '127.0.0.1' -Port $ListenPort -WarningAction SilentlyContinue
+        return [bool]$c.TcpTestSucceeded
+    } catch { return $false }
+}
+
 function Invoke-Hs13Verify {
     <#
     .SYNOPSIS

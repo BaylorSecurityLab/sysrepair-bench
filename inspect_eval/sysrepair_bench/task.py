@@ -258,16 +258,48 @@ persistent SSH session between calls. Connect to the Windows VM explicitly every
 """
 
 
+def _automatedlab_config(scenario_dir: Path) -> dict | None:
+    """Return lab/automatedlab.json if this scenario is AutomatedLab-backed.
+
+    A scenario migrated off Vagrant/VirtualBox onto AutomatedLab/Hyper-V ships
+    this marker naming the PowerShell entry points that bring the VM up. It
+    deliberately reproduces the SAME bridge contract Vagrant provided -- account
+    `vagrant` on host.docker.internal:2223 with the pipeline's key -- so
+    solvers.py, scorer.py and the task prompt are untouched. Only the mechanism
+    behind the contract changed.
+    """
+    marker = scenario_dir / "lab" / "automatedlab.json"
+    if not marker.exists():
+        return None
+    return json.loads(marker.read_text(encoding="utf-8"))
+
+
 def _is_vagrant_scenario(scenario_dir: Path) -> bool:
-    """A scenario is Vagrant-backed if it has a Vagrantfile.
+    """A scenario is VM-backed if it has a Vagrantfile or an AutomatedLab marker.
 
     It may ALSO ship a Dockerfile (the bridge container that the agent runs in
     while SSHing to the VM) — that doesn't make it a regular Docker scenario.
+
+    The name is kept for now because the whole VM path is spelled "vagrant_*"
+    throughout the driver and sample metadata; renaming it is a separate change
+    from migrating a hypervisor, and doing both at once would make the diff
+    impossible to review.
     """
-    return (scenario_dir / "Vagrantfile").exists()
+    return (scenario_dir / "Vagrantfile").exists() or _automatedlab_config(scenario_dir) is not None
 
 
 def _detect_vagrant_os(scenario_dir: Path) -> str:
+    """Guest OS family for a VM-backed scenario.
+
+    Reads the AutomatedLab marker first: a migrated scenario has no Vagrantfile
+    to sniff, and this used to open it unconditionally, so deleting the
+    Vagrantfile would have taken the whole sample build down with a
+    FileNotFoundError rather than anything that names the cause.
+    """
+    al = _automatedlab_config(scenario_dir)
+    if al is not None:
+        return al.get("os", "windows")
+
     vf = (scenario_dir / "Vagrantfile").read_text(encoding="utf-8", errors="ignore").lower()
     if "freebsd" in vf:
         return "freebsd"
@@ -298,6 +330,72 @@ def _parse_vagrant_ssh_config(output: str) -> dict[str, str]:
         if key:
             cfg[key] = val.strip()
     return cfg
+
+
+def _prepare_automatedlab_bridge(scenario_dir: Path, cfg: dict) -> dict[str, str]:
+    """Bring up an AutomatedLab VM and hand the bridge the same SSH contract.
+
+    Mirrors the WinRM flavour of _prepare_vagrant_bridge:
+
+      1. generate the bridge keypair (the VM has no SSH until we install it),
+      2. restore the VM to its clean baseline and wait until the DC is actually
+         serving the directory -- not merely powered on,
+      3. install OpenSSH + the public key on the guest,
+      4. forward host 2223 to the lab address, because the DC sits on an
+         INTERNAL Hyper-V switch that a Docker Desktop container cannot route
+         to, whereas VirtualBox NAT used to publish it on the host already.
+
+    Returns the same metadata keys as the Vagrant path, so nothing downstream
+    can tell the difference.
+    """
+    build_dir = scenario_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+
+    priv = build_dir / "vagrant_key"
+    pub = build_dir / "vagrant_key.pub"
+    if not priv.exists() or not pub.exists():
+        priv.unlink(missing_ok=True)
+        pub.unlink(missing_ok=True)
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "",
+             "-C", "sysrepair-bridge", "-f", str(priv)],
+            check=True,
+        )
+
+    ops = (scenario_dir / cfg["ops_script"]).resolve()
+    if not ops.exists():
+        raise SystemExit(f"[automatedlab] ops script missing: {ops}")
+
+    # One PowerShell session for the whole bring-up: dot-source once, then
+    # restore, provision SSH and publish the port. Failing loudly here matters —
+    # a half-provisioned VM produces SSH errors inside the agent's transcript,
+    # which read as scenario bugs rather than harness ones.
+    script = (
+        f". '{ops}'; "
+        f"{cfg['restore_function']}; "
+        f"{cfg['ssh_function']} -PublicKeyPath '{pub}'; "
+        f"{cfg['portproxy_function']}; "
+        f"if (-not ({cfg['reachable_function']})) {{ throw 'SSH not reachable on the forwarded port' }}"
+    )
+    print(f"[automatedlab] Bringing up {cfg['vm_name']} — restore, SSH provisioning, port proxy…")
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True, text=True,
+    )
+    if proc.stdout:
+        print(proc.stdout.rstrip())
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[automatedlab] bring-up failed (exit {proc.returncode}).\n"
+            f"{(proc.stderr or '').strip()[:2000]}"
+        )
+
+    return {
+        "vagrant_port": str(cfg.get("vagrant_port", "2223")),
+        "vagrant_user": cfg.get("vagrant_user", "vagrant"),
+        "bridge_target_host": cfg.get("bridge_target_host", "host.docker.internal"),
+        "bridge_ssh_key": cfg.get("bridge_ssh_key", "/root/.ssh/vagrant_key"),
+    }
 
 
 def _prepare_vagrant_bridge(scenario_dir: Path) -> dict[str, str]:
@@ -378,7 +476,12 @@ def _build_vagrant_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
         _hivestorm_prepare(scenario_dir)
     task_md = (scenario_dir / "task.md").read_text(encoding="utf-8")
 
-    bridge_meta = _prepare_vagrant_bridge(scenario_dir)
+    al_cfg = _automatedlab_config(scenario_dir)
+    bridge_meta = (
+        _prepare_automatedlab_bridge(scenario_dir, al_cfg)
+        if al_cfg is not None
+        else _prepare_vagrant_bridge(scenario_dir)
+    )
 
     if os_name == "freebsd":
         role = "FreeBSD system administrator"
