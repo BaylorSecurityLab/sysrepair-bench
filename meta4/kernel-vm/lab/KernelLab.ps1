@@ -349,12 +349,29 @@ function New-KernelVm {
 
     Remove-KernelVm
 
-    # Gen 2 = UEFI. Ubuntu cloud images boot it, but Hyper-V's default secure
-    # boot template is the Microsoft one and rejects shim -- use the UEFI CA.
+    # Gen 2 = UEFI.
     New-VM -Name $script:KernelVmName -Generation 2 `
            -MemoryStartupBytes (4GB) -VHDPath $VhdxPath -SwitchName $script:BuildSwitch | Out-Null
     Set-VM -Name $script:KernelVmName -ProcessorCount 2 -AutomaticCheckpointsEnabled $false
-    Set-VMFirmware -VMName $script:KernelVmName -SecureBootTemplate 'MicrosoftUEFICertificateAuthority'
+
+    # SECURE BOOT MUST BE OFF, and not as a workaround.
+    #
+    # Ubuntu's shim revokes superseded signed kernels (SBAT generation numbers,
+    # and DBX for the worst cases) precisely to stop an attacker downgrading a
+    # patched machine to a vulnerable kernel. 5.15.0-25 is a March-2022 kernel
+    # that current shim revokes -- which is Secure Boot working exactly as
+    # designed. Booting a deliberately vulnerable kernel is this VM's whole
+    # purpose, so the two goals are fundamentally incompatible.
+    #
+    # Confirmed by A/B test: with the MicrosoftUEFICertificateAuthority template
+    # the guest never reached the kernel (heartbeat "No Contact", integration
+    # services "Lost Communication", VM otherwise "Operating normally" ~6% CPU,
+    # cold boot identical). Flipping Secure Boot off and changing nothing else
+    # brought heartbeat straight back to OK.
+    #
+    # Safe here: the VM has no route out after the bake and exists only to host
+    # LPE scenario containers.
+    Set-VMFirmware -VMName $script:KernelVmName -EnableSecureBoot Off
 
     # NIC 1 (created with the VM) = NAT; NIC 2 = the isolated lab segment.
     Get-VMNetworkAdapter -VMName $script:KernelVmName |

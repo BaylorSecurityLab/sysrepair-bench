@@ -53,6 +53,23 @@ for pkg in ${OTHERS}; do
     apt-get purge -y "${pkg}" || true
 done
 
+# --- 3. make S117's vulnerable path actually reachable ---------------------
+# scenario-117 (Copy Fail, CVE-2026-31431) verifies remediation by checking that
+# an AF_ALG AEAD socket cannot be opened. Ubuntu ships
+# /etc/modprobe.d/disable-algif_aead.conf ("install algif_aead /bin/false") as a
+# distro-level mitigation for exactly this CVE, so on a stock guest that check
+# passes BEFORE the agent does anything -- verify.sh exits 0 pre-remediation and
+# the scenario grades as solved while exercising nothing.
+#
+# The scenario's own Dockerfile does `rm -f /etc/modprobe.d/disable-algif_aead.conf`
+# for the same reason, but that only clears the CONTAINER's copy: AF_ALG binds
+# against the HOST kernel, so the host's blacklist is what actually decides.
+# This VM exists to be vulnerable, so remove it here. The module autoloads on
+# first socket bind once nothing blocks it.
+rm -f /etc/modprobe.d/disable-algif_aead.conf
+echo "--- algif_aead blacklists remaining (want none) ---"
+grep -rl algif_aead /etc/modprobe.d/ /lib/modprobe.d/ /usr/lib/modprobe.d/ 2>/dev/null || echo "none"
+
 update-grub
 
 echo "--- kernels remaining ---"

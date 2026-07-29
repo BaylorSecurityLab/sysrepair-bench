@@ -28,6 +28,43 @@ $script:KeyPath   = Join-Path $HOME '.ssh\srb_kernel'
 $script:ExpectAbi = 25
 
 
+function Invoke-KernelSsh {
+    <#
+    .SYNOPSIS
+    Run a command in the guest. Never throws; returns exit code + output.
+
+    .DESCRIPTION
+    PowerShell 5.1 trap: with $ErrorActionPreference='Stop', ANYTHING a native
+    command writes to stderr becomes a TERMINATING error. ssh writes
+    "Warning: Permanently added ... to the list of known hosts" to stderr on
+    first contact, so a perfectly successful call blows up the caller. Pinning
+    the preference to Continue for the duration is the fix; LogLevel=ERROR
+    silences the specific warning as well.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Command,
+          [int] $ConnectTimeout = 6)
+
+    $ip = Get-KernelIpAddress
+    if (-not $ip) { return [pscustomobject]@{ ExitCode = 255; Output = '' } }
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & ssh -i $script:KeyPath -o StrictHostKeyChecking=no `
+                     -o UserKnownHostsFile=/dev/null -o BatchMode=yes `
+                     -o LogLevel=ERROR -o ConnectTimeout=$ConnectTimeout `
+                     "$($script:GuestUser)@$ip" $Command 2>&1
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output   = (($out | ForEach-Object { "$_" }) -join "`n").Trim()
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+
 function Test-KernelVmExists {
     [bool](Get-VM -Name $script:VmName -ErrorAction SilentlyContinue)
 }
@@ -151,11 +188,7 @@ function Test-KernelSshReachable {
     [CmdletBinding()]
     param()
 
-    $ip = Get-KernelIpAddress
-    if (-not $ip) { return $false }
-    ssh -i $script:KeyPath -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-        -o ConnectTimeout=5 -o BatchMode=yes "$($script:GuestUser)@$ip" 'true' 2>$null | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    return ((Invoke-KernelSsh -Command 'true' -ConnectTimeout 5).ExitCode -eq 0)
 }
 
 
@@ -172,10 +205,9 @@ function Test-KernelAbi {
     [CmdletBinding()]
     param()
 
-    $ip = Get-KernelIpAddress
-    if (-not $ip) { throw 'Test-KernelAbi: VM has no IPv4 address.' }
-    $running = (ssh -i $script:KeyPath -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-                    -o BatchMode=yes "$($script:GuestUser)@$ip" 'uname -r' 2>$null).Trim()
+    $r = Invoke-KernelSsh -Command 'uname -r'
+    if ($r.ExitCode -ne 0) { throw "Test-KernelAbi: ssh failed: $($r.Output)" }
+    $running = $r.Output
     if ($running -notmatch '^5\.15\.0-(\d+)-generic') {
         throw "Test-KernelAbi: unexpected kernel '$running'"
     }
@@ -231,18 +263,34 @@ function Copy-KernelScenarios {
 
     $ip = Get-KernelIpAddress
     if (-not $ip) { throw 'Copy-KernelScenarios: VM has no IPv4 address.' }
-    $meta4 = Split-Path -Parent (Split-Path -Parent $PSCommandPath)   # ...\meta4
+    # $PSCommandPath is .../meta4/kernel-vm/lab/KernelOps.ps1, so meta4 is three
+    # parents up: lab -> kernel-vm -> meta4.
+    $meta4 = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+    if (-not (Test-Path (Join-Path $meta4 'kernel-vm'))) {
+        throw "Copy-KernelScenarios: resolved meta4 dir looks wrong: $meta4"
+    }
     $target = "$($script:GuestUser)@$ip"
     $sshArgs = @('-i', $script:KeyPath, '-o', 'StrictHostKeyChecking=no',
-                 '-o', 'UserKnownHostsFile=/dev/null', '-o', 'BatchMode=yes')
+                 '-o', 'UserKnownHostsFile=/dev/null', '-o', 'BatchMode=yes',
+                 '-o', 'LogLevel=ERROR')
 
-    ssh @sshArgs $target 'sudo mkdir -p /meta4 && sudo chown $(id -u):$(id -g) /meta4' | Out-Null
-    foreach ($s in $Scenario) {
-        $src = Join-Path $meta4 $s
-        if (-not (Test-Path $src)) { throw "Copy-KernelScenarios: no such scenario '$src'" }
-        scp @sshArgs -r $src "${target}:/meta4/" | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Copy-KernelScenarios: scp of $s failed ($LASTEXITCODE)" }
-        Write-Host "[kernel] copied $s -> /meta4/$s"
+    $r = Invoke-KernelSsh -Command 'sudo mkdir -p /meta4 && sudo chown $(id -u):$(id -g) /meta4'
+    if ($r.ExitCode -ne 0) { throw "Copy-KernelScenarios: could not create /meta4: $($r.Output)" }
+
+    # scp is a native command too: its progress/warning output on stderr becomes
+    # a terminating error under EAP=Stop. Same fix as Invoke-KernelSsh.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        foreach ($s in $Scenario) {
+            $src = Join-Path $meta4 $s
+            if (-not (Test-Path $src)) { throw "Copy-KernelScenarios: no such scenario '$src'" }
+            & scp @sshArgs -q -r $src "${target}:/meta4/" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Copy-KernelScenarios: scp of $s failed ($LASTEXITCODE)" }
+            Write-Host "[kernel] copied $s -> /meta4/$s"
+        }
+    } finally {
+        $ErrorActionPreference = $prev
     }
 }
 
@@ -261,25 +309,31 @@ function Invoke-KernelScenarioTest {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string] $Scenario)
 
-    $ip = Get-KernelIpAddress
-    if (-not $ip) { throw 'Invoke-KernelScenarioTest: VM has no IPv4 address.' }
     $tag = ($Scenario -replace '[^a-z0-9]', '')
+    # verify.sh is BIND-MOUNTED in, not expected inside the image. None of these
+    # Dockerfiles COPY it: the inspect harness writes it into the sandbox at
+    # scoring time (scorer.py::_run_verify), so the image never carries its own
+    # grader. meta4/kernel-vm/README.md documents `docker run ... bash /verify.sh`,
+    # which cannot work -- it exits 127 with "No such file or directory".
+    # Mounting read-only mirrors what the scorer effectively does.
+    #
+    # PIPESTATUS is backtick-escaped so PowerShell leaves the $ for bash.
     $remote = @"
-set -e
-cd /meta4
-sudo docker build -q -t $tag $Scenario >/dev/null
-set +e
-sudo docker run --rm --privileged $tag bash /verify.sh 2>&1 | tail -20
+cd /meta4 || exit 90
+sudo docker build -q -t $tag $Scenario >/tmp/build-$tag.log 2>&1 || { echo BUILD_FAILED; tail -15 /tmp/build-$tag.log; echo "__EXIT__=91"; exit 0; }
+test -f /meta4/$Scenario/verify.sh || { echo "NO_VERIFY_SCRIPT"; echo "__EXIT__=92"; exit 0; }
+sudo docker run --rm --privileged \
+     -v /meta4/$Scenario/verify.sh:/verify.sh:ro \
+     $tag bash /verify.sh 2>&1 | tail -25
 echo "__EXIT__=`${PIPESTATUS[0]}"
 "@
-    $out = ssh -i $script:KeyPath -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-               -o BatchMode=yes "$($script:GuestUser)@$ip" $remote 2>&1
+    $r = Invoke-KernelSsh -Command $remote -ConnectTimeout 15
     $code = -1
-    if ($out -match '__EXIT__=(\d+)') { $code = [int]$Matches[1] }
+    if ($r.Output -match '__EXIT__=(\d+)') { $code = [int]$Matches[1] }
     [pscustomobject]@{
         Scenario = $Scenario
         ExitCode = $code
-        Output   = (($out | Where-Object { $_ -notmatch '__EXIT__=' }) -join "`n")
+        Output   = (($r.Output -split "`n" | Where-Object { $_ -notmatch '__EXIT__=' }) -join "`n")
     }
 }
 
