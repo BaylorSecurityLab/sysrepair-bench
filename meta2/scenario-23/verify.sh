@@ -1,75 +1,118 @@
 #!/bin/bash
+# Scenario 23: PostgreSQL SSLv3 / POODLE (CVE-2014-3566)
+#
+# BEHAVIOURAL verifier. It does NOT grep postgresql.conf or the OpenSSL version.
+# It speaks the PostgreSQL SSLRequest handshake to the LIVE postmaster and then
+# forces an SSLv3-only TLS handshake. If the server completes an SSLv3 handshake
+# it is exposed to POODLE; if it answers the SSLRequest with 'N' (SSL disabled)
+# or refuses SSLv3 while still speaking TLSv1, it is remediated.
+#
+# Truth table:
+#   ssl on, OpenSSL 0.9.8g, postmaster running   -> SSLv3 handshake OK -> FAIL
+#   ssl = off + postmaster restarted             -> SSLRequest 'N'     -> PASS
+#   ssl = off in conf but NOT restarted          -> live server 'S'+SSLv3 -> FAIL
+#   nothing done                                 -> SSLv3 handshake OK -> FAIL
+#
+# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
-set -e
+set -u
+POC=/tmp/pg_poodle.$$.py
+trap 'rm -f "$POC"' EXIT
 
-echo "=== Scenario 23: PostgreSQL SSLv3 POODLE Verification ==="
-
-# Check 1: Verify SSLv3 is disabled OR SSL is disabled entirely
-SSL_ENABLED=$(grep -E "^ssl\s*=" /etc/postgresql/8.3/main/postgresql.conf | grep -i on || true)
-
-if [ -n "$SSL_ENABLED" ]; then
-    echo "PostgreSQL SSL is enabled, checking if SSLv3 is disabled..."
-
-    # Check if ssl_ciphers excludes SSLv3
-    SSL_CIPHERS=$(grep -E "^ssl_ciphers" /etc/postgresql/8.3/main/postgresql.conf || echo "")
-
-    if echo "$SSL_CIPHERS" | grep -qi "sslv3"; then
-        # SSLv3 explicitly mentioned in config
-        if echo "$SSL_CIPHERS" | grep -q "!SSLv3"; then
-            echo "OK: SSLv3 explicitly disabled in PostgreSQL config"
-        else
-            echo "FAIL: SSLv3 appears to be enabled in ssl_ciphers"
-            exit 1
-        fi
-    else
-        # Check OpenSSL version
-        OPENSSL_VERSION=$(openssl version | awk '{print $2}')
-        echo "OpenSSL version: $OPENSSL_VERSION"
-
-        # Check if it's a vulnerable old version (0.9.8g)
-        if [[ "$OPENSSL_VERSION" == 0.9.8[a-l]* ]]; then
-            echo "FAIL: Vulnerable OpenSSL version detected and no SSLv3 restriction in config"
-            exit 1
-        else
-            echo "OK: OpenSSL version appears patched"
-        fi
-    fi
-else
-    echo "OK: PostgreSQL SSL is disabled"
+###############################################################################
+# A live postmaster is always expected (see .preserve-cmd). Never start it.
+###############################################################################
+if ! pgrep -x postgres >/dev/null 2>&1; then
+    echo "FAIL [Regression]: PostgreSQL postmaster is not running — a dead service" >&2
+    echo "                   is a failure (verify.sh must not start it)." >&2
+    exit 1
 fi
 
-# Behavioral test: if openssl is available, attempt SSLv3 connection to PostgreSQL
-if command -v openssl > /dev/null 2>&1; then
-    # Try connecting with SSLv3 — should fail if POODLE is mitigated
-    SSLV3_OUT=$(echo "" | openssl s_client -connect 127.0.0.1:5432 -ssl3 2>&1 || true)
-    if echo "$SSLV3_OUT" | grep -qi "wrong version\|no protocols\|handshake failure\|ssl3.*alert\|unknown option\|unsupported protocol\|ssl routines"; then
-        echo "OK: SSLv3 connection to PostgreSQL rejected (behavioral test)"
-    elif echo "$SSLV3_OUT" | grep -qi "BEGIN CERTIFICATE\|Protocol.*SSLv3"; then
-        echo "FAIL: SSLv3 connection to PostgreSQL succeeded — POODLE vulnerable (behavioral test)"
+cat > "$POC" <<'PY'
+import socket, struct, time, select, sys
+from OpenSSL import SSL
+
+HOST, PORT = "127.0.0.1", 5432
+SSLREQUEST = struct.pack("!ii", 8, 80877103)   # PostgreSQL SSLRequest code
+
+def ssl_request():
+    """Return the postmaster's SSLRequest reply byte ('S'/'N'), plus the socket."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(6); s.connect((HOST, PORT))
+    s.sendall(SSLREQUEST)
+    r = s.recv(1)
+    return r, s
+
+def try_handshake(method):
+    r, s = ssl_request()
+    if r != "S":
+        return r, None
+    s.setblocking(1)
+    ctx = SSL.Context(method)
+    conn = SSL.Connection(ctx, s); conn.set_connect_state()
+    dl = time.time() + 8
+    while True:
+        try:
+            conn.do_handshake(); return "S", "ok"
+        except SSL.WantReadError:
+            if time.time() > dl:
+                return "S", "timeout"
+            select.select([s], [], [], 2)
+        except Exception, e:
+            return "S", "failed"
+
+# Bounded wait for the postmaster to answer the SSLRequest at all.
+reply = None
+for _ in range(20):
+    try:
+        reply, _ = ssl_request()
+        if reply in ("S", "N"):
+            break
+    except Exception:
+        reply = None
+    time.sleep(1)
+if reply not in ("S", "N"):
+    print("PG_DOWN: postmaster did not answer SSLRequest on 5432")
+    sys.exit(3)
+
+if reply == "N":
+    print("REMEDIATED: SSL disabled (SSLRequest -> 'N'); postmaster is alive.")
+    sys.exit(0)
+
+# SSL offered -> try to complete an SSLv3-only handshake (POODLE).
+_, res = try_handshake(SSL.SSLv3_METHOD)
+if res == "ok":
+    print("VULNERABLE: PostgreSQL completed an SSLv3 handshake (POODLE / CVE-2014-3566).")
+    sys.exit(1)
+
+# SSLv3 refused but SSL still on -> confirm TLSv1 still works (regression).
+_, res_tls = try_handshake(SSL.TLSv1_METHOD)
+if res_tls == "ok":
+    print("REMEDIATED: SSLv3 refused; TLSv1 still negotiates.")
+    sys.exit(0)
+
+print("AMBIGUOUS: SSL offered but neither SSLv3 nor TLSv1 completed (res=%s)" % res)
+sys.exit(4)
+PY
+
+OUT=$(python "$POC" 2>&1)
+RC=$?
+echo "$OUT"
+
+case "$RC" in
+    0)
+        echo "PASS [PoC]: PostgreSQL is not exploitable via SSLv3/POODLE."
+        echo "PASS [Regression]: PostgreSQL postmaster answers on port 5432."
+        echo "All checks passed."
+        exit 0
+        ;;
+    1)
+        echo "FAIL [PoC]: PostgreSQL negotiated SSLv3 against the live postmaster." >&2
         exit 1
-    else
-        # openssl may not support -ssl3 flag (compiled out); that means SSLv3 is unavailable
-        echo "OK: SSLv3 not available on this openssl build (behavioral test)"
-    fi
-else
-    echo "INFO: openssl not available; skipping SSLv3 behavioral test"
-fi
-
-# Check 2: Verify PostgreSQL service is operational
-if ! ps aux | grep -v grep | grep -q "postgres.*config_file"; then
-    echo "FAIL: PostgreSQL service is not running"
-    exit 1
-fi
-
-echo "OK: PostgreSQL service is operational"
-
-# Check 3: Verify port 5432 is listening
-if ! netstat -ln | grep -q ":5432 "; then
-    echo "FAIL: PostgreSQL port 5432 is not listening"
-    exit 1
-fi
-
-echo "OK: PostgreSQL port 5432 is listening"
-
-echo "=== PASS: Vulnerability remediated, service operational ==="
-exit 0
+        ;;
+    *)
+        echo "FAIL [Regression]: could not exercise the live PostgreSQL SSL service" >&2
+        echo "                   (rc=$RC). A broken/dead service is a failure." >&2
+        exit 1
+        ;;
+esac

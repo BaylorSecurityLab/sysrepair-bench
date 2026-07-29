@@ -3,7 +3,7 @@ RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.lis
     sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
 
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 curl && \
     apt-get clean
 
 # Simulated legacy TWiki/Tiki surface. Upgrading the wiki breaks the site's
@@ -33,9 +33,12 @@ RUN echo 'ScriptAlias /twiki/bin/ /var/www/twiki/bin/' > /etc/apache2/conf.d/twi
 
 RUN a2enmod cgi || true
 
+# Boot wrapper: start apache, keep PID 1 as `sleep infinity` so an agent
+# restarting apache cannot kill the container. The legacy admin surface is
+# already reachable from any interface when the agent starts.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo 'apache2ctl start' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 80

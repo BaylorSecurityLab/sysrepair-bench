@@ -1,113 +1,85 @@
 #!/bin/bash
-# Verification script for Scenario 05: FTP Unencrypted Cleartext Login
+# Scenario 05: FTP Unencrypted Cleartext Login
+#
+# BEHAVIOURAL verifier. It does NOT grep vsftpd.conf — it drives a REAL cleartext
+# FTP login against the running daemon. If the server accepts a username +
+# password sent in the clear (answers "230 Login successful") then credentials
+# are sniffable on the wire and the box is still vulnerable. Once TLS is enforced
+# the daemon answers "530 ... must use encryption" to a cleartext login. A
+# defender who adds the ssl_* directives but never restarts vsftpd is still
+# exposed, and the live cleartext login proves it.
+#
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
+set -u
+
+PORT=21
+HOST=127.0.0.1
+
 ###############################################################################
-# PoC Check: Ensure SSL/TLS is enabled for FTP logins
+# A live daemon is ALWAYS expected (see .preserve-cmd). verify.sh must NEVER
+# start it — a dead service is a real failure and starting it would mask the
+# "edited config but never restarted" case.
 ###############################################################################
-
-VSFTPD_CONF="/etc/vsftpd.conf"
-
-# Check that ssl_enable is set to YES
-SSL_ENABLE=$(grep -i '^ssl_enable' "$VSFTPD_CONF" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')
-
-if [ -z "$SSL_ENABLE" ]; then
-    echo "FAIL [PoC]: No 'ssl_enable' directive found in vsftpd.conf — SSL/TLS is not enabled."
+if ! pgrep -x vsftpd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: vsftpd is not running — a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
 
-if ! echo "$SSL_ENABLE" | grep -qi "YES"; then
-    echo "FAIL [PoC]: ssl_enable is not set to YES — FTP traffic is still unencrypted."
-    exit 1
-fi
-
-echo "PASS [PoC]: ssl_enable is set to YES."
-
-# Additionally check that local logins are forced over SSL
-FORCE_SSL=$(grep -i '^force_local_logins_ssl' "$VSFTPD_CONF" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')
-
-if [ -z "$FORCE_SSL" ] || ! echo "$FORCE_SSL" | grep -qi "YES"; then
-    echo "WARN [PoC]: force_local_logins_ssl is not YES — cleartext login may still be possible."
-    # This is a warning but we still pass if ssl_enable is YES, as some vsftpd versions
-    # on Ubuntu 8.04 may not support all force_* directives
-fi
-
-# Verify SSL certificate files exist
-CERT_FILE=$(grep -i '^rsa_cert_file' "$VSFTPD_CONF" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')
-KEY_FILE=$(grep -i '^rsa_private_key_file' "$VSFTPD_CONF" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')
-
-if [ -n "$CERT_FILE" ] && [ -f "$CERT_FILE" ]; then
-    echo "PASS [PoC]: SSL certificate file exists at $CERT_FILE."
-else
-    echo "FAIL [PoC]: SSL certificate file not found. SSL cannot function without a certificate."
-    exit 1
-fi
-
-if [ -n "$KEY_FILE" ] && [ -f "$KEY_FILE" ]; then
-    echo "PASS [PoC]: SSL private key file exists at $KEY_FILE."
-else
-    echo "FAIL [PoC]: SSL private key file not found. SSL cannot function without a key."
-    exit 1
-fi
-
-# Behavioral test: verify that cleartext FTP login is rejected and TLS is required
-# Ensure vsftpd is running first
-if ! pgrep -x vsftpd > /dev/null 2>&1; then
-    /etc/init.d/vsftpd start > /dev/null 2>&1
+# Wait for the FTP banner (220) before probing so a slow port can't false-pass.
+UP=0; BANNER=""
+for i in $(seq 1 15); do
+    BANNER=$(printf "QUIT\r\n" | nc -w 5 "$HOST" "$PORT" 2>/dev/null)
+    if echo "$BANNER" | grep -q "^220"; then UP=1; break; fi
     sleep 1
-fi
-
-if command -v openssl > /dev/null 2>&1; then
-    # Test 1: Attempt STARTTLS on FTP — should succeed (TLS available)
-    TLS_OUT=$(echo "QUIT" | openssl s_client -connect 127.0.0.1:21 -starttls ftp 2>&1 || true)
-    if echo "$TLS_OUT" | grep -qi "BEGIN CERTIFICATE\|SSL handshake\|Verify return"; then
-        echo "PASS [PoC]: FTP server supports STARTTLS (behavioral test)."
-    else
-        echo "WARN [PoC]: Could not verify STARTTLS on FTP via openssl."
-    fi
-fi
-
-if command -v nc > /dev/null 2>&1; then
-    # Test 2: Attempt cleartext login — should be rejected if force_local_logins_ssl=YES
-    CLEAR_OUT=$(printf "USER ftpuser\r\nPASS ftppass123\r\nQUIT\r\n" | nc -w 5 127.0.0.1 21 2>/dev/null || true)
-    if echo "$CLEAR_OUT" | grep -q "^230"; then
-        echo "FAIL [PoC]: Cleartext FTP login succeeded — TLS not enforced."
-        exit 1
-    elif echo "$CLEAR_OUT" | grep -q "^530\|^534\|^5[0-9][0-9].*SSL\|^5[0-9][0-9].*TLS"; then
-        echo "PASS [PoC]: Cleartext FTP login rejected — TLS required (behavioral test)."
-    else
-        echo "INFO [PoC]: Cleartext login result inconclusive. Output: $CLEAR_OUT"
-    fi
-else
-    echo "INFO [PoC]: nc not available; skipping cleartext login behavioral test."
-fi
-
-###############################################################################
-# Regression Check: Ensure vsftpd is running and functional
-###############################################################################
-
-# Check if vsftpd process is running
-if pgrep -x vsftpd > /dev/null 2>&1; then
-    echo "PASS [Regression]: vsftpd process is running."
-else
-    # Try to start vsftpd and check again
-    /etc/init.d/vsftpd start > /dev/null 2>&1
-    sleep 1
-    if pgrep -x vsftpd > /dev/null 2>&1; then
-        echo "PASS [Regression]: vsftpd process started and is running."
-    else
-        echo "FAIL [Regression]: vsftpd is not running. Service may be broken."
-        exit 1
-    fi
-fi
-
-# Verify vsftpd is listening on port 21
-if netstat -tlnp 2>/dev/null | grep -q ':21'; then
-    echo "PASS [Regression]: vsftpd is listening on port 21."
-else
-    echo "FAIL [Regression]: vsftpd is not listening on port 21."
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: vsftpd did not present a 220 banner on port $PORT —" >&2
+    echo "                   service is down or broken. last: $BANNER" >&2
     exit 1
 fi
+
+###############################################################################
+# PoC: attempt a CLEARTEXT username/password login against the LIVE daemon.
+###############################################################################
+CLEAR=$(printf "USER ftpuser\r\nPASS ftppass123\r\nQUIT\r\n" | nc -w 8 "$HOST" "$PORT" 2>/dev/null)
+if echo "$CLEAR" | grep -q "^230"; then
+    echo "FAIL [PoC]: cleartext FTP login succeeded (server returned 230) —" >&2
+    echo "            credentials travel unencrypted and are sniffable." >&2
+    exit 1
+fi
+echo "PASS [PoC]: cleartext FTP login was refused by the live daemon (TLS enforced)."
+
+###############################################################################
+# Regression: the legitimate encrypted path must still work AND the service must
+# not have been bricked. Two independent signals:
+#   (1) the server still offers FTP over TLS (AUTH TLS -> 234); and
+#   (2) the cleartext login was refused *specifically because encryption is
+#       required* — not because local logins were globally disabled. vsftpd with
+#       force_local_logins_ssl answers a cleartext PASS with "530 ... must use
+#       encryption". A defender who instead sets local_enable=NO (bricking the
+#       account) would fail the cleartext login with a different 530/500 and
+#       would NOT emit an encryption-required refusal — so this distinguishes a
+#       real TLS-enforcement fix from a "disable all logins" sham.
+###############################################################################
+TLS=$(printf "AUTH TLS\r\nQUIT\r\n" | nc -w 6 "$HOST" "$PORT" 2>/dev/null)
+if ! echo "$TLS" | grep -qE "^234"; then
+    echo "FAIL [Regression]: server did not accept 'AUTH TLS' (no 234) — the" >&2
+    echo "                   encrypted login path is not available. dialogue: $TLS" >&2
+    exit 1
+fi
+echo "PASS [Regression]: server offers FTP-over-TLS (AUTH TLS -> 234)."
+
+if ! echo "$CLEAR" | grep -qi "encrypt"; then
+    echo "FAIL [Regression]: the cleartext login was refused, but NOT because" >&2
+    echo "                   encryption is required — the account appears disabled/" >&2
+    echo "                   bricked rather than protected by TLS enforcement." >&2
+    echo "                   cleartext dialogue: $CLEAR" >&2
+    exit 1
+fi
+echo "PASS [Regression]: cleartext login was refused with an encryption-required"
+echo "                   response — the legitimate user exists and TLS is enforced."
 
 echo "All checks passed."
 exit 0

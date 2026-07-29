@@ -34,5 +34,9 @@ COPY scenario-04-tomcat/tomcat-users.xml C:/tomcat/conf/tomcat-users.xml
 RUN $ctx = 'C:\tomcat\webapps\manager\META-INF\context.xml' ; \
     (Get-Content $ctx) -replace '<Valve className="org.apache.catalina.valves.RemoteAddrValve".*?/>', '' | Set-Content $ctx
 
+# PID-1-safe boot: start sshd/WinRM, launch Tomcat in the background, hold PID 1
+# with an idle loop so a config fix can restart Tomcat without killing the container.
+COPY scenario-04-tomcat/entrypoint.ps1 C:/entrypoint.ps1
+
 EXPOSE 8080 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\tomcat\\bin\\catalina.bat run"]
+CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\entrypoint.ps1"]

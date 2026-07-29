@@ -18,10 +18,15 @@ RUN echo '#!/bin/bash' > /usr/local/bin/backdoor.sh && \
     echo 'while true; do nc -l -p 6200 -e /bin/sh; done' >> /usr/local/bin/backdoor.sh && \
     chmod +x /usr/local/bin/backdoor.sh
 
-# Create startup script
+# Boot wrapper: launch the simulated backdoor listener AND vsftpd in the
+# BACKGROUND, then keep PID 1 as `sleep infinity` (via exec) so an agent that
+# stops the backdoor / restarts FTP can never kill the container. A
+# .preserve-cmd marker makes the harness run this CMD, so port 6200 is a live
+# root shell before the agent starts.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo '/usr/local/bin/backdoor.sh &' >> /start.sh && \
-    echo '/usr/sbin/vsftpd /etc/vsftpd.conf' >> /start.sh && \
+    echo '/usr/sbin/vsftpd /etc/vsftpd.conf &' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 21 6200

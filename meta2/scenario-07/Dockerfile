@@ -20,5 +20,8 @@ RUN echo "host    all    all    0.0.0.0/0    md5" >> /etc/postgresql/8.3/main/pg
 # Expose PostgreSQL port
 EXPOSE 5432
 
-# Start PostgreSQL as the postgres user
-CMD su - postgres -c "/usr/lib/postgresql/8.3/bin/postgres -D /etc/postgresql/8.3/main"
+# .preserve-cmd: boot PostgreSQL in the BACKGROUND so a real daemon is already
+# running with the vulnerable (weak password / remote md5) config when the agent
+# starts — this makes the "edited config but never restarted" case detectable —
+# then keep PID 1 as `sleep infinity`.
+CMD ["/bin/bash", "-c", "su - postgres -c '/usr/lib/postgresql/8.3/bin/postgres -D /etc/postgresql/8.3/main' & exec sleep infinity"]

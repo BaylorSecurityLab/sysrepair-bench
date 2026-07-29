@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with an idle keepalive.
+#
+# The harness runs the image CMD so services actually boot. The CMD is
+# PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * the SMB server (LanmanServer) is started via Start-Service, so it runs
+#     under the Windows service host (services.exe), NOT PID 1;
+#   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# Consequence for solutions: LanmanServer is ALREADY RUNNING with SMBv1
+# enabled, so a fix must restart LanmanServer (safe now - it is not PID 1) for
+# the live checks to pass. Restarting the service can never kill the container.

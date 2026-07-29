@@ -1,112 +1,63 @@
 #!/bin/bash
-# Verification script for Scenario 09: VNC Unencrypted Data Transmission
-# Check 1 (PoC): VNC should NOT be accessible unencrypted on port 5900
-# Check 2 (Regression): Remote access must still work via SSH
+# Scenario 09: VNC Unencrypted Data Transmission
+#
+# BEHAVIOURAL verifier. It does NOT grep /start.sh — it acts as a passive
+# network attacker: it connects to the container's NON-loopback (network-facing)
+# address on port 5900 and reads the opening bytes. If the server answers with a
+# cleartext "RFB xxx.xxx" protocol banner, the RFB session is unencrypted and
+# reachable over the network — credentials and screen data are sniffable, so the
+# box is vulnerable. Remediation binds VNC to localhost (SSH-tunnel only), wraps
+# it in SSL, or disables it — in every case the cleartext RFB banner is no longer
+# obtainable from the network interface. Because the bind interface is fixed at
+# x11vnc startup, a defender who edits /start.sh but never restarts x11vnc is
+# still exposed, and the live probe proves it.
+#
+# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
-##############################################################################
-# PoC Check: Verify VNC is not running unencrypted on port 5900
-##############################################################################
+set -u
 
-# Check if x11vnc is running without SSL
-VNC_PID=$(pgrep -f 'x11vnc' 2>/dev/null)
-
-if [ -n "$VNC_PID" ]; then
-    # x11vnc is running -- check if it has SSL enabled
-    VNC_CMDLINE=$(cat /proc/$VNC_PID/cmdline 2>/dev/null | tr '\0' ' ')
-
-    if echo "$VNC_CMDLINE" | grep -qi '\-ssl'; then
-        echo "PASS: VNC is running with SSL encryption enabled."
-    else
-        # VNC is running without SSL -- check if port 5900 is exposed externally
-        # If it is only listening on localhost (for SSH tunnel), that is acceptable
-        LISTEN_ADDR=$(netstat -tlnp 2>/dev/null | grep ':5900' | awk '{print $4}')
-        if echo "$LISTEN_ADDR" | grep -q '127.0.0.1:5900'; then
-            echo "PASS: VNC is bound to localhost only (SSH tunnel mode)."
-        elif echo "$LISTEN_ADDR" | grep -q '0.0.0.0:5900'; then
-            echo "FAIL: VNC is running unencrypted and exposed on all interfaces."
-            exit 1
-        else
-            echo "PASS: VNC port 5900 is not listening externally."
-        fi
-    fi
-else
-    # VNC not running — check if /start.sh still configures x11vnc without SSL
-    if [ -f /start.sh ] && grep -q 'x11vnc' /start.sh; then
-        if grep -qi '\-ssl' /start.sh; then
-            echo "PASS: VNC is configured with SSL in /start.sh (not currently running)."
-        else
-            echo "FAIL: x11vnc in /start.sh is configured without -ssl — still vulnerable even if not running."
-            exit 1
-        fi
-    else
-        echo "PASS: VNC server is not running (disabled)."
-    fi
+###############################################################################
+# Regression FIRST: SSH is the guaranteed remote-access channel for this box
+# (VNC may legitimately be bound to localhost / tunnelled). It must stay up.
+###############################################################################
+if ! pgrep -x sshd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: sshd is not running — remote access is broken" >&2
+    echo "                   (verify.sh must not start it)." >&2
+    exit 1
 fi
-
-# Behavioral test: verify VNC is not accessible unencrypted on port 5900
-# If VNC is not running, also verify it is not in any autostart scripts
-if [ -z "$VNC_PID" ]; then
-    # VNC not running — verify it is not configured to autostart unencrypted
-    AUTOSTART_VULNERABLE=0
-
-    # Check common autostart locations
-    for INITSCRIPT in /etc/init.d/x11vnc /etc/rc.local /etc/rc2.d/*vnc* /etc/rc3.d/*vnc*; do
-        if [ -f "$INITSCRIPT" ] && grep -q 'x11vnc' "$INITSCRIPT" 2>/dev/null; then
-            if ! grep -qi '\-ssl' "$INITSCRIPT" 2>/dev/null; then
-                echo "FAIL [PoC]: Unencrypted x11vnc autostart found in $INITSCRIPT."
-                AUTOSTART_VULNERABLE=1
-            fi
-        fi
-    done
-
-    # Check crontab
-    if crontab -l 2>/dev/null | grep -q 'x11vnc'; then
-        if ! crontab -l 2>/dev/null | grep 'x11vnc' | grep -qi '\-ssl'; then
-            echo "FAIL [PoC]: Unencrypted x11vnc found in crontab."
-            AUTOSTART_VULNERABLE=1
-        fi
-    fi
-
-    if [ "$AUTOSTART_VULNERABLE" -eq 1 ]; then
-        exit 1
-    fi
-    echo "PASS [PoC]: VNC not running and no unencrypted autostart entries found (behavioral check)."
-else
-    # VNC is running — try to connect to port 5900 without SSL
-    if command -v nc > /dev/null 2>&1; then
-        VNC_BANNER=$(echo "" | nc -w 3 127.0.0.1 5900 2>/dev/null || true)
-        if echo "$VNC_BANNER" | grep -qi "RFB"; then
-            # VNC responds with RFB protocol — check if this is on an externally-bound socket
-            LISTEN_ADDR=$(netstat -tlnp 2>/dev/null | grep ':5900' | awk '{print $4}')
-            if echo "$LISTEN_ADDR" | grep -q '0.0.0.0:5900'; then
-                echo "FAIL [PoC]: Unencrypted VNC responds on 0.0.0.0:5900 (behavioral test)."
-                exit 1
-            else
-                echo "PASS [PoC]: VNC on port 5900 is bound to localhost only (behavioral test)."
-            fi
-        fi
-    fi
-fi
-
-##############################################################################
-# Regression Check: SSH must still provide remote access
-##############################################################################
-
-# Verify SSH daemon is running
-if pgrep -x sshd > /dev/null 2>&1; then
-    echo "PASS: SSH daemon is running -- remote access is available."
-else
-    echo "FAIL: SSH daemon is not running -- remote access is broken."
+if ! (netstat -tlnp 2>/dev/null | grep -q ':22' || ss -tlnp 2>/dev/null | grep -q ':22'); then
+    echo "FAIL [Regression]: sshd is not listening on port 22." >&2
     exit 1
 fi
 
-# Verify SSH is listening on port 22
-if netstat -tlnp 2>/dev/null | grep -q ':22'; then
-    echo "PASS: SSH is listening on port 22."
-else
-    echo "FAIL: SSH is not listening on port 22."
+# Discover the container's network-facing (non-loopback) IPv4 address.
+IP=$(hostname -i 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | grep -v '^127\.' | head -1)
+if [ -z "$IP" ]; then
+    IP=$(ifconfig 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p' | grep -v '^127\.' | head -1)
+fi
+if [ -z "$IP" ]; then
+    echo "FAIL [Regression]: could not determine the container's network address." >&2
     exit 1
 fi
 
+###############################################################################
+# PoC: from the network interface, read the RFB banner on port 5900. Retry so a
+# slow/starting daemon that IS exposed is still caught (no false pass).
+###############################################################################
+VULN=0
+for i in $(seq 1 15); do
+    BANNER=$(printf '' | nc -w 3 "$IP" 5900 2>/dev/null | head -c 12)
+    if echo "$BANNER" | grep -q '^RFB'; then VULN=1; break; fi
+    sleep 1
+done
+
+if [ "$VULN" = "1" ]; then
+    echo "FAIL [PoC]: read a cleartext RFB banner ('$BANNER') from $IP:5900 —" >&2
+    echo "            VNC is exposed unencrypted on the network. Still vulnerable." >&2
+    exit 1
+fi
+echo "PASS [PoC]: no cleartext RFB banner is reachable on the network interface ($IP:5900)."
+
+echo "PASS [Regression]: sshd is up and listening on port 22 (remote access available)."
 echo "All checks passed."
 exit 0

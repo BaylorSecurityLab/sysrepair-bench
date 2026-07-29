@@ -32,5 +32,9 @@ RUN Expand-Archive 'C:\struts.zip' -DestinationPath 'C:\struts-apps' ; \
     Remove-Item -Recurse -Force 'C:\struts-apps','C:\struts.zip'
 
 
+# PID-1-safe boot: start sshd/WinRM, launch Tomcat in the background, hold PID 1
+# with an idle loop so a config fix can restart Tomcat without killing the container.
+COPY scenario-05-struts/entrypoint.ps1 C:/entrypoint.ps1
+
 EXPOSE 8080 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; & C:\\tomcat\\bin\\catalina.bat run"]
+CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\entrypoint.ps1"]

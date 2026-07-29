@@ -14,10 +14,13 @@ RUN sed -i '/disable_vrfy_command/d' /etc/postfix/main.cf && \
 # Configure Postfix to listen on all interfaces
 RUN postconf -e 'inet_interfaces = all'
 
-# Create startup script
+# Boot wrapper: `postfix start` launches the master daemon in the BACKGROUND,
+# then PID 1 stays as `sleep infinity` (via exec) so an agent reloading Postfix
+# can never kill the container. A .preserve-cmd marker makes the harness run
+# this CMD, so VRFY is live against a running SMTP daemon before the agent starts.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo 'postfix start' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 25

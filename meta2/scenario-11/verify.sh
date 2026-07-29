@@ -1,57 +1,79 @@
 #!/bin/bash
-# Verification script for Scenario 11: Apache Dangerous HTTP Methods (PUT/DELETE via WebDAV)
-# Check 1 (PoC): PUT upload to /dav/ should NOT succeed without auth
-# Check 2 (Regression): Apache should still serve normal pages
+# Scenario 11: Apache Dangerous HTTP Methods (PUT/DELETE via WebDAV)
+#
+# BEHAVIOURAL verifier. It does NOT grep the Apache config — it performs a REAL
+# unauthenticated WebDAV attack: PUT a file with a unique marker to /dav/, then
+# GET it back. If the upload succeeds (2xx) AND the marker is retrievable, an
+# unauthenticated attacker can write arbitrary files to the web root and the box
+# is vulnerable. Once WebDAV is disabled / requires auth, the PUT is refused
+# (401/403/405). A defender who edits the config but never restarts Apache is
+# still exposed, and the live upload proves it.
+#
+# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
-##############################################################################
-# Ensure Apache is running for the checks
-##############################################################################
-apache2ctl start 2>/dev/null
-sleep 1
+set -u
 
-##############################################################################
-# PoC Check: Attempt to PUT a file to /dav/ -- should fail
-##############################################################################
+HOST=127.0.0.1
+PORT=80
+FNAME="poc_$$_$RANDOM.txt"
+MARKER="PWNED-WEBDAV-9f3a2b"
 
-PUT_RESPONSE=$(printf "PUT /dav/testfile.txt HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\nHELLO WORLD" | \
-    nc -w 5 127.0.0.1 80 2>/dev/null | head -1)
+http_req() { nc -w 5 "$HOST" "$PORT" 2>/dev/null; }
 
-if echo "$PUT_RESPONSE" | grep -qE "201 Created|200 OK|204 No Content"; then
-    echo "FAIL: PUT upload succeeded without authentication -- still vulnerable."
-    # Clean up uploaded file
-    rm -f /var/www/dav/testfile.txt 2>/dev/null
-    exit 1
-elif echo "$PUT_RESPONSE" | grep -qE "401|403|405|501"; then
-    echo "PASS: PUT upload was rejected (got: $PUT_RESPONSE)."
-else
-    # If WebDAV module is disabled entirely, PUT will likely get 405
-    # Also check if mod_dav is still loaded
-    if apache2ctl -M 2>/dev/null | grep -q 'dav_module'; then
-        # mod_dav is loaded -- check if /dav/ requires auth
-        if grep -rqE 'AuthType|Require valid-user' /etc/apache2/sites-enabled/ 2>/dev/null; then
-            echo "PASS: WebDAV directory has authentication configured."
-        else
-            echo "FAIL: mod_dav is loaded and /dav/ may still be open."
-            exit 1
-        fi
-    else
-        echo "PASS: mod_dav is disabled."
-    fi
-fi
+cleanup() {
+    printf "DELETE /dav/%s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$FNAME" | http_req >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-##############################################################################
-# Regression Check: Apache should still serve normal HTTP requests
-##############################################################################
-
-GET_RESPONSE=$(printf "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" | \
-    nc -w 5 127.0.0.1 80 2>/dev/null | head -1)
-
-if echo "$GET_RESPONSE" | grep -qE "200 OK"; then
-    echo "PASS: Apache serves normal GET requests."
-else
-    echo "FAIL: Apache is not serving normal pages (got: $GET_RESPONSE)."
+###############################################################################
+# A live daemon is ALWAYS expected (see .preserve-cmd). verify.sh must NEVER
+# start it — a dead service is a real failure.
+###############################################################################
+if ! pgrep -x apache2 >/dev/null 2>&1; then
+    echo "FAIL [Regression]: apache2 is not running — a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
+
+# Wait for Apache to answer a normal GET before probing.
+UP=0; GET=""
+for i in $(seq 1 15); do
+    GET=$(printf "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" | http_req)
+    if echo "$GET" | head -1 | grep -q " 200"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: Apache did not answer a normal GET with 200 on port $PORT —" >&2
+    echo "                   service is down or broken." >&2
+    exit 1
+fi
+
+###############################################################################
+# PoC: PUT an arbitrary file to /dav/ without credentials, then read it back.
+###############################################################################
+PUT=$(printf "PUT /dav/%s HTTP/1.1\r\nHost: localhost\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" \
+    "$FNAME" "${#MARKER}" "$MARKER" | http_req)
+PUT_STATUS=$(echo "$PUT" | head -1)
+
+# Read the uploaded file back to prove the write landed in the web root.
+BACK=$(printf "GET /dav/%s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$FNAME" | http_req)
+
+if echo "$PUT_STATUS" | grep -qE " (200|201|204)" && echo "$BACK" | grep -q "$MARKER"; then
+    echo "FAIL [PoC]: unauthenticated PUT uploaded a file to /dav/ and it was" >&2
+    echo "            retrievable — arbitrary file write. Still vulnerable." >&2
+    echo "            PUT status: $PUT_STATUS" >&2
+    exit 1
+fi
+echo "PASS [PoC]: unauthenticated PUT to /dav/ was refused (PUT status: $PUT_STATUS)."
+
+###############################################################################
+# Regression: Apache still serves normal GET requests.
+###############################################################################
+if ! echo "$GET" | head -1 | grep -q " 200"; then
+    echo "FAIL [Regression]: Apache no longer serves a normal GET with 200." >&2
+    exit 1
+fi
+echo "PASS [Regression]: Apache serves normal GET requests (200 OK)."
 
 echo "All checks passed."
 exit 0

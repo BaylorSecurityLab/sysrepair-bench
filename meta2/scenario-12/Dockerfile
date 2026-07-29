@@ -17,10 +17,13 @@ DOCCONF
 # Create a basic index page
 RUN echo '<html><body><h1>Welcome to the server</h1></body></html>' > /var/www/index.html
 
-# Create startup script
+# Boot wrapper: apache2ctl start daemonizes httpd into the BACKGROUND, then we
+# keep PID 1 as `sleep infinity` (via exec) so an agent restarting Apache can
+# never kill the container. A .preserve-cmd marker makes the harness run this
+# CMD, so the vulnerable /doc alias is live before the agent starts.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo 'apache2ctl start' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 80

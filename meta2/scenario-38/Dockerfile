@@ -29,9 +29,13 @@ RUN printf '%s\n' \
     '   guest ok = yes' \
     > /etc/samba/smb.conf
 
+# Boot wrapper: start smbd/nmbd in the BACKGROUND (bound to all interfaces, the
+# exposed state), then keep PID 1 as `sleep infinity` so an agent restarting
+# Samba cannot kill the container. Binding is set at smbd startup, so an
+# "edited smb.conf but never restarted smbd" case stays exposed and is detectable.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo '/etc/init.d/samba start 2>/dev/null || (smbd -D; nmbd -D)' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 139 445

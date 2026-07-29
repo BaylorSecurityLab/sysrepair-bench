@@ -1,58 +1,59 @@
 #!/bin/bash
-# Verification script for Scenario 12: Apache /doc Directory Browsable
-# Check 1 (PoC): /doc/ should NOT return a directory listing (expect 403 or 404)
-# Check 2 (Regression): Apache should still serve normal pages
+# Scenario 12: Apache /doc Directory Browsable (CVE-1999-0678)
+#
+# BEHAVIOURAL verifier. It requests /doc/ from the RUNNING Apache and detects an
+# autoindex listing in the live response. It does NOT grep the config: an admin
+# who deletes the alias file but never reloads Apache is still exposed, and a
+# grep says nothing about what the live daemon serves. It also NEVER starts
+# Apache -- a dead daemon is a real failure.
+#
+# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+set -u
+HOST=127.0.0.1
+PORT=80
 
-##############################################################################
-# Ensure Apache is running for the checks
-##############################################################################
-apache2ctl start 2>/dev/null
-sleep 1
+http_get() {  # $1 = path -> raw HTTP response
+    printf "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n" "$1" "$HOST" \
+        | nc -w 5 "$HOST" "$PORT" 2>/dev/null
+}
 
-##############################################################################
-# PoC Check: /doc/ should not be browsable
-##############################################################################
-
-DOC_RESPONSE=$(printf "GET /doc/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" | \
-    nc -w 5 127.0.0.1 80 2>/dev/null)
-
-DOC_STATUS=$(echo "$DOC_RESPONSE" | head -1)
-
-if echo "$DOC_STATUS" | grep -qE "200 OK"; then
-    # Got 200 -- check if it contains a directory index
-    if echo "$DOC_RESPONSE" | grep -qi "Index of /doc"; then
-        echo "FAIL: /doc/ returns a browsable directory listing -- still vulnerable."
-        exit 1
-    else
-        echo "PASS: /doc/ returns 200 but no directory index."
-    fi
-elif echo "$DOC_STATUS" | grep -qE "403|404|301"; then
-    echo "PASS: /doc/ access is denied or not found (got: $DOC_STATUS)."
-else
-    # If Apache is not responding on /doc at all, check config
-    if [ ! -f /etc/apache2/conf.d/doc ] && ! grep -rq 'Alias /doc' /etc/apache2/ 2>/dev/null; then
-        echo "PASS: /doc alias has been removed from Apache config."
-    elif grep -rqE 'Deny from all' /etc/apache2/conf.d/doc 2>/dev/null; then
-        echo "PASS: /doc directory is denied in Apache config."
-    else
-        echo "FAIL: Unable to confirm /doc/ is protected."
-        exit 1
-    fi
-fi
-
-##############################################################################
-# Regression Check: Apache should still serve the main site
-##############################################################################
-
-GET_RESPONSE=$(printf "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" | \
-    nc -w 5 127.0.0.1 80 2>/dev/null | head -1)
-
-if echo "$GET_RESPONSE" | grep -qE "200 OK"; then
-    echo "PASS: Apache serves normal GET requests."
-else
-    echo "FAIL: Apache is not serving normal pages (got: $GET_RESPONSE)."
+# Apache must already be running; the verifier must not start it.
+if ! pgrep -x apache2 >/dev/null 2>&1; then
+    echo "FAIL [Regression]: apache2 is not running -- a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
+
+# Wait (bounded) for the daemon to actually answer, so a 'no listing' reading
+# can't be a false pass on a slow/dead port.
+UP=0
+ROOT=""
+for i in $(seq 1 20); do
+    ROOT=$(http_get /)
+    if echo "$ROOT" | grep -q "HTTP/"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != 1 ]; then
+    echo "FAIL [Regression]: Apache did not answer on port $PORT -- service down/broken." >&2
+    exit 1
+fi
+
+# PoC: request the /doc/ alias and look for a directory index in the live reply.
+DOC=$(http_get /doc/)
+STATUS=$(echo "$DOC" | head -1 | tr -d '\r')
+if echo "$DOC" | grep -qiE "Index of /doc|<title>Index of"; then
+    echo "FAIL [PoC]: /doc/ returns a browsable directory listing ($STATUS)" >&2
+    echo "            -- installed-package documentation is exposed to the network." >&2
+    exit 1
+fi
+echo "PASS [PoC]: /doc/ is not browsable ($STATUS)."
+
+# Regression: the main site still serves normally.
+if ! echo "$ROOT" | grep -qE "^HTTP/[0-9.]+ 200"; then
+    echo "FAIL [Regression]: Apache does not serve / with 200 (got: $(echo "$ROOT" | head -1 | tr -d '\r'))." >&2
+    exit 1
+fi
+echo "PASS [Regression]: Apache serves the main site."
 
 echo "All checks passed."
 exit 0

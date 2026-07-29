@@ -1,53 +1,67 @@
 #!/bin/bash
-# Verification script for Scenario 14: Postfix SMTP VRFY/EXPN Enabled
-# Check 1 (PoC): VRFY command should be rejected by Postfix
-# Check 2 (Regression): SMTP should still accept mail (EHLO/MAIL FROM works)
+# Scenario 14: Postfix SMTP VRFY Enabled (user enumeration)
+#
+# BEHAVIOURAL verifier. It opens a real SMTP session against the RUNNING Postfix
+# and issues VRFY, checking the live reply code. It does NOT grep main.cf: a
+# defender who sets disable_vrfy_command=yes but never reloads Postfix is still
+# exposed (verified: the live daemon keeps answering 252 until `postfix reload`).
+# It NEVER starts Postfix -- a dead daemon is a real failure.
+#
+# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+set -u
+HOST=127.0.0.1
+PORT=25
 
-##############################################################################
-# Ensure Postfix is running for the checks
-##############################################################################
-postfix start 2>/dev/null
-sleep 2
+smtp() {  # stdin = SMTP commands -> raw reply
+    nc -w 6 "$HOST" "$PORT" 2>/dev/null
+}
 
-##############################################################################
-# PoC Check: VRFY command should be disabled
-##############################################################################
-
-VRFY_RESPONSE=$(printf "EHLO test\r\nVRFY root\r\nQUIT\r\n" | \
-    nc -w 5 127.0.0.1 25 2>/dev/null)
-
-if echo "$VRFY_RESPONSE" | grep -qE "^252|^250.*root"; then
-    echo "FAIL: VRFY command returned user information -- still vulnerable."
+# Postfix master must already be running; the verifier must not start it.
+if ! pgrep -x master >/dev/null 2>&1; then
+    echo "FAIL [Regression]: Postfix master is not running -- a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
-elif echo "$VRFY_RESPONSE" | grep -qE "^502"; then
-    echo "PASS: VRFY command is disabled (502 response)."
-else
-    # Fallback: check the Postfix config directly
-    if grep -qE '^\s*disable_vrfy_command\s*=\s*yes' /etc/postfix/main.cf 2>/dev/null; then
-        echo "PASS: disable_vrfy_command = yes is set in main.cf."
-    else
-        echo "FAIL: VRFY command may still be enabled (unexpected response)."
-        exit 1
-    fi
 fi
 
-##############################################################################
-# Regression Check: SMTP should still be functional
-##############################################################################
+# Wait (bounded) for the SMTP banner before probing.
+UP=0
+for i in $(seq 1 20); do
+    BANNER=$(printf "QUIT\r\n" | smtp)
+    if echo "$BANNER" | grep -qE "^220"; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != 1 ]; then
+    echo "FAIL [Regression]: Postfix did not present an SMTP banner on port $PORT." >&2
+    exit 1
+fi
 
-SMTP_RESPONSE=$(printf "EHLO test\r\nQUIT\r\n" | \
-    nc -w 5 127.0.0.1 25 2>/dev/null)
+# PoC: issue VRFY against the live daemon. Enabled => 252 (or 250 echoing the
+# user); disabled => 502.
+VRFY_OUT=$(printf "EHLO probe\r\nVRFY root\r\nQUIT\r\n" | smtp)
+VRFY_LINE=$(echo "$VRFY_OUT" | grep -E "^(252|502|250 |550)" | grep -viE "ESMTP|PIPELINING|SIZE|ETRN|STARTTLS|ENHANCEDSTATUSCODES|8BITMIME|DSN|VRFY$|Bye" | head -1 | tr -d '\r')
 
-if echo "$SMTP_RESPONSE" | grep -qE "^220.*ESMTP|^250"; then
-    echo "PASS: Postfix SMTP is responding to EHLO."
+if echo "$VRFY_OUT" | grep -qE "^252"; then
+    echo "FAIL [PoC]: VRFY is accepted (got: $(echo "$VRFY_OUT" | grep -E '^252' | head -1 | tr -d '\r'))" >&2
+    echo "            -- the live SMTP daemon confirms/echoes users for enumeration." >&2
+    exit 1
+fi
+if echo "$VRFY_OUT" | grep -qE "^250 root|^250-root"; then
+    echo "FAIL [PoC]: VRFY echoes the queried user -- still enumerable." >&2
+    exit 1
+fi
+if ! echo "$VRFY_OUT" | grep -qE "^502"; then
+    echo "FAIL [PoC]: could not confirm VRFY is disabled (no 502 reply)." >&2
+    echo "            VRFY reply seen: ${VRFY_LINE:-<none>}" >&2
+    exit 1
+fi
+echo "PASS [PoC]: VRFY is rejected with 502 (command disabled)."
+
+# Regression: the SMTP daemon still greets and accepts EHLO.
+if echo "$VRFY_OUT" | grep -qE "^250-|^250 "; then
+    echo "PASS [Regression]: Postfix still answers EHLO (SMTP functional)."
 else
-    # Check if Postfix process is running
-    if pgrep -x master > /dev/null 2>&1; then
-        echo "PASS: Postfix master process is running."
-    else
-        echo "FAIL: Postfix is not running -- SMTP service is broken."
-        exit 1
-    fi
+    echo "FAIL [Regression]: Postfix did not answer EHLO -- SMTP broken." >&2
+    exit 1
 fi
 
 echo "All checks passed."

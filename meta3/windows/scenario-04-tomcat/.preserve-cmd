@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The harness runs the image CMD so services actually boot. The CMD points at
+# entrypoint.ps1, which is PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * Tomcat (catalina.bat) is launched in the BACKGROUND via Start-Process, so
+#     the JVM is a detached child, NOT PID 1;
+#   * PID 1 is an idle `while ($true) { Start-Sleep -Seconds 60 }` loop.
+#
+# Consequence for solutions: Tomcat is ALREADY RUNNING with the vulnerable
+# config, so a fix must RESTART Tomcat (safe now - it is not PID 1) for the live
+# checks to pass. Restarting the service can never kill the container.

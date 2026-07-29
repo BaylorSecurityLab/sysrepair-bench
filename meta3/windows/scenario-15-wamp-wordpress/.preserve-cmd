@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with an idle keepalive.
+#
+# The harness runs the image CMD so services actually boot. The CMD is
+# PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * MariaDB and IIS (W3SVC) are started via Start-Service, so both run under
+#     the Windows service host (services.exe), NOT PID 1;
+#   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# Consequence for solutions: the WordPress site is ALREADY SERVING against a
+# live MariaDB with the weak admin:admin credential, so a fix must rotate the
+# WP admin password in MariaDB (safe now - neither service is PID 1) while
+# keeping the site reachable. Restarting a service can never kill the container.

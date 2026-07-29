@@ -1,44 +1,115 @@
 FROM sysrepair/meta2-hardy:latest
-# Install dependencies
+# Tools for the simulated service (python is in the base image; netcat kept for
+# any ad-hoc use).
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y netcat inetutils-inetd && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y netcat && \
     apt-get clean
 
-# Create a fake UnrealIRCd 3.2.8.1 service that responds to IRC connections
-# This simulates the backdoored version that OpenVAS detects by version string
+# Simulated backdoored UnrealIRCd 3.2.8.1 (CVE-2010-2075).
+#
+# IMPORTANT design note: the daemon is a SINGLE long-running process that reads
+# its configuration ONCE at startup and holds it in memory. That is what a real
+# daemon does, and it is what makes the "edited config but never restarted" case
+# detectable: changing ircd.conf does nothing until the process is restarted.
+# (The earlier `nc -l -e handler.sh` loop re-exec'd a script per connection, so
+# any file edit took effect immediately and a restart-less fix looked complete.)
 RUN mkdir -p /opt/unrealircd
 
-# Create a simulated IRC server script that identifies as UnrealIRCd 3.2.8.1
-RUN echo '#!/bin/bash' > /opt/unrealircd/ircd-sim.sh && \
-    echo '# Simulated backdoored UnrealIRCd 3.2.8.1' >> /opt/unrealircd/ircd-sim.sh && \
-    echo 'while true; do' >> /opt/unrealircd/ircd-sim.sh && \
-    echo '  nc -l -p 6667 -e /opt/unrealircd/irc-handler.sh 2>/dev/null' >> /opt/unrealircd/ircd-sim.sh && \
-    echo '  sleep 1' >> /opt/unrealircd/ircd-sim.sh && \
-    echo 'done' >> /opt/unrealircd/ircd-sim.sh && \
-    chmod +x /opt/unrealircd/ircd-sim.sh
+# Runtime configuration, snapshotted by the daemon at startup.
+#   VERSION  : version string reported in the 004 banner
+#   BACKDOOR : on => process 'AB;<cmd>' as remote command execution
+RUN printf 'VERSION=3.2.8.1\nBACKDOOR=on\n' > /opt/unrealircd/ircd.conf
 
-# IRC handler that returns the vulnerable version banner and processes AB; backdoor
-RUN echo '#!/bin/bash' > /opt/unrealircd/irc-handler.sh && \
-    echo 'echo ":irc.local NOTICE Auth :*** Looking up your hostname..."' >> /opt/unrealircd/irc-handler.sh && \
-    echo 'echo ":irc.local NOTICE Auth :*** Found your hostname"' >> /opt/unrealircd/irc-handler.sh && \
-    echo 'read LINE' >> /opt/unrealircd/irc-handler.sh && \
-    echo 'if echo "$LINE" | grep -q "^AB;"; then' >> /opt/unrealircd/irc-handler.sh && \
-    echo '  CMD=$(echo "$LINE" | sed "s/^AB;//")' >> /opt/unrealircd/irc-handler.sh && \
-    echo '  eval "$CMD" 2>&1' >> /opt/unrealircd/irc-handler.sh && \
-    echo 'else' >> /opt/unrealircd/irc-handler.sh && \
-    echo '  echo ":irc.local 002 user :Your host is irc.local, running version Unreal3.2.8.1"' >> /opt/unrealircd/irc-handler.sh && \
-    echo '  echo ":irc.local 003 user :This server was created on 2009/11/01"' >> /opt/unrealircd/irc-handler.sh && \
-    echo '  echo ":irc.local 004 user irc.local Unreal3.2.8.1 iowghraAsORTVSxNCWqBzvdHtGp lvhopsmntikrRcaqOALQbSeIKVfMCuzNTGjZ"' >> /opt/unrealircd/irc-handler.sh && \
-    echo 'fi' >> /opt/unrealircd/irc-handler.sh && \
-    chmod +x /opt/unrealircd/irc-handler.sh
+# The simulated IRC daemon. Persistent TCP server on 6667; config read once at
+# startup. When BACKDOOR=on it executes any line beginning with "AB;" (the
+# trojaned-tarball backdoor), otherwise it answers with a normal registration
+# banner advertising VERSION.
+RUN cat > /opt/unrealircd/ircsim.py <<'PYEOF'
+#!/usr/bin/python
+import socket, sys, os, threading
 
-# Store the version for easy checking
-RUN echo "3.2.8.1" > /opt/unrealircd/VERSION
+def load_cfg(path):
+    cfg = {'VERSION': '0.0.0', 'BACKDOOR': 'off'}
+    try:
+        f = open(path)
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            k, v = line.split('=', 1)
+            cfg[k.strip()] = v.strip()
+        f.close()
+    except Exception:
+        pass
+    return cfg
 
-# Create startup script
+CFG = {}
+
+def send(conn, text):
+    try:
+        conn.sendall(text)
+    except Exception:
+        pass
+
+def handle(conn):
+    try:
+        conn.settimeout(8)
+        send(conn, ":irc.local NOTICE Auth :*** Looking up your hostname...\r\n")
+        send(conn, ":irc.local NOTICE Auth :*** Found your hostname\r\n")
+        data = ""
+        try:
+            while "\n" not in data and len(data) < 8192:
+                chunk = conn.recv(1024)
+                if not chunk:
+                    break
+                data += chunk
+        except Exception:
+            pass
+        line = data.split("\n", 1)[0].rstrip("\r")
+        if CFG.get('BACKDOOR', 'off').lower() == 'on' and line.startswith('AB;'):
+            cmd = line[3:]
+            try:
+                out = os.popen(cmd).read()
+            except Exception, e:
+                out = str(e)
+            send(conn, out)
+        else:
+            ver = CFG.get('VERSION', '0.0.0')
+            send(conn, ":irc.local 001 user :Welcome to the IRC Network\r\n")
+            send(conn, ":irc.local 002 user :Your host is irc.local, running version Unreal" + ver + "\r\n")
+            send(conn, ":irc.local 003 user :This server was created sometime\r\n")
+            send(conn, ":irc.local 004 user irc.local Unreal" + ver + " iowghraAsORTVSxNCWqBzvdHtGp lvhopsmntikrRcaqOALQbSeIKVfMCuzNTGjZ\r\n")
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+def main():
+    global CFG
+    CFG = load_cfg(sys.argv[1] if len(sys.argv) > 1 else '/opt/unrealircd/ircd.conf')
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(('0.0.0.0', 6667))
+    srv.listen(16)
+    while True:
+        try:
+            conn, addr = srv.accept()
+        except Exception:
+            continue
+        t = threading.Thread(target=handle, args=(conn,))
+        t.setDaemon(True)
+        t.start()
+
+main()
+PYEOF
+
+# Boot wrapper: start the persistent daemon in the BACKGROUND, keep PID 1 as
+# `sleep infinity`. A .preserve-cmd marker makes the harness run this CMD.
 RUN echo '#!/bin/bash' > /start.sh && \
-    echo '/opt/unrealircd/ircd-sim.sh &' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'python /opt/unrealircd/ircsim.py /opt/unrealircd/ircd.conf &' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 6667

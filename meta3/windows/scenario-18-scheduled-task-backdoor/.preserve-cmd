@@ -1,0 +1,12 @@
+# Use the image CMD instead of replacing it with an idle keepalive.
+#
+# The harness runs the image CMD so services actually boot. The CMD is
+# PID-1-safe:
+#   * sshd + WinRM are started first;
+#   * the backdoor scheduled task is registered via schtasks.exe /Create
+#     (owned by the Task Scheduler service, NOT PID 1);
+#   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# Consequence for solutions: the malicious scheduled task is ALREADY
+# registered, so a fix must delete the task (and its payload); no process runs
+# as PID 1 that a restart could kill.

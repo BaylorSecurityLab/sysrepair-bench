@@ -1,90 +1,101 @@
 #!/bin/bash
-# Verification script for Scenario 02: SSH Weak MAC Algorithms
+# Scenario 02: SSH Weak MAC Algorithms
+#
+# BEHAVIOURAL verifier. It does NOT grep sshd_config — a defender who edits the
+# file but never restarts sshd is still exposed, and a config line says nothing
+# about the MAC list the LIVE daemon actually offers. Instead it negotiates real
+# SSH handshakes against the running sshd, once per weak MAC, and asks the server
+# to accept it. If the server completes key exchange with a weak MAC (handshake
+# reaches the authentication stage) the box is still vulnerable. A "no matching
+# mac" rejection means the daemon refused it.
+#
+# Truth table (MACs directive scoping the LIVE daemon):
+#   no MACs / weak allowed, sshd running        -> weak accepted -> FAIL
+#   MACs hmac-sha1 + sshd restarted              -> weak rejected -> PASS
+#   MACs hmac-sha1 but sshd NOT restarted        -> weak accepted -> FAIL (old daemon)
+#   nothing done                                 -> weak accepted -> FAIL
+#
 # Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
 
-###############################################################################
-# PoC Check: Ensure weak MAC algorithms are no longer accepted by sshd
-###############################################################################
+set -u
 
-SSHD_CONFIG="/etc/ssh/sshd_config"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5 -o PreferredAuthentications=none"
+TARGET="root@127.0.0.1"
 
-# Check that a MACs line exists
-if ! grep -qi '^MACs' "$SSHD_CONFIG"; then
-    echo "FAIL [PoC]: No 'MACs' directive found in sshd_config — weak MACs still allowed by default."
+###############################################################################
+# The image CMD boots sshd (see .preserve-cmd); a live daemon is ALWAYS
+# expected. verify.sh must NEVER start it — a freshly started daemon would mask
+# the "edited config but never restarted" case, and a dead service is a real
+# failure.
+###############################################################################
+if ! pgrep -x sshd >/dev/null 2>&1; then
+    echo "FAIL [Regression]: sshd is not running — a dead service is a failure" >&2
+    echo "                   (verify.sh must not start it)." >&2
     exit 1
 fi
 
-# Extract the MACs line value
-MACS_LINE=$(grep -i '^MACs' "$SSHD_CONFIG" | tail -1 | sed 's/^[Mm][Aa][Cc][Ss][[:space:]]*//')
+# sshd must actually answer before a "mac rejected" reading can be trusted;
+# otherwise every MAC would look rejected on a dead port (false pass). The
+# strongest full-length MAC available on this OpenSSH is hmac-sha1.
+UP=0
+for i in $(seq 1 15); do
+    STRONG_OUT=$(ssh -o MACs=hmac-sha1 $SSH_OPTS "$TARGET" true 2>&1)
+    if echo "$STRONG_OUT" | grep -qiE "permission denied|denied \(|password|authenticated"; then
+        UP=1; break
+    fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: sshd did not complete a handshake with a strong MAC" >&2
+    echo "                   (hmac-sha1) on port 22 — service is down or broken." >&2
+    echo "                   last output: $STRONG_OUT" >&2
+    exit 1
+fi
 
-# List of weak MACs to check against
-WEAK_MACS="hmac-md5 hmac-md5-96 hmac-sha1-96"
+###############################################################################
+# PoC: try to negotiate each weak MAC against the LIVE daemon.
+###############################################################################
+# Weak MACs that Metasploitable's sshd offers by default. Reaching the auth
+# stage with any of these == the daemon accepted it.
+WEAK_MACS="hmac-md5 hmac-md5-96 hmac-sha1-96 hmac-ripemd160 umac-64@openssh.com"
 
 for mac in $WEAK_MACS; do
-    # Use word-boundary matching to avoid false positives
-    if echo "$MACS_LINE" | grep -qiw "$mac"; then
-        echo "FAIL [PoC]: Weak MAC '$mac' is still present in MACs directive."
+    OUT=$(ssh -o MACs="$mac" $SSH_OPTS "$TARGET" true 2>&1)
+
+    # Client can't even offer this MAC — not evidence either way, skip it.
+    if echo "$OUT" | grep -qiE "unknown mac|bad ssh2 mac"; then
+        continue
+    fi
+
+    if echo "$OUT" | grep -qi "no matching mac"; then
+        # Server refused the weak MAC during KEX — good.
+        continue
+    fi
+
+    if echo "$OUT" | grep -qiE "permission denied|denied \(|password|authenticated"; then
+        echo "FAIL [PoC]: sshd negotiated weak MAC '$mac' and reached the" >&2
+        echo "            authentication stage — the weak MAC is still accepted." >&2
         exit 1
     fi
+
+    # Any other outcome (connection reset, kex failure unrelated to mac) is
+    # ambiguous; don't treat it as a pass — surface it as a failure so a broken
+    # verifier can't silently green-light.
+    echo "FAIL [PoC]: unexpected handshake result for MAC '$mac':" >&2
+    echo "            $OUT" >&2
+    exit 1
 done
 
-echo "PASS [PoC]: No weak MACs found in sshd_config MACs directive (config check)."
-
-# Behavioral test: attempt an SSH connection requesting a weak MAC
-# and confirm the server rejects it.
-# Ensure sshd is running first
-if ! pgrep -x sshd > /dev/null 2>&1; then
-    /etc/init.d/ssh start > /dev/null 2>&1
-    sleep 1
-fi
-
-SSH_WEAK_MAC_OUT=$(ssh -v -o MACs=hmac-md5 -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@127.0.0.1 echo test 2>&1 || true)
-
-if echo "$SSH_WEAK_MAC_OUT" | grep -qi "no matching mac"; then
-    echo "PASS [PoC]: Server rejected weak MAC 'hmac-md5' at connection time."
-elif echo "$SSH_WEAK_MAC_OUT" | grep -qi "Permission denied\|password:"; then
-    # Got past MAC negotiation - the weak MAC was accepted
-    echo "FAIL [PoC]: Server accepted weak MAC 'hmac-md5' (got to authentication stage)."
-    exit 1
-else
-    # Check verbose output for which MAC was negotiated
-    SSH_VERBOSE=$(ssh -v -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@127.0.0.1 true 2>&1 || true)
-    if echo "$SSH_VERBOSE" | grep -qi "MAC.*hmac-md5"; then
-        echo "FAIL [PoC]: Weak MAC 'hmac-md5' observed in SSH negotiation."
-        exit 1
-    else
-        echo "PASS [PoC]: Weak MAC 'hmac-md5' not accepted by server."
-    fi
-fi
+echo "PASS [PoC]: sshd rejected every weak MAC during key exchange."
 
 ###############################################################################
-# Regression Check: Ensure sshd is running and functional
+# Regression: sshd still serves connections with a strong MAC.
 ###############################################################################
-
-# Check if sshd process is running
-if pgrep -x sshd > /dev/null 2>&1; then
-    echo "PASS [Regression]: sshd process is running."
-elif /etc/init.d/ssh status 2>/dev/null | grep -qi "running"; then
-    echo "PASS [Regression]: sshd service is running."
-else
-    # Try to start sshd and check again
-    /etc/init.d/ssh start > /dev/null 2>&1
-    sleep 1
-    if pgrep -x sshd > /dev/null 2>&1; then
-        echo "PASS [Regression]: sshd process started and is running."
-    else
-        echo "FAIL [Regression]: sshd is not running. Service may be broken."
-        exit 1
-    fi
-fi
-
-# Verify sshd is listening on port 22
-if netstat -tlnp 2>/dev/null | grep -q ':22'; then
-    echo "PASS [Regression]: sshd is listening on port 22."
-else
-    echo "FAIL [Regression]: sshd is not listening on port 22."
+if ! echo "$STRONG_OUT" | grep -qiE "permission denied|denied \(|password|authenticated"; then
+    echo "FAIL [Regression]: sshd did not complete a handshake with hmac-sha1." >&2
     exit 1
 fi
+echo "PASS [Regression]: sshd completes a handshake with a strong MAC (hmac-sha1)."
 
 echo "All checks passed."
 exit 0

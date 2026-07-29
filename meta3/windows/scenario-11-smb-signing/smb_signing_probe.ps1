@@ -3,7 +3,7 @@
 # Exit 2 = signing required (REMEDIATED)
 # Exit 1 = probe error (TCP failure, timeout, malformed response)
 param(
-    [string]$Host = '127.0.0.1',
+    [string]$TargetHost = '127.0.0.1',
     [int]$Port = 445,
     [int]$TimeoutMs = 3000
 )
@@ -55,7 +55,7 @@ try {
     $client = New-Object System.Net.Sockets.TcpClient
     $client.ReceiveTimeout = $TimeoutMs
     $client.SendTimeout    = $TimeoutMs
-    $client.Connect($Host, $Port)
+    $client.Connect($TargetHost, $Port)
     $stream = $client.GetStream()
     $stream.Write($fullBuf, 0, $fullBuf.Length)
     $stream.Flush()

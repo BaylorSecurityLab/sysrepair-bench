@@ -47,10 +47,14 @@ RUN /etc/init.d/postgresql-8.3 start && \
     su - postgres -c "psql -d testdb -c \"CREATE TABLE test_data (id serial PRIMARY KEY, name varchar(50)); INSERT INTO test_data (name) VALUES ('test_entry');\"" && \
     /etc/init.d/postgresql-8.3 stop
 
-# Create startup script
+# Boot wrapper: the init script starts PostgreSQL in the BACKGROUND, then PID 1
+# stays `sleep infinity` (via exec) so an agent restarting PostgreSQL can never
+# kill the container. A .preserve-cmd marker makes the harness run this CMD, so
+# the SSL-enabled (CVE-2014-0224-vulnerable OpenSSL) daemon is live before the
+# agent starts.
 RUN echo '#!/bin/bash' > /start.sh && \
     echo '/etc/init.d/postgresql-8.3 start' >> /start.sh && \
-    echo 'sleep infinity' >> /start.sh && \
+    echo 'exec sleep infinity' >> /start.sh && \
     chmod +x /start.sh
 
 EXPOSE 5432

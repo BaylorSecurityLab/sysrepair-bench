@@ -1,0 +1,13 @@
+# Use the image CMD instead of replacing it with `sleep infinity`.
+#
+# The Dockerfile CMD starts sshd + WinRM and then execs an idle loop as PID 1
+# (while ($true) { Start-Sleep 60 }). So:
+#   * the legacy Win32-OpenSSH 7.7.2 sshd is ALREADY running and listening on 22/TCP
+#     when the agent starts — verify.ps1's sshd-running + 22-listening regression has
+#     a live daemon, and the "replaced the binary but never restarted sshd" case stays
+#     detectable;
+#   * PID 1 is the idle loop, so stopping/deleting/reinstalling the sshd service cannot
+#     kill the container.
+#
+# Consequence for solutions: a fix must replace the legacy binary AND restart the sshd
+# service so 22/TCP stays up — the vulnerable daemon is already running.
