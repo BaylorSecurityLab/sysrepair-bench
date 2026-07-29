@@ -1,24 +1,66 @@
-# Kernel-LPE Vagrant VM
+# Kernel-LPE VM (Hyper-V)
 
-VirtualBox VM with a **pinned vulnerable Ubuntu 22.04 kernel** and Docker pre-installed. The four kernel-level LPE scenarios run as containers inside this VM so they share its vulnerable kernel.
+Hyper-V VM with a **pinned vulnerable Ubuntu 22.04 kernel** (`5.15.0-25-generic`, ABI 25) and Docker pre-installed. **Three** kernel-level LPE scenarios run as privileged containers inside this VM so they share its vulnerable kernel.
 
-Host prerequisites: see the [root README §3d](../../README.md). On Linux hosts running KVM/libvirt, VirtualBox fights for `/dev/kvm` — stop `libvirtd` or wire up a `:libvirt` provider.
+Vagrant/VirtualBox has been retired — see `lab/KernelLab.ps1` and `lab/KernelOps.ps1`. Requires Hyper-V, an **elevated** PowerShell (Hyper-V cmdlets need it), `qemu-img` (`scoop install qemu`), and `oscdimg` from the Windows ADK Deployment Tools.
+
+**Secure Boot is off, deliberately.** Ubuntu's shim revokes superseded signed kernels to prevent exactly the downgrade this VM performs on purpose; with it on, the guest never reaches the kernel.
+
+## Scenario ownership
+
+| scenario | CVE | this VM? |
+|---|---|---|
+| S21 GameOverlay | CVE-2023-2640/32629 | yes — fixed at ABI 75, we pin 25 |
+| S22 nf_tables UAF | CVE-2024-1086 | yes — fixed at ABI 97 |
+| S117 Copy Fail | CVE-2026-31431 | yes — never backported to 5.15.x |
+| S19 Dirty Pipe | CVE-2022-0847 | **no** — see [`meta4/dirtypipe-vm`](../dirtypipe-vm) |
+
+S19 moved out because 5.15.0-25 **already carries** the Dirty Pipe fix, so here it could only ever be graded through the `chattr +i` compensating control. `meta4/dirtypipe-vm` pins 20.04 HWE `5.13.0-27` — the last ABI before USN-5317-1 — where the real exploit path is reachable.
+
+## Build
+
+```powershell
+cd meta4\kernel-vm\lab
+. .\KernelLab.ps1
+Install-KernelLab     # image -> VHDX -> cloud-init seed -> provision -> baseline checkpoint
+```
+
+`Assert-KernelAbi` fails the build unless ABI 25 booted. That gate matters: a newer kernel silently stops S21/S22 being exploitable and `verify.sh` would then "pass" for the wrong reason.
 
 ## Quick start (manual)
 
-```bash
-cd meta4/kernel-vm
-vagrant up          # provisions VM, installs Docker, pins kernel
-vagrant ssh
-cd /meta4           # scenario dirs are mounted here
-docker build -t s21 scenario-21
-docker run --rm --privileged s21 bash /verify.sh    # FAIL before remediation
-# ...remediate, re-run verify, then: vagrant destroy -f
+```powershell
+cd meta4\kernel-vm\lab
+. .\KernelOps.ps1
+Initialize-KernelHost                  # restore -> start -> portproxy -> ABI check
+Copy-KernelScenarios                   # scp scenario-21/22/117 to /meta4 in the guest
+Invoke-KernelScenarioTest scenario-21   # build + grade; exit 1 BEFORE remediation is correct
 ```
 
-## Running via Inspect AI (`kernel_vm` preset)
+`verify.sh` is **bind-mounted**, not baked into the image:
 
-The `kernel_vm` preset in [`inspect_eval/runs.yaml`](../../inspect_eval/runs.yaml) selects scenarios 19/21/22/117. To make Inspect's docker sandbox build them on the **VM's vulnerable kernel** instead of your laptop's patched one, route docker calls into the VM over SSH:
+```bash
+docker run --rm --privileged -v /meta4/scenario-21/verify.sh:/verify.sh:ro s21 bash /verify.sh
+```
+
+None of these Dockerfiles `COPY verify.sh` — the Inspect harness writes it into the sandbox at scoring time (`scorer.py::_run_verify`). The older documented form, `docker run --privileged s21 bash /verify.sh`, exits **127** with "No such file or directory".
+
+**Reading the result:** a pre-remediation **FAIL is correct** — it is the proof the CVE reproduces on this kernel. A pass before remediation means the scenario is exercising nothing.
+
+## Running via Inspect AI (`kernel_e2e` preset)
+
+`hyperv_vm: meta4/kernel-vm` makes `run.py` drive `lab/hyperv.json` → `Initialize-KernelHost`, then point `DOCKER_CONTEXT` at the VM over SSH, so images build and run on the **VM's** vulnerable kernel rather than the host's patched one:
+
+```bash
+cd inspect_eval
+uv run python -m sysrepair_bench.run kernel_e2e      # scenarios 21/22/117
+uv run python -m sysrepair_bench.run dirtypipe_e2e   # scenario 19, on the 5.13 VM
+```
+
+No manual `docker context` juggling is needed — `_ensure_vagrant_docker_host` writes the managed `~/.ssh/config` block and creates the context itself.
+
+<details>
+<summary>Legacy Vagrant instructions (retired — kept for reference only)</summary>
 
 ```bash
 # 1. Bring the VM up (one-time per session).
@@ -84,7 +126,7 @@ docker context rm kernel-vm
 
 The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vagrant's insecure key and the right `Port`, so no other env vars are needed. If `~/.ssh/config` doesn't exist yet, create the parent dir first: `New-Item -ItemType Directory -Force $env:USERPROFILE\.ssh`.
 
-
+</details>
 
 ## Kernel coverage
 
@@ -95,18 +137,25 @@ The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vag
 | S22 nf_tables UAF | CVE-2024-1086 | 5.15.0-97 | Yes — VM pins ABI < 97 |
 | S117 Copy Fail | CVE-2026-31431 | 6.18.22 / 6.19.12 / 7.0 | Yes — fix not backported to 5.15.x; VM's pinned kernel is vulnerable |
 
-### S19 reproduction
+### S19 reproduction — use `meta4/dirtypipe-vm`
 
-S19 needs a separate Ubuntu 20.04 HWE host on kernel 5.13.0-27 or earlier (pre-USN-5317-1):
+S19 needs Ubuntu 20.04 HWE on `5.13.0-27` or earlier (pre-USN-5317-1). That VM now exists and is built the same way as this one:
 
-```bash
-vagrant init ubuntu/focal64 --box-version "~> 20220101"
-vagrant up && vagrant ssh
-sudo apt-get install -y docker.io
-sudo docker build -t s19 /path/to/meta4/scenario-19
-sudo docker run --rm --privileged s19 bash /verify.sh
+```powershell
+cd meta4\dirtypipe-vm\lab
+. .\DirtyPipeLab.ps1
+Install-DirtyPipeLab          # asserts ABI 27 booted
 ```
 
-Or run S19 in **compensating-control mode** on any host: the agent applies `chattr +i /opt/suid-marker` and verify.sh accepts that regardless of host kernel.
+```bash
+cd inspect_eval
+uv run python -m sysrepair_bench.run dirtypipe_e2e
+```
+
+Its `install-old-kernel.sh` fetches the kernel debs by **direct URL** — 5.13 HWE is EOL and superseded, so `apt-get install linux-image-5.13.0-27-generic` on a current focal resolves to something newer or nothing. Both debs must go in **one** `dpkg -i` call: `linux-modules-X` depends on `linux-image-X`, so installing them separately fails whichever order you try.
+
+Compensating-control mode still works on any host (the agent applies `chattr +i /opt/suid-marker` and `verify.sh` accepts it regardless of kernel) — but that grades the mitigation, not the CVE, which is why the dedicated VM exists.
+
+**Caveat on this table's `Covered?` column for S19:** `verify.sh` decides "vulnerable" from `uname -r` with the ABI stripped (`5.15.0-25-generic` → `5.15.0`), then compares against upstream `5.15.26`. Ubuntu backports fixes into the **ABI**, not the point release, so a patched 22.04 GA kernel is reported vulnerable. The check cannot distinguish patched from unpatched on any Ubuntu `5.15.0-NN`. Not yet fixed — it changes grading on every Ubuntu host.
 
 Kernel-LPE scenarios require `--privileged` — Docker's default seccomp profile blocks `unshare -U` from unprivileged users, so the behavioral probe needs the flag to reach actual host-kernel userns behavior.
