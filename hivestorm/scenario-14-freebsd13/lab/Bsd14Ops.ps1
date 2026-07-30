@@ -124,6 +124,17 @@ function Restore-Hs14Baseline {
         Stop-VM -Name $script:VmName -TurnOff -Force
     }
     Restore-VMSnapshot -VMSnapshot $snap -Confirm:$false
+
+    # Default is Save, which parks the VM on host shutdown and can resume onto an
+    # older disk state -- meta4-kernel silently reverted /meta4 that way, and it
+    # was caught by hashing a deployed file rather than by anything failing. The
+    # property is only settable while the VM is not running, and a restore is the
+    # one point where that is guaranteed, so it self-heals here.
+    if ((Get-VM -Name $script:VmName).AutomaticStopAction -ne 'ShutDown') {
+        Set-VM -Name $script:VmName -AutomaticStopAction ShutDown
+        Write-Host "[hs14] AutomaticStopAction -> ShutDown"
+    }
+
     Write-Host "[hs14] restored to baseline"
 }
 
