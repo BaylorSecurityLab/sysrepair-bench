@@ -5,9 +5,9 @@ ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 KV=$(uname -r | sed -E 's/-.*//')
 SAFE=0
 
-# Rough fixed lines: 5.15.0-75, 5.19.0-46, 6.2.0-26, or any 6.3+
+# Fixed lines: 5.15.0-78 (USN-6248-1), 5.19.0-46, 6.2.0-26, or any 6.3+
 case "$KV" in
-    5.15.*) ver_ge "$KV" "5.15.0" && [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 75 2>/dev/null ] && SAFE=1 ;;
+    5.15.*) ver_ge "$KV" "5.15.0" && [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 78 2>/dev/null ] && SAFE=1 ;;
     5.19.*) [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 46 2>/dev/null ] && SAFE=1 ;;
     6.2.*)  [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 26 2>/dev/null ] && SAFE=1 ;;
     *) ver_ge "$KV" "6.3" && SAFE=1 ;;
