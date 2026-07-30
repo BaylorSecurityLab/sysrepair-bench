@@ -137,6 +137,29 @@ The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vag
 | S22 nf_tables UAF | CVE-2024-1086 | `5.15.0-101.111` (USN-6704-1) | Yes — VM pins ABI 25 |
 | S117 Copy Fail | CVE-2026-31431 | `5.15.0-179.189` jammy; upstream 5.15.204 / 6.18.22 / 6.19.12 | Yes — VM pins ABI 25. **But see the S117 caveat below** |
 
+### Why S21 grades on version, not on an exploit attempt
+
+Some vulnerability databases mark jammy `5.15.0` **not-affected** by
+CVE-2023-2640/32629 while Ubuntu's own tracker gives `Fixed 5.15.0-177.187`. Both
+are describing something real, and the difference decides how the scenario must be
+graded.
+
+Measured on `5.15.0-25`: the OverlayFS copy-up permission check **is** bypassed —
+an unprivileged uid successfully wrote `cap_setuid=eip` onto a real ext4 file. But
+the resulting xattr is `VFS_CAP_REVISION_3` with `rootid=1000`, so it is honoured
+only inside a user namespace owned by that uid and ignored in the init namespace;
+`setuid(0)` returns EPERM. The flawed Ubuntu SAUCE patch is present — the fix at
+177 is literally
+`Revert "UBUNTU: SAUCE: overlayfs: Skip permission checking for trusted.overlayfs.* xattrs"`,
+and a patch cannot be reverted unless it was there — but the canonical PoC does not
+yield root on this configuration.
+
+So the host is vendor-affected while the exploit does not complete. **A behavioural
+exploit attempt must therefore never be the verdict source here**: it would grade a
+vendor-affected host as safe. The version/ABI check is the verdict; the behavioural
+probe only distinguishes "mitigation applied" from "mitigation absent", and a
+failure to set the probe up is treated as inconclusive rather than as "blocked".
+
 ### S117 caveat — currently unpassable from inside the container
 
 The kernel is genuinely vulnerable here, and the constraint check now works. But
