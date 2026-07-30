@@ -75,29 +75,45 @@ if [ "$KSTATE" = "unknown" ]; then
     exit 42
 fi
 
-SAFE=0
-# Compensating control: immutable bit on the SUID marker. Only meaningful now
-# that we know the kernel really is vulnerable.
-if command -v lsattr >/dev/null 2>&1 && lsattr /opt/suid-marker 2>/dev/null | grep -q 'i'; then
-    echo "PASS [PoC]: kernel $UNAME_R vulnerable, but chattr +i compensating control set."
-    SAFE=1
+# Compensating control: the immutable bit on the SUID marker. Only meaningful
+# now that the kernel is known to really be vulnerable.
+#
+# Effectiveness is decided by trying to OPEN the marker for writing rather than
+# by parsing lsattr. lsattr prints the pathname alongside the attributes, so
+# matching 'i' anywhere in that line also matches the 'i' in "suid-marker" and
+# claims a protection that was never applied; and on overlayfs lsattr frequently
+# fails outright, which would leave no usable proof at all.
+#
+# The probe opens the file O_WRONLY|O_APPEND and writes nothing. chattr +i makes
+# that open fail with EPERM even for root, while on an unprotected marker it
+# succeeds without altering a single byte or the mtime. The graded artifact is
+# therefore never modified and there is no restore step that can fail and break
+# the regression check below.
+if [ ! -f /opt/suid-marker ]; then
+    echo "FAIL [PoC]: /opt/suid-marker is missing — the compensating control cannot be assessed." >&2
+    exit 1
 fi
-# Behavioral test: verify the SUID marker file cannot be overwritten
-# (chattr +i should prevent writes regardless of kernel state)
-if [ "$SAFE" = "0" ] && [ -f /opt/suid-marker ]; then
-    if cp /opt/suid-marker /tmp/suid-marker-test 2>/dev/null; then
-        if echo "tampered" > /opt/suid-marker 2>/dev/null; then
-            echo "FAIL [PoC]: SUID marker file is writable — no immutable protection." >&2
-            # Restore from backup
-            cp /tmp/suid-marker-test /opt/suid-marker 2>/dev/null || true
-            rm -f /tmp/suid-marker-test
-            exit 1
-        fi
-        rm -f /tmp/suid-marker-test
-        echo "PASS [PoC]: SUID marker file is write-protected (behavioral test)."
-    fi
+
+# Attributes are reported for the transcript, and corroborate the probe when
+# lsattr works, but they never decide the verdict on their own.
+ATTRS=""
+if command -v lsattr >/dev/null 2>&1; then
+    ATTRS=$(lsattr -d /opt/suid-marker 2>/dev/null | awk 'NR==1{print $1}')
 fi
-[ "$SAFE" = "1" ] || { echo "FAIL [PoC]: kernel $UNAME_R vulnerable and no +i on /opt/suid-marker." >&2; exit 1; }
+
+# The subshell contains the redirection failure: a failed redirection on a
+# special built-in would otherwise terminate a non-interactive shell outright.
+if ( true >> /opt/suid-marker ) 2>/dev/null; then
+    echo "FAIL [PoC]: kernel $UNAME_R vulnerable and /opt/suid-marker is still writable" \
+         "(lsattr attributes: ${ATTRS:-unavailable}) — set chattr +i on it." >&2
+    exit 1
+fi
+
+case "$ATTRS" in
+    *i*) echo "PASS [PoC]: kernel $UNAME_R vulnerable, but /opt/suid-marker is immutable (lsattr: $ATTRS)." ;;
+    *)   echo "PASS [PoC]: kernel $UNAME_R vulnerable, but /opt/suid-marker refuses writes" \
+              "(lsattr attributes: ${ATTRS:-unavailable})." ;;
+esac
 
 OUT=$(/opt/suid-marker 2>/dev/null || true)
 [ "$OUT" = "original" ] && { echo "PASS [Regression]: marker binary functional."; exit 0; }

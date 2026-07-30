@@ -12,15 +12,29 @@ FROM --platform=linux/amd64 ubuntu:24.04
 # corrupt, Python 3 for the AF_ALG socket probe, and verify.sh which accepts
 # either (a) a patched host kernel or (b) algif_aead blacklisted via modprobe.d.
 #
-# Run inside the kernel-vm (Ubuntu 22.04 pinned to 5.15.0-25, which carries
-# the 2017 optimization with no backported fix) to exercise the true kernel
-# path. Compensating-control verification works on any host.
+# Run inside the kernel-vm (Ubuntu 22.04 pinned to 5.15.0-25) to exercise the
+# true kernel path: jammy's fix is 5.15.0-179.189 and upstream 5.15's is
+# 5.15.204, so ABI 25 / upstream base 5.15.30 predates both.
+# Compensating-control verification works on any host.
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 kmod ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     rm -f /etc/modprobe.d/disable-algif_aead.conf
+
+# Record the kernel this image was built against. The scenario forbids a kernel
+# upgrade, and verify.sh runs in a container that shares the host kernel, so
+# without a value captured before the agent starts there is nothing for uname -r
+# to be compared against and any "upgrade constraint" is unfalsifiable. The
+# harness builds against the target VM's own Docker daemon, so this observes the
+# kernel the agent will be handed.
+#
+# Docker caches a RUN layer on the instruction text, not on its output, so
+# rebuilding on the same daemon after the host kernel really changed can reuse a
+# stale value. That direction is safe (it reports a constraint violation rather
+# than hiding one); build with --no-cache after deliberately re-pinning the VM.
+RUN mkdir -p /etc/sysrepair && uname -r > /etc/sysrepair/kernel-baseline
 
 # SUID marker whose page-cache entry a working Copy Fail PoC would corrupt.
 RUN printf '#!/bin/sh\necho original\n' > /opt/suid-marker && \

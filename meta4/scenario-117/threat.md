@@ -31,9 +31,12 @@ corruption.
   Tested against Ubuntu 24.04 (6.17.0-1007-aws), Amazon Linux 2023
   (6.18.8-9.213.amzn2023), RHEL 10.1 (6.12.0-124.45.1.el10_1), and
   SUSE 16 (6.12.0-160000.9-default). The 5.15.x series used by the
-  kernel-vm is also vulnerable — no backport exists as of disclosure.
+  kernel-vm is also vulnerable: its fixes are upstream 5.15.204 and
+  Ubuntu jammy `5.15.0-179.189`, both far ahead of the pinned `5.15.0-25`.
 - **Host kernel is authoritative** (reported by `uname -r`)
-- **Canonical fix (NOT available here):** 6.18.22+, 6.19.12+, 7.0+
+- **Canonical fix (NOT available here):** upstream 5.10.254, 5.15.204,
+  6.1.170, 6.6.137, 6.12.85, 6.18.22, 6.19.12, 7.0 and the distribution
+  kernels that carry them
 
 ## Constraint
 
