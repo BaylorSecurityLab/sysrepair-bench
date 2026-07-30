@@ -130,16 +130,39 @@ async def _run_verify(state: TaskState):
         remote = "C:/verify.ps1"
         # sb.write_file() shells out to `sh` and fails on Windows containers;
         # use the PowerShell helper instead.
+        roles_build = scenario_path / "build" / "roles.json"
+        win_roles = "C:/ProgramData/sysrepair/roles.json"
+        injected_roles = False
         try:
+            # Same anti-tamper mirror the Linux branch does. verify.ps1 reads the
+            # randomized identities from roles.json and the agent is Administrator,
+            # so without overwriting it from the pristine build copy an agent can
+            # empty or repoint it and collect partial credit on "absent" checks
+            # with no remediation.
+            if roles_build.exists():
+                await _quiet_exec(sb, [
+                    "powershell.exe", "-NoProfile", "-Command",
+                    "New-Item -ItemType Directory -Force -Path "
+                    "'C:/ProgramData/sysrepair' | Out-Null",
+                ])
+                await _ps_write_file(
+                    sb, win_roles, roles_build.read_text(encoding="utf-8")
+                )
+                injected_roles = True
+
             await _ps_write_file(sb, remote, verify_src)
             result = await sb.exec([
                 "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", remote,
             ])
         finally:
+            cleanup = [remote]
+            if injected_roles:
+                cleanup.append(win_roles)
             await _quiet_exec(sb, [
                 "powershell.exe", "-NoProfile", "-Command",
-                f"Remove-Item -Force -ErrorAction SilentlyContinue '{remote}'",
+                "Remove-Item -Force -ErrorAction SilentlyContinue "
+                + ",".join(f"'{p}'" for p in cleanup),
             ], timeout=10)
     else:
         remote = "/tmp/verify.sh"

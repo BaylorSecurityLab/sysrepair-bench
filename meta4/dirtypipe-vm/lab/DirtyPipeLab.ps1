@@ -473,8 +473,7 @@ function Assert-DirtyPipeAbi {
     stop being exploitable, and verify.sh would "pass" for the wrong reason.
     #>
     param([Parameter(Mandatory)][string] $Running)
-    # 5.13, not 5.15 -- this VM exists precisely because 5.15.0-25 already carries
-    # the Dirty Pipe fix. Unanchored so a stray leading line cannot break it.
+    # Unanchored: a stray leading line must not break the match.
     if ($Running -notmatch '5\.13\.0-(\d+)-generic') {
         throw "Assert-DirtyPipeAbi: unexpected kernel '$Running'; wanted $($script:DirtyPipeVersion)"
     }

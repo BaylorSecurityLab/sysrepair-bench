@@ -110,10 +110,6 @@ def _ensure_hivestorm_roles(cfg: dict) -> None:
         return
 
     hivestorm_dir = REPO_ROOT / "hivestorm"
-    prepare = hivestorm_dir / "prepare.sh"
-    if not prepare.is_file():
-        return
-
     missing = [
         d for d in sorted(hivestorm_dir.glob("scenario-*"))
         if d.is_dir() and (d / "Dockerfile").exists()
@@ -123,22 +119,27 @@ def _ensure_hivestorm_roles(cfg: dict) -> None:
         return
 
     print(f"[pre-build] generating hivestorm roles.json ({len(missing)} missing) ...")
-    warn = (
-        "[pre-build] WARNING: could not generate hivestorm roles.json. Hivestorm "
-        "builds will fail with '\"/build/roles.json\": not found'. Run it manually:\n"
-        "    bash hivestorm/prepare.sh"
-    )
-    try:
-        result = subprocess.run(
-            ["bash", str(prepare)], cwd=str(REPO_ROOT), timeout=600
+
+    # Generated in-process rather than by shelling out to prepare.sh: bash is not
+    # reliably on PATH on Windows, and when it is, a non-zero exit here left the
+    # build to fail later with '"/build/roles.json": not found' instead.
+    from .task import _hivestorm_prepare  # noqa: PLC0415
+
+    failed: list[str] = []
+    for d in missing:
+        try:
+            _hivestorm_prepare(d)
+        except Exception as e:
+            failed.append(f"{d.name}: {e.__class__.__name__}: {e}")
+
+    if failed:
+        raise SystemExit(
+            "[pre-build] could not generate hivestorm roles.json for:\n"
+            + "\n".join(f"    {f}" for f in failed)
+            + "\n           Their image builds would fail with "
+            '\'"/build/roles.json": not found\'.'
         )
-        if result.returncode != 0:
-            print(warn)
-    except FileNotFoundError:
-        # No bash on PATH (plain Windows shell without Git Bash / WSL).
-        print(f"{warn}\n    (bash was not found on PATH)")
-    except subprocess.TimeoutExpired:
-        print(f"{warn}\n    (prepare.sh timed out after 600s)")
+    print(f"[pre-build] generated roles.json for {len(missing)} scenario(s)")
 
 
 def _ensure_base_images(cfg: dict) -> None:
