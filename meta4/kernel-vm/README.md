@@ -10,9 +10,9 @@ Vagrant/VirtualBox has been retired — see `lab/KernelLab.ps1` and `lab/KernelO
 
 | scenario | CVE | this VM? |
 |---|---|---|
-| S21 GameOverlay | CVE-2023-2640/32629 | yes — fixed at ABI 78, we pin 25 |
+| S21 GameOverlay | CVE-2023-2640/32629 | yes — jammy fix is `5.15.0-177.187`; we pin 25 |
 | S22 nf_tables UAF | CVE-2024-1086 | yes — fixed at ABI 101 |
-| S117 Copy Fail | CVE-2026-31431 | yes — never backported to 5.15.x |
+| S117 Copy Fail | CVE-2026-31431 | yes — jammy fix is `5.15.0-179.189`; we pin 25 |
 | S19 Dirty Pipe | CVE-2022-0847 | **no** — see [`meta4/dirtypipe-vm`](../dirtypipe-vm) |
 
 S19 moved out because 5.15.0-25 **already carries** the Dirty Pipe fix, so here it could only ever be graded through the `chattr +i` compensating control. `meta4/dirtypipe-vm` pins 20.04 HWE `5.13.0-27` — inside the affected window, since USN-5317-1 landed the fix at `5.13.0-35.40` — where the real exploit path is reachable.
@@ -133,9 +133,26 @@ The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vag
 | Scenario | CVE | Kernel fix | Covered? |
 |---|---|---|---|
 | S19 Dirty Pipe | CVE-2022-0847 | 5.15.25 upstream; jammy GA `5.15.0-25` | No — already patched here; verify.sh exits 42 (SKIP) |
-| S21 GameOverlay | CVE-2023-2640/32629 | `5.15.0-78.85` (USN-6248-1) | Yes — VM pins ABI 25 |
+| S21 GameOverlay | CVE-2023-2640/32629 | `5.15.0-177.187` (jammy changelog reverts the SAUCE patch) | Yes — VM pins ABI 25 |
 | S22 nf_tables UAF | CVE-2024-1086 | `5.15.0-101.111` (USN-6704-1) | Yes — VM pins ABI 25 |
-| S117 Copy Fail | CVE-2026-31431 | 6.18.22 / 6.19.12 / 7.0 | Yes — fix not backported to 5.15.x; VM's pinned kernel is vulnerable |
+| S117 Copy Fail | CVE-2026-31431 | `5.15.0-179.189` jammy; upstream 5.15.204 / 6.18.22 / 6.19.12 | Yes — VM pins ABI 25. **But see the S117 caveat below** |
+
+### S117 caveat — currently unpassable from inside the container
+
+The kernel is genuinely vulnerable here, and the constraint check now works. But
+the remediation the scenario asks for cannot be performed by the agent:
+`request_module()` runs the kernel's modprobe helper through
+`call_usermodehelper`, which executes in the **initial** namespaces — against the
+**host** root filesystem. So the container's `/etc/modprobe.d` has no effect on
+module auto-loading, and the verifier's own AF_ALG probe reloads the module it just
+asked the agent to blacklist.
+
+Measured: a blacklist on the host gives `blocked (ENOENT)`; the identical file
+inside the container gives `accessible`. Exit 0 was reachable **only** by
+blacklisting on the host, which the agent cannot reach. This is a scenario-design
+problem, not a verifier bug, and it predates the Hyper-V port — it needs either a
+host-side remediation channel or a different mitigation to grade. Until then S117
+reports INCORRECT even for a correct in-container answer.
 
 ### S19 reproduction — use `meta4/dirtypipe-vm`
 
