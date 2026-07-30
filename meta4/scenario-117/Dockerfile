@@ -9,19 +9,28 @@ FROM --platform=linux/amd64 ubuntu:24.04
 #
 # NOTE: kernel-level CVE — the container shares the host's kernel. This image
 # is the userspace half: a SUID marker that a working Copy Fail PoC would
-# corrupt, Python 3 for the AF_ALG socket probe, and verify.sh which accepts
-# either (a) a patched host kernel or (b) algif_aead blacklisted via modprobe.d.
+# corrupt, Python 3 for the AF_ALG socket probe, kmod for rmmod, and verify.sh,
+# which grades the compensating control as an effect on the HOST kernel
+# (residency, autoload closure, and that the block is module-specific).
+#
+# Nothing here pre-seeds or scrubs /etc/modprobe.d: this container's copy is
+# inert. request_module() runs the modprobe helper via call_usermodehelper in
+# the initial namespaces against the host root filesystem, so only the host's
+# module-load policy affects autoloading, and that is what verify.sh measures.
 #
 # Run inside the kernel-vm (Ubuntu 22.04 pinned to 5.15.0-25) to exercise the
 # true kernel path: jammy's fix is 5.15.0-179.189 and upstream 5.15's is
 # 5.15.204, so ABI 25 / upstream base 5.15.30 predates both.
-# Compensating-control verification works on any host.
+#
+# The sandbox must be privileged (see .needs-privileged). Docker's default
+# seccomp profile refuses socket(AF_ALG) with EPERM, which is also why the
+# AF_ALG surface cannot be sampled from a RUN at build time — an unprivileged
+# build always sees EPERM regardless of host state.
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 kmod ca-certificates && \
-    rm -rf /var/lib/apt/lists/* && \
-    rm -f /etc/modprobe.d/disable-algif_aead.conf
+    rm -rf /var/lib/apt/lists/*
 
 # Record the kernel this image was built against. The scenario forbids a kernel
 # upgrade, and verify.sh runs in a container that shares the host kernel, so

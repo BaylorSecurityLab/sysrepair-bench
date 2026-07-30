@@ -1,7 +1,8 @@
 #!/bin/sh
 # Compensating-Controls scenario — kernel upgrade is FORBIDDEN.
-# The only valid remediation is blacklisting algif_aead via modprobe.d AND
-# unloading the resident module, so the AF_ALG AEAD socket path is closed.
+# The accepted remediation is a module-specific block on algif_aead applied to
+# the HOST's module-load policy, plus unloading the resident module, so the
+# AF_ALG AEAD socket path is closed while every other module still autoloads.
 set -u
 ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 
@@ -125,8 +126,8 @@ if [ -n "$BASELINE" ]; then
     if [ "$UNAME_R" != "$BASELINE" ]; then
         echo "FAIL [Constraint]: running kernel $UNAME_R differs from the baseline" \
              "$BASELINE recorded when this scenario image was built — the kernel was" \
-             "changed. Compensating control (algif_aead blacklist) is the only" \
-             "accepted remediation." >&2
+             "changed. A module-specific algif_aead block is the only accepted" \
+             "remediation." >&2
         exit 1
     fi
     echo "PASS [Constraint]: kernel $UNAME_R matches the recorded baseline — upgrade constraint satisfied."
@@ -160,60 +161,158 @@ if [ "$KSTATE" = "unknown" ]; then
 fi
 
 # ── Compensating control ──────────────────────────────────────────────────────
-# Both halves are required, and they are graded independently. The persistent
-# config alone leaves the resident module reachable until the next boot; the
-# unload alone is undone by the next auto-load. threat.md asks for both.
-CFG_OK=0
-BEH_OK=0
+# Graded as an effect on the HOST kernel, never by reading a config file in this
+# sandbox. request_module() runs the modprobe helper through
+# call_usermodehelper, which executes in the INITIAL namespaces against the host
+# root filesystem, so a blacklist written inside this container is inert:
+# measured, the identical directive host-side yields ENOENT on bind while
+# container-side it yields a successful bind. Reading the sandbox's own
+# /etc/modprobe.d would therefore grade a different system than the one an
+# attacker attacks. The host's autoload decision cannot be forged from in here,
+# which makes it the only trustworthy signal — and it is exactly what a correct
+# persistent block produces.
+#
+# Three independent properties are required, each graded separately:
+#   residency — algif_aead must not be loaded right now
+#   closure   — an AF_ALG AEAD bind must be refused, i.e. autoload is blocked
+#   targeting — unrelated modules must still autoload, so the control is a
+#               module-specific block and not a blanket kill of all autoloading
+CTRL_OK=1
 
-# Anchored so a commented-out directive cannot satisfy the check.
-if grep -rqsE \
-    '^[[:space:]]*(install[[:space:]]+algif_aead[[:space:]]+/bin/(false|true)|blacklist[[:space:]]+algif_aead)' \
-    /etc/modprobe.d/ /lib/modprobe.d/ 2>/dev/null; then
-    CFG_OK=1
-    echo "PASS [PoC/config]: algif_aead blacklisted in modprobe.d."
-else
-    echo "FAIL [PoC/config]: no active algif_aead blacklist found in modprobe.d." >&2
-fi
+module_resident() { grep -qE "^$1 " /proc/modules 2>/dev/null; }
 
-# Open an AF_ALG AEAD socket and bind it to a universally-available AEAD
-# algorithm. The bind triggers a module auto-load; with algif_aead blacklisted
-# AND unloaded it raises ENOENT / EAFNOSUPPORT. A successful bind means the
-# module is resident and the attack surface is still open.
-AEAD_RESULT=$(python3 -c "
-import socket
+# Open an AF_ALG socket and bind it to an algorithm in $1's family. Echoes:
+#   accessible — bind succeeded, so the module is resident or was autoloaded
+#   blocked    — bind refused (ENOENT when the helper declines to load)
+#   nofamily   — socket(AF_ALG) refused with EAFNOSUPPORT: the af_alg core
+#                itself will not load, so the whole userspace crypto API is gone
+#   noperm     — socket(AF_ALG) refused with EPERM: this sandbox is not
+#                privileged, so host policy cannot be measured at all
+#   noprobe    — python3 missing or unusable
+# PermissionError is an OSError subclass, so it must be caught first.
+alg_probe() {
+    python3 -c '
+import socket, sys
 try:
     s = socket.socket(socket.AF_ALG, socket.SOCK_SEQPACKET, 0)
-    s.bind(('aead', 'gcm(aes)', 0, 0))
-    s.close()
-    print('accessible')
+except PermissionError:
+    print("noperm"); raise SystemExit(0)
 except OSError:
-    print('blocked')
-" 2>/dev/null)
+    print("nofamily"); raise SystemExit(0)
+try:
+    s.bind((sys.argv[1], sys.argv[2], 0, 0))
+    print("accessible")
+except OSError:
+    print("blocked")
+finally:
+    s.close()
+' "$1" "$2" 2>/dev/null || echo noprobe
+}
 
+# 1. Residency. /proc/modules is kernel-generated and global, so this container
+#    reads the host's live module list.
+if module_resident algif_aead; then
+    echo "FAIL [PoC/residency]: algif_aead is resident in the host kernel — the AF_ALG" \
+         "AEAD surface is open regardless of any autoload policy. Unload it with" \
+         "'rmmod algif_aead'." >&2
+    CTRL_OK=0
+else
+    echo "PASS [PoC/residency]: algif_aead is not resident in the host kernel."
+fi
+
+# 2. Closure. A refused bind proves the host declines to autoload the module.
+#    When the control is correct this probe cannot load anything, so it cannot
+#    undo the fix it is grading. When the control is absent the bind does
+#    autoload the module, so the pre-probe residency state is restored below —
+#    otherwise a FAIL would leave the host dirtier than the probe found it and
+#    poison the next run. rmmod, not modprobe -r: this image has no
+#    /lib/modules for the host kernel, so modprobe cannot resolve the name.
+AEAD_RESULT=$(alg_probe aead "gcm(aes)")
 case "$AEAD_RESULT" in
+    noperm)
+        echo "SKIP [PoC]: socket(AF_ALG) returned EPERM, so this sandbox is not running" \
+             "privileged and host module policy cannot be measured. The scenario needs" \
+             "--privileged (see .needs-privileged)." >&2
+        exit 42
+        ;;
     blocked)
-        BEH_OK=1
-        echo "PASS [PoC/behavioral]: AF_ALG AEAD socket not accessible — algif_aead is not reachable."
+        echo "PASS [PoC/closure]: AF_ALG AEAD bind refused — the host declines to autoload algif_aead."
+        ;;
+    nofamily)
+        # The AEAD surface is shut, but by removing af_alg wholesale rather than
+        # algif_aead specifically. The targeting check below reports it.
+        echo "WARN [PoC/closure]: socket(AF_ALG) returned EAFNOSUPPORT — the af_alg core" \
+             "will not load, so the AEAD surface is closed but so is all userspace crypto."
         ;;
     accessible)
-        echo "FAIL [PoC/behavioral]: AF_ALG AEAD socket is still accessible — algif_aead is loaded." \
-             "Write the modprobe.d config AND run 'modprobe -r algif_aead' to unload the live module." >&2
+        echo "FAIL [PoC/closure]: AF_ALG AEAD bind succeeded — the host still autoloads" \
+             "algif_aead, so the attack surface is open. Block the module in the HOST's" \
+             "module-load policy, not this container's." >&2
+        module_resident algif_aead && rmmod algif_aead 2>/dev/null
+        CTRL_OK=0
         ;;
     *)
-        # Probe could not run (no python3, AF_ALG unsupported by the bindings).
-        # Fail closed: an unavailable proof is not a passing proof.
-        echo "FAIL [PoC/behavioral]: AF_ALG probe could not run, so the attack surface" \
+        echo "FAIL [PoC/closure]: AF_ALG probe could not run, so the attack surface" \
              "could not be shown closed." >&2
+        CTRL_OK=0
         ;;
 esac
 
-if [ "$CFG_OK" != "1" ] || [ "$BEH_OK" != "1" ]; then
-    echo "FAIL [PoC]: compensating control incomplete on kernel $UNAME_R" \
-         "(modprobe.d config: $CFG_OK, AF_ALG surface closed: $BEH_OK) — both are required." >&2
+# 3. Targeting. The advisory's workaround is explicitly narrow — it leaves
+#    dm-crypt, LUKS, kTLS, IPsec and the usual crypto libraries working. Two
+#    host-global sysctls would also close the AEAD surface while breaking every
+#    other module load, so they are rejected by name, and then a canary module
+#    is required to still autoload. Both sysctls are readable from this
+#    container because neither is namespaced.
+if [ "$(cat /proc/sys/kernel/modules_disabled 2>/dev/null || echo 0)" = "1" ]; then
+    echo "FAIL [PoC/targeting]: kernel.modules_disabled=1 stops every module loading and" \
+         "unloading host-wide until reboot, and cannot be reversed. Use a module-specific" \
+         "block instead." >&2
+    CTRL_OK=0
+fi
+case "$(cat /proc/sys/kernel/modprobe 2>/dev/null || echo '')" in
+    /bin/false|/bin/true|/usr/bin/false|/usr/bin/true|'')
+        echo "FAIL [PoC/targeting]: kernel.modprobe points at a no-op helper, which disables" \
+             "autoloading for every module host-wide rather than for algif_aead." >&2
+        CTRL_OK=0
+        ;;
+esac
+
+# Unload the canary first so the bind has to exercise autoload rather than
+# reaching an already-resident module, then restore the residency state we found.
+CANARY_RESIDENT=0
+module_resident algif_skcipher && CANARY_RESIDENT=1
+[ "$CANARY_RESIDENT" = "0" ] || rmmod algif_skcipher 2>/dev/null
+CANARY_RESULT=$(alg_probe skcipher "cbc(aes)")
+case "$CANARY_RESULT" in
+    accessible)
+        echo "PASS [PoC/targeting]: algif_skcipher still autoloads — the block is specific to algif_aead."
+        [ "$CANARY_RESIDENT" = "1" ] || rmmod algif_skcipher 2>/dev/null
+        ;;
+    noprobe)
+        echo "FAIL [PoC/targeting]: canary probe could not run, so the block could not be" \
+             "shown to be module-specific." >&2
+        CTRL_OK=0
+        ;;
+    *)
+        # A host that genuinely lacks CONFIG_CRYPTO_USER_API would land here too.
+        # Reporting a problem is the safe direction: it never converts a missing
+        # precondition into an undeserved PASS.
+        echo "FAIL [PoC/targeting]: the unrelated module algif_skcipher no longer autoloads" \
+             "($CANARY_RESULT), so module autoloading was disabled wholesale rather than" \
+             "for algif_aead alone. Other services depend on it." >&2
+        CTRL_OK=0
+        ;;
+esac
+
+if [ "$CTRL_OK" != "1" ]; then
+    echo "FAIL [PoC]: compensating control incomplete on kernel $UNAME_R — algif_aead must" \
+         "be unloaded AND blocked in the host's module-load policy, without disabling" \
+         "autoloading for anything else." >&2
     exit 1
 fi
-echo "PASS [PoC]: kernel $UNAME_R still vulnerable, but algif_aead is blacklisted and unreachable."
+echo "PASS [PoC]: kernel $UNAME_R still vulnerable, but algif_aead is unloaded, the host" \
+     "refuses to autoload it, and unrelated modules still load."
 
 # ── Regression test ───────────────────────────────────────────────────────────
 # Confirm the SUID marker binary is intact and still executes correctly.

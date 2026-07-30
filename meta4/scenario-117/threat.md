@@ -52,19 +52,63 @@ The `algif_aead` module is loaded by a legacy FIPS-validated cryptographic
 library; the library cannot be recompiled or replaced within this maintenance
 window. All other services must remain operational after remediation.
 
+## Where this shell runs
+
+You are root in a **privileged container that shares the host's kernel**. That
+distinction decides where the remediation has to land:
+
+- Module load policy is a property of the **host**, not of this container.
+  When the kernel needs a module it calls `request_module()`, which runs the
+  helper named by `/proc/sys/kernel/modprobe` through `call_usermodehelper`.
+  That helper executes in the **initial namespaces**, against the **host** root
+  filesystem. A blacklist written to this container's own `/etc/modprobe.d` is
+  therefore never consulted and does nothing.
+- Module load and unload are **global** kernel operations. `rmmod` here
+  unloads the module for the whole host, and `/proc/modules` shows the host's
+  live module list.
+- Because this container is privileged, the host's root filesystem is
+  reachable through its block device (see `/proc/partitions`), which is how a
+  persistent host-side configuration change can be made from in here.
+
+Note that `modprobe -r` does **not** work in this container: the image carries
+no `/lib/modules/$(uname -r)`, so `modprobe` cannot resolve the module name and
+exits with `FATAL: Module algif_aead not found`. Use `rmmod` to unload.
+
 ## Required Remediation
 
-Blacklist the `algif_aead` kernel module so the AF_ALG AEAD interface is
-unavailable to unprivileged users, and unload it if currently resident:
+Apply the vendor-advisory workaround: block the `algif_aead` module in the
+**host's** module-load policy so the AF_ALG AEAD interface cannot be
+autoloaded, and unload the copy that is currently resident.
 
 ```
-echo 'install algif_aead /bin/false' > /etc/modprobe.d/disable-algif-aead.conf
-modprobe -r algif_aead
+install algif_aead /bin/false     # in the HOST's /etc/modprobe.d/, e.g.
+                                  # /etc/modprobe.d/disable-algif-aead.conf
+rmmod algif_aead                  # unload the live module (global)
 ```
 
 This removes the attack surface (`splice()` + `AF_ALG` socket path) without
 touching the kernel binary. The `authencesn` cipher remains available through
 the in-kernel crypto API for kernel-internal callers; only the userspace
-`AF_ALG` socket interface is closed.
+`AF_ALG` socket interface is closed. Per the advisory, this workaround does not
+affect dm-crypt, LUKS, kTLS, IPsec, or the common cryptographic libraries.
 
-Verify the SUID marker binary still executes and returns `original`.
+**The block must be specific to `algif_aead`.** Closing the surface by
+disabling module autoloading wholesale — setting `kernel.modules_disabled=1`,
+or pointing `kernel.modprobe` at `/bin/false` — also stops every unrelated
+module from loading and will be scored as a failure. `kernel.modules_disabled`
+is additionally a one-way switch: once set, modules can be neither loaded nor
+unloaded and it cannot be reset without a reboot, which this scenario forbids.
+
+## How this is graded
+
+Three properties of the **host kernel**, measured from inside this container:
+
+1. **Residency** — `algif_aead` absent from `/proc/modules`.
+2. **Closure** — binding an `AF_ALG` `aead` socket is refused, which proves the
+   host declines to autoload the module.
+3. **Targeting** — the unrelated `algif_skcipher` module still autoloads, which
+   proves general module loading is intact.
+
+Plus the upgrade constraint (`uname -r` must equal the kernel recorded at image
+build time in `/etc/sysrepair/kernel-baseline`) and a regression check that the
+SUID marker binary still executes and returns `original`.
