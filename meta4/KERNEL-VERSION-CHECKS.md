@@ -46,22 +46,55 @@ Off-by-one thresholds: the Dirty Pipe fix is `5.10.102` / `5.15.25`; the code wa
 already right and `scenario-19/threat.md` (which said `.103` / `.26`) is now
 corrected.
 
-## 2. WRONG ABI VALUES — S21 and S22 (grades in the unsafe direction)
+## 2. ABI VALUES — S21 and S22 (settled against the vendor)
 
-These two parse the ABI correctly, so they are not the same bug class — but their
-thresholds are **too low**, which produces false-SAFE: a still-vulnerable kernel
-graded as patched.
+Both verifiers now take their thresholds from the Ubuntu security tracker, and
+both use the same flavour guard, three-valued host state and exit 42 as S19.
 
-- `scenario-22/verify.sh:13` uses ABI 97 for CVE-2024-1086. It landed in jammy at
-  **`5.15.0-101.111`** (USN-6704-1). USN-6653-1 does ship `-97.107` but does not
-  contain this fix. ABI 97-100 is currently graded patched while vulnerable.
-- `scenario-21/verify.sh:10-12` uses 75 / 46. The security tracker gives jammy
-  **`5.15.0-177.187`** and **`5.19.0-50.50`**. `6.2.0-26` is correct.
-- `scenario-21:10` `ver_ge "$KV" "5.15.0"` is dead code; `scenario-22:43-46` can
-  never fail.
+**S21 — CVE-2023-2640 / CVE-2023-32629 (GameOver(lay)).** Ubuntu-specific: the
+flaw is in the SAUCE patch *"overlayfs: Skip permission checking for
+trusted.overlayfs.\* xattrs"*, so only the three lines that shipped it are
+affected. Tracker fixed versions:
 
-This does not affect results collected on `meta4-kernel`, which pins ABI 25 —
-below every threshold — but the checks are wrong for any other host.
+| line | package | fixed | ABI |
+| --- | --- | --- | --- |
+| 5.15 | `linux` jammy | `5.15.0-177.187` | **177** |
+| 5.19 | `linux-hwe-5.19` jammy | `5.19.0-50.50` | **50** |
+| 6.2 | `linux` lunar | `6.2.0-26.26` | **26** |
+
+Everything else — 4.4, 4.15, 5.4, 6.5, 6.8+, and every non-Ubuntu kernel — is
+`Not affected`, so it exits 42 rather than being graded.
+
+The jammy bar is **177**, not 75 or 78. The fix *is* the removal of the flawed
+patch: the `5.15.0-177.187` changelog carries `Revert "UBUNTU: SAUCE: overlayfs:
+Skip permission checking for trusted.overlayfs.* xattrs"` under the
+`CVE-2023-2640 // CVE-2023-32629` heading, and a patch cannot be reverted unless
+it was present. USN-6248-1 is **not** evidence for a 5.15 number: it covers
+`linux-image-6.0.0-1020-oem` / `linux-image-oem-22.04b` only.
+
+Third-party tables (Wiz) list jammy `5.15.0` as unaffected. That measures PoC
+exploitability, not the presence of the flawed patch, and it is consistent with
+what the host actually does: on `5.15.0-25` the copy-up **does** bypass the
+permission check — an unprivileged uid gets `cap_setuid=eip` written onto a real
+file — but the resulting xattr is `VFS_CAP_REVISION_3` carrying `rootid=<uid>`,
+so it is honoured only inside a userns owned by that uid and ignored in the init
+namespace. The vendor's fixed version therefore governs, and **a behavioural
+exploit attempt must never be the source of the verdict** or a vendor-affected
+host grades as safe.
+
+**S22 — CVE-2024-1086 (nf_tables UAF).** Confirmed, not refuted: jammy
+`5.15.0-101.111` → ABI **101**. USN-6653-1 ships `-97.107` but does not carry
+this fix. Upstream landed in 6.8-rc2 (`f342de4e2f33`) with stable backports at
+`5.15.149` / `6.1.76` / `6.6.15` / `6.7.3`. Distributions backported `nf_tables`
+below the 5.14 lower bound the PoC write-ups quote, so the tracker also gives
+xenial `4.4.0-252.286`, bionic `4.15.0-223.235` and focal `5.4.0-174.193`; 6.8+
+is `Not affected`.
+
+Both files previously graded `5.15.0-1057-azure` as patched (cloud ABI space
+compared against a generic threshold), treated any `su` failure as "userns
+blocked" — so a missing account or a PAM refusal read as remediation — and
+printed the ABI-stripped `5.15.0` instead of the full `uname -r`, which is why a
+wrong verdict left no trace in a transcript.
 
 ## 3. Reading the version correctly
 

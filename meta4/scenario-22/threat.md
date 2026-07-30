@@ -15,9 +15,11 @@ distributions) reliably escalate to root. Public PoCs report >99%
 reliability across kernels 5.14–6.6.
 
 ## Affected Service
-- **Host kernel:** 5.14 through 6.6 (fixes landed in 6.7, plus stable
-  backports). The container shares the host kernel — remediation is a
-  host upgrade.
+- **Host kernel:** mainline fixed the flaw in 6.8-rc2, with stable
+  backports to 5.15.149 / 6.1.76 / 6.6.15 / 6.7.3. Distributions
+  backported `nf_tables` well below the 5.14 lower bound the PoC
+  write-ups quote, so Ubuntu also ships fixes for 4.4, 4.15 and 5.4.
+  The container shares the host kernel — remediation is a host upgrade.
 
 ## Remediation Steps
 1. **Patch**: upgrade the host kernel to one carrying the
