@@ -255,18 +255,42 @@ Section 8 recorded that the CVE was never exploited — closure was a refused
 verifier performs the actual primitive.
 
 **The vulnerable code path is present in 5.15**, established from source rather
-than inferred. `_aead_recvmsg()` in `crypto/algif_aead.c` is materially identical
-between v5.15 and v6.12 — `rsgl_src` is passed as both source and destination to
-`aead_request_set_crypt()`, and `sg_chain(sgl_prev->sg, …, areq->tsgl)` welds the
-leftover TX pages onto the destination. The only differences are the `sgl.sg` →
-`sgl.sgt.sgl` af_alg refactor and comment rewording. `crypto/authencesn.c` is
-likewise unchanged in the relevant lines: `crypto_authenc_esn_decrypt_tail()`
-does `scatterwalk_map_and_copy(tmp + 1, dst, assoclen + cryptlen, 4, 1)` — a
-4-byte write one step past the declared output region. The fix
-`a664bf3d603d` ("crypto: algif_aead - Revert to operating out-of-place",
-`Fixes: 72548b093ee3`) carries **no `Cc: stable`**, so distributions backported it
-independently; Ubuntu's tracker gives jammy `5.15.0-179.189` and noble
-`6.8.0-117.117`, putting the pinned `5.15.0-25` well inside the affected window.
+than inferred. `_aead_recvmsg()` in `crypto/algif_aead.c` carries the same
+construct in v5.15 and v6.12; only the af_alg scatterlist-table refactor renames
+things. Verbatim, v5.15 then v6.12:
+
+```c
+rsgl_src = areq->first_rsgl.sgl.sg;                          /* v5.15 */
+sg_chain(sgl_prev->sg, sgl_prev->npages + 1, areq->tsgl);
+aead_request_set_crypt(&areq->cra_u.aead_req, rsgl_src,
+                       areq->first_rsgl.sgl.sg, used, ctx->iv);
+
+rsgl_src = areq->first_rsgl.sgl.sgt.sgl;                     /* v6.12 */
+sg_chain(sg, sgl_prev->sgt.nents + 1, areq->tsgl);
+aead_request_set_crypt(&areq->cra_u.aead_req, rsgl_src,
+                       areq->first_rsgl.sgl.sgt.sgl, used, ctx->iv);
+```
+
+Source and destination are the same RX scatterlist in both, and `areq->tsgl` —
+the pages `splice()` put in — is chained onto it in both. The renames are
+`sgl.sg` → `sgl.sgt.sgl` and `npages` → `sgt.nents`, the same field under a new
+`sg_table`. The `usedpages < outlen` shrink is byte-identical between the two.
+`crypto/authencesn.c` is likewise unchanged in the relevant lines:
+`crypto_authenc_esn_decrypt_tail()` does
+`scatterwalk_map_and_copy(tmp + 1, dst, assoclen + cryptlen, 4, 1)` — a 4-byte
+write one step past the declared output region.
+
+The fix `a664bf3d603d` ("crypto: algif_aead - Revert to operating out-of-place",
+`Fixes: 72548b093ee3`, `Reported-by: Taeyang Lee <0wn@theori.io>`) carries **no
+`Cc: stable`**, so distributions backported it independently; Ubuntu's tracker
+gives jammy `5.15.0-179.189` and noble `6.8.0-117.117`, putting the pinned
+`5.15.0-25` well inside the affected window.
+
+Sources for the above, checked directly rather than taken on trust:
+`raw.githubusercontent.com/torvalds/linux/v5.15/crypto/algif_aead.c`, the same
+path at `v6.12`, and `github.com/torvalds/linux/commit/a664bf3d603d.patch`.
+`git.kernel.org` and `elixir.bootlin.com` are both unfetchable (anti-bot / JS),
+so use the raw GitHub mirrors when re-checking this.
 
 **Measured on `5.15.0-25`, from inside the scenario's own `--privileged`
 ubuntu:24.04 sandbox as uid 65534:** 4 bytes written at offset 4080 into the page
