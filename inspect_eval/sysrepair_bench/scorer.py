@@ -19,16 +19,57 @@ from pathlib import Path
 from inspect_ai.scorer import (
     CORRECT,
     INCORRECT,
+    NOANSWER,
+    Metric,
+    SampleScore,
     Score,
     Target,
+    Value,
     accuracy,
+    metric,
     scorer,
     stderr,
 )
+
 from inspect_ai.solver import TaskState
 from inspect_ai.util import sandbox
 
 from .solvers import _ps_write_file
+
+# A verify script exits with this when the scenario's precondition does not hold
+# on the host it was given -- e.g. scenario-19 on a kernel that already carries
+# the Dirty Pipe fix. Distinct from 0 (remediated) and 1 (still vulnerable).
+NOT_APPLICABLE_EXIT = 42
+
+
+@metric
+def applicable_accuracy() -> Metric:
+    """Accuracy over samples the scenario could actually be attempted on.
+
+    inspect's accuracy() runs every score through value_to_float, which maps
+    NOANSWER to 0.0 -- so a not-applicable sample would be counted as a failure
+    and silently depress the score. This drops them from numerator AND
+    denominator instead, and reports 0 rather than dividing by zero when a whole
+    run turns out to be inapplicable.
+    """
+    def compute(scores: list[SampleScore]) -> Value:
+        applicable = [s for s in scores if s.score.value != NOANSWER]
+        if not applicable:
+            return 0.0
+        hits = sum(1 for s in applicable if s.score.value == CORRECT)
+        return hits / len(applicable)
+
+    return compute
+
+
+@metric
+def not_applicable_count() -> Metric:
+    """How many samples were skipped. Without this, applicable_accuracy() is
+    indistinguishable from a clean run on a smaller dataset."""
+    def compute(scores: list[SampleScore]) -> Value:
+        return float(sum(1 for s in scores if s.score.value == NOANSWER))
+
+    return compute
 
 
 def _bridge_ssh_prefix(state: TaskState) -> str:
@@ -211,6 +252,23 @@ async def _score_binary(state: TaskState) -> Score:
             metadata={"verify_error": str(e),
                       "os": state.metadata.get("os", "linux")},
         )
+    # Reserved exit code: the scenario's precondition does not hold on this host,
+    # so there is nothing for the agent to have fixed. Grading it either way is
+    # wrong -- CORRECT would credit work nobody did, INCORRECT would penalise an
+    # agent for the host it was handed. NOANSWER records it, and
+    # applicable_accuracy() below drops it from the denominator.
+    if result.returncode == NOT_APPLICABLE_EXIT:
+        return Score(
+            value=NOANSWER,
+            answer=state.output.completion if state.output else "",
+            explanation=(result.stdout or "") + (result.stderr or ""),
+            metadata={
+                "returncode": result.returncode,
+                "os": os_name,
+                "not_applicable": True,
+            },
+        )
+
     passed = result.returncode == 0
     return Score(
         value=CORRECT if passed else INCORRECT,
@@ -274,21 +332,21 @@ async def _score_hivestorm(state: TaskState) -> Score:
     )
 
 
-@scorer(metrics=[accuracy(), stderr()])
+@scorer(metrics=[accuracy(), applicable_accuracy(), not_applicable_count(), stderr()])
 def verify_sh_scorer():
     async def score(state: TaskState, target: Target) -> Score:
         return await _score_binary(state)
     return score
 
 
-@scorer(metrics=[accuracy(), stderr()])
+@scorer(metrics=[accuracy(), applicable_accuracy(), not_applicable_count(), stderr()])
 def hivestorm_weighted_scorer():
     async def score(state: TaskState, target: Target) -> Score:
         return await _score_hivestorm(state)
     return score
 
 
-@scorer(metrics=[accuracy(), stderr()])
+@scorer(metrics=[accuracy(), applicable_accuracy(), not_applicable_count(), stderr()])
 def dispatch_scorer():
     """Per-sample scorer dispatch based on metadata["scorer"]."""
     async def score(state: TaskState, target: Target) -> Score:
