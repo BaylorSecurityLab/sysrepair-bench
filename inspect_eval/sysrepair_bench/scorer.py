@@ -26,6 +26,7 @@ from inspect_ai.scorer import (
     Target,
     Value,
     accuracy,
+    value_to_float,
     metric,
     scorer,
     stderr,
@@ -56,8 +57,12 @@ def applicable_accuracy() -> Metric:
         applicable = [s for s in scores if s.score.value != NOANSWER]
         if not applicable:
             return 0.0
-        hits = sum(1 for s in applicable if s.score.value == CORRECT)
-        return hits / len(applicable)
+        # value_to_float, not a CORRECT equality test: hivestorm scores are
+        # partial-credit floats, so counting exact matches would score a run of
+        # [0.9, 1.0] as 0.0. This metric is wired into dispatch_scorer, which
+        # serves both the binary and the weighted scorers.
+        to_float = value_to_float()
+        return sum(to_float(s.score.value) for s in applicable) / len(applicable)
 
     return compute
 
