@@ -3,8 +3,9 @@
 Findings from a review of how `meta4/scenario-19/21/22/117` decide whether the
 host kernel is vulnerable.
 
-**Status: S19 and S117 are fixed and verified on live VMs. S21 and S22 are
-not** — section 2 still describes them as they are today.
+**Status: all four are fixed and verified on live VMs.** `kernel_e2e` reports
+accuracy 1.000 / applicable_accuracy 1.000 / not_applicable_count 0 (S21 C,
+S22 C, S117 C); scenario-19 scores C on dirtypipe-vm and exits 42 on kernel-vm.
 
 Scope: S21/S22/S117 run inside `meta4/kernel-vm` (Ubuntu 22.04, `5.15.0-25`,
 ABI 25); S19 runs inside `meta4/dirtypipe-vm` (20.04 HWE `5.13.0-27`, ABI 27).
@@ -213,3 +214,37 @@ are corrected. Series with no upstream fix point and no pinned Ubuntu ABI (5.13,
 CVE-2022-0847 (Dirty Pipe) — `5.10.102`, `5.15.25`, `5.16.11`; unaffected before
 5.8 (no `PIPE_BUF_FLAG_CAN_MERGE`); jammy `linux` marked not-affected; 5.13 fixed
 at ABI 35 (`5.13.0-35.40`, USN-5317-1).
+
+## 8. S117 is solvable from the sandbox (supersedes sections 6-7)
+
+Sections 6-7 concluded the scenario was unpassable because the sandbox's own
+`/etc/modprobe.d` cannot influence `request_module()`, which runs the helper in the
+initial namespaces. The first half is right; the conclusion was not. A
+`--privileged` sandbox is host-root-equivalent. Measured on `5.15.0-25` with no
+host shell: `/dev/sda1` is visible and mountable so the host's `/etc/modprobe.d`
+is writable, `rmmod` unloads host-wide, and `kernel.modprobe` /
+`kernel.modules_disabled` are writable and not namespaced.
+
+`verify.sh` now grades the host kernel's module policy — residency, closure,
+targeting — rather than a file in the sandbox. Targeting rejects
+`kernel.modprobe=/bin/false` and `modules_disabled=1`, which shut the AEAD surface
+by breaking every module load, against the advisory's claim that the workaround
+leaves dm-crypt, LUKS, kTLS and IPsec working.
+
+Solved unaided by a model agent in `kernel_e2e`: read `/proc/partitions`, mounted
+`/dev/sda1`, wrote a blacklist under the host's `/etc/modprobe.d`, ran `rmmod`, and
+self-checked with its own aead/skcipher probes. It picked a different filename than
+the example in `threat.md`, which the behavioural grading correctly ignored — the
+check is on kernel state, not on a string.
+
+Not proven: the CVE is never exploited (closure is a refused bind, not a
+page-cache overwrite); there is no reboot-persistence check, since the scenario
+forbids rebooting; and `modules_disabled=1` is rejected by reading the sysctl
+rather than observing a failed load, because it cannot be reset without a reboot.
+
+## 9. Operational hazard: meta4-kernel can roll back under you
+
+The VM entered `Saved` state unprompted mid-session and resumed onto an older disk
+state, silently reverting `/meta4` to a pre-audit `verify.sh`. It was caught by
+hashing the deployed file, not by anything failing loudly. Hash what you deploy
+before trusting a result from that guest.
