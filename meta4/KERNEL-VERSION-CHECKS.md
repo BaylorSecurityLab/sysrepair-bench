@@ -356,14 +356,22 @@ while Ubuntu marks the line affected because the flawed SAUCE patch is present.
 Grading on the exploit would score a vendor-affected host safe. The reasoning is
 recorded in section 2 and in `kernel-vm/README.md`.
 
-For **S22** (CVE-2024-1086, nf_tables UAF) no justification is recorded anywhere,
-which is the real gap. A defensible one exists — a UAF exploit is a heap-grooming
-race whose failure would be non-deterministic and whose success can panic the
-guest, and a grader must not depend on winning a race — but it is not written
-down, so the scenario currently looks like S117 did before this pass: a version
-check presented as if it were a demonstration. Unlike S117, a positive control
-here is genuinely unattractive rather than merely unbuilt. **Not fixed in this
-pass; recorded as the next thing to settle for S22.**
+For **S22** (CVE-2024-1086, nf_tables UAF) the same reasoning was being relied on
+without being written down, which invited someone to later "improve" the probe
+into an exploit attempt and thereby break it. `scenario-22/verify.sh` now states
+what the probe measures and what it does not, mirroring S21's note.
+
+That comment is the **only** thing that changed: the file is byte-identical once
+comments are stripped, `sh -n` and `dash -n` pass, and on a restored baseline the
+unremediated grade is still exit **1** with
+`FAIL [PoC]: … an unprivileged uid can still create a user namespace`.
+
+S22 still has no positive control, and unlike S117 that is a deliberate choice
+rather than an unbuilt one: a UAF exploit is a heap-grooming race whose failure
+would be non-deterministic and whose success can panic the guest, and a grader
+must not depend on winning a race. If that is ever revisited, the S117 pattern
+applies — the exploit may strengthen the *control* check, but must never become
+the source of the affected-ness verdict, or a vendor-affected host grades safe.
 
 ## 9. Operational hazard: /meta4 in the guest is not the checkout (cause found)
 
