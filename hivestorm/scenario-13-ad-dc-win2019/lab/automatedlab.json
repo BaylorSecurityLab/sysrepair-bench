@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Marks this scenario as AutomatedLab/Hyper-V rather than Vagrant/VirtualBox.",
+    "inspect_eval/sysrepair_bench/task.py looks for lab/automatedlab.json and, when",
+    "present, drives the VM through these PowerShell entry points instead of",
+    "shelling out to `vagrant up`.",
+    "",
+    "The SSH contract is deliberately IDENTICAL to the one Vagrant provided --",
+    "account 'vagrant' on host.docker.internal:2223 with the pipeline's key -- so",
+    "solvers.py, scorer.py and the task prompt need no changes. Only the mechanism",
+    "solvers.py and scorer.py need no changes. The task prompt now takes the account from this file rather than hardcoding 'vagrant'."
+  ],
+  "ops_script": "lab/Hs13Ops.ps1",
+  "build_script": "lab/Hs13Lab.ps1",
+  "vm_name": "hs13-dc01",
+  "os": "windows",
+  "restore_function": "Restore-Hs13Baseline",
+  "ssh_function": "Install-Hs13SshAccess",
+  "portproxy_function": "Set-Hs13PortProxy",
+  "reachable_function": "Test-Hs13SshReachable",
+  "vagrant_port": "2223",
+  "vagrant_user": "Administrator",
+  "bridge_target_host": "host.docker.internal",
+  "bridge_ssh_key": "/root/.ssh/vagrant_key"
+}

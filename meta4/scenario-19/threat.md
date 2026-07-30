@@ -27,7 +27,7 @@ needed to train the remediation.
 
 ## Remediation Steps
 1. **Patch** (canonical fix): upgrade the host kernel to one of
-   **5.16.11+, 5.15.26+, or 5.10.103+**.
+   **5.16.11+, 5.15.25+, or 5.10.102+**.
 2. **Compensating control** (if upgrade is blocked): set the immutable
    bit on security-sensitive SUID binaries —
    `chattr +i /opt/suid-marker` — which blocks the Dirty Pipe overwrite

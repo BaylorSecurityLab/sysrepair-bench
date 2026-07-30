@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
 import subprocess
 import sys
@@ -109,10 +110,6 @@ def _ensure_hivestorm_roles(cfg: dict) -> None:
         return
 
     hivestorm_dir = REPO_ROOT / "hivestorm"
-    prepare = hivestorm_dir / "prepare.sh"
-    if not prepare.is_file():
-        return
-
     missing = [
         d for d in sorted(hivestorm_dir.glob("scenario-*"))
         if d.is_dir() and (d / "Dockerfile").exists()
@@ -122,22 +119,27 @@ def _ensure_hivestorm_roles(cfg: dict) -> None:
         return
 
     print(f"[pre-build] generating hivestorm roles.json ({len(missing)} missing) ...")
-    warn = (
-        "[pre-build] WARNING: could not generate hivestorm roles.json. Hivestorm "
-        "builds will fail with '\"/build/roles.json\": not found'. Run it manually:\n"
-        "    bash hivestorm/prepare.sh"
-    )
-    try:
-        result = subprocess.run(
-            ["bash", str(prepare)], cwd=str(REPO_ROOT), timeout=600
+
+    # Generated in-process rather than by shelling out to prepare.sh: bash is not
+    # reliably on PATH on Windows, and when it is, a non-zero exit here left the
+    # build to fail later with '"/build/roles.json": not found' instead.
+    from .task import _hivestorm_prepare  # noqa: PLC0415
+
+    failed: list[str] = []
+    for d in missing:
+        try:
+            _hivestorm_prepare(d)
+        except Exception as e:
+            failed.append(f"{d.name}: {e.__class__.__name__}: {e}")
+
+    if failed:
+        raise SystemExit(
+            "[pre-build] could not generate hivestorm roles.json for:\n"
+            + "\n".join(f"    {f}" for f in failed)
+            + "\n           Their image builds would fail with "
+            '\'"/build/roles.json": not found\'.'
         )
-        if result.returncode != 0:
-            print(warn)
-    except FileNotFoundError:
-        # No bash on PATH (plain Windows shell without Git Bash / WSL).
-        print(f"{warn}\n    (bash was not found on PATH)")
-    except subprocess.TimeoutExpired:
-        print(f"{warn}\n    (prepare.sh timed out after 600s)")
+    print(f"[pre-build] generated roles.json for {len(missing)} scenario(s)")
 
 
 def _ensure_base_images(cfg: dict) -> None:
@@ -362,7 +364,7 @@ def _preflight_endpoint(cfg: dict) -> None:
     try:
         from openai import OpenAI
     except ImportError:
-        print(f"[preflight] {short}: openai SDK not installed — skipping check")
+        print(f"[preflight] {short}: openai SDK not installed - skipping check")
         return
 
     # Tunable via cfg so a slow first-byte (TLS/DNS warm-up on remote APIs
@@ -392,28 +394,103 @@ def _preflight_endpoint(cfg: dict) -> None:
     print(f"[preflight] {short} @ {url_shown}: ok")
 
 
+def _hyperv_host_config(vm_dir: Path) -> dict | None:
+    """Return lab/hyperv.json if this docker-host VM is Hyper-V-backed.
+
+    Distinct from task.py's lab/automatedlab.json, which marks a *scenario*
+    whose target is a VM. This marks a VM that other scenarios run *inside*.
+    """
+    marker = vm_dir / "lab" / "hyperv.json"
+    if not marker.is_file():
+        return None
+    try:
+        return json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"[hyperv_vm] {marker} is not valid JSON: {e}") from e
+
+
+def _hyperv_ssh_config(vm_dir: Path, cfg_json: dict, ctx_name: str) -> str:
+    """Bring a Hyper-V docker host up and emit an ssh-config block for it.
+
+    Produces exactly the shape `vagrant ssh-config` did, so everything
+    downstream — the managed ~/.ssh/config block, the docker context — is
+    unchanged. Only the mechanism differs.
+    """
+    ops = (vm_dir / cfg_json["ops_script"]).resolve()
+    if not ops.is_file():
+        raise SystemExit(f"[hyperv_vm] ops script missing: {ops}")
+
+    init_fn = cfg_json.get("init_function", "Initialize-KernelHost")
+    script = f". '{ops}'; {init_fn}"
+    print(f"[hyperv_vm] Bringing up {cfg_json['vm_name']} - restore, start, port proxy, ABI check...")
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[hyperv_vm] bring-up failed (exit {proc.returncode}).\n"
+            f"           Hyper-V and PowerShell Direct both require an ELEVATED shell.\n"
+            f"{proc.stdout}\n{proc.stderr}"
+        )
+
+    # Initialize-KernelHost prints progress lines then the JSON contract last.
+    payload = next(
+        (ln for ln in reversed(proc.stdout.splitlines()) if ln.strip().startswith("{")),
+        None,
+    )
+    if not payload:
+        raise SystemExit(f"[hyperv_vm] no SSH config JSON from {init_fn}:\n{proc.stdout}")
+    info = json.loads(payload)
+
+    return "\n".join([
+        f"Host {ctx_name}",
+        f"  HostName {info['HostName']}",
+        f"  User {info['User']}",
+        f"  Port {info['Port']}",
+        f"  IdentityFile {info['IdentityFile']}",
+        "  IdentitiesOnly yes",
+        "  StrictHostKeyChecking no",
+        "  UserKnownHostsFile /dev/null",
+        "  LogLevel ERROR",
+    ])
+
+
 def _ensure_vagrant_docker_host(cfg: dict) -> None:
-    """For ``vagrant_vm:`` presets, bring the VM up and point docker at it."""
-    rel = cfg.get("vagrant_vm")
+    """For ``vagrant_vm:``/``hyperv_vm:`` presets, bring the VM up and point
+    docker at it.
+
+    Two provisioners are supported. A target carrying ``lab/hyperv.json`` is
+    driven through PowerShell (Hyper-V); anything else falls back to Vagrant.
+    Both emit the same ssh-config block, so the managed ~/.ssh/config entry and
+    the docker context below are provisioner-agnostic.
+    """
+    rel = cfg.get("hyperv_vm") or cfg.get("vagrant_vm")
     if not rel:
         return
     vm_dir = (REPO_ROOT / rel).resolve()
-    if not (vm_dir / "Vagrantfile").exists():
-        raise SystemExit(f"[vagrant_vm] No Vagrantfile at {vm_dir}")
     ctx_name = cfg.get("vagrant_vm_context", f"{vm_dir.name}")
+    hv = _hyperv_host_config(vm_dir)
 
-    status = subprocess.run(
-        ["vagrant", "status", "--machine-readable"],
-        cwd=vm_dir, capture_output=True, text=True,
-    )
-    if ",running" not in status.stdout:
-        print(f"[vagrant_vm] {vm_dir.name} not running — `vagrant up` (this can take 10+ min on first run)…")
-        subprocess.run(["vagrant", "up"], cwd=vm_dir, check=True)
+    if hv is not None:
+        ssh_cfg = _hyperv_ssh_config(vm_dir, hv, ctx_name)
+    else:
+        if not (vm_dir / "Vagrantfile").exists():
+            raise SystemExit(
+                f"[vagrant_vm] No Vagrantfile and no lab/hyperv.json at {vm_dir}"
+            )
+        status = subprocess.run(
+            ["vagrant", "status", "--machine-readable"],
+            cwd=vm_dir, capture_output=True, text=True,
+        )
+        if ",running" not in status.stdout:
+            print(f"[vagrant_vm] {vm_dir.name} not running - `vagrant up` (this can take 10+ min on first run)...")
+            subprocess.run(["vagrant", "up"], cwd=vm_dir, check=True)
 
-    ssh_cfg = subprocess.run(
-        ["vagrant", "ssh-config"],
-        cwd=vm_dir, capture_output=True, text=True, check=True,
-    ).stdout
+        ssh_cfg = subprocess.run(
+            ["vagrant", "ssh-config"],
+            cwd=vm_dir, capture_output=True, text=True, check=True,
+        ).stdout
     block_body = "\n".join(
         line.replace("Host default", f"Host {ctx_name}", 1) if line.lstrip().startswith("Host default") else line
         for line in ssh_cfg.splitlines()
@@ -441,7 +518,10 @@ def _ensure_vagrant_docker_host(cfg: dict) -> None:
         capture_output=True, text=True,
     )
     if probe.returncode != 0:
-        print(f"[vagrant_vm] Creating docker context '{ctx_name}' → ssh://{ctx_name}")
+        # ASCII only. A Windows console is cp1252, and printing U+2192 there
+        # raises UnicodeEncodeError -- which killed the whole run at the point
+        # the docker context was being created, after the VM was already up.
+        print(f"[vagrant_vm] Creating docker context '{ctx_name}' -> ssh://{ctx_name}")
         subprocess.run(
             ["docker", "context", "create", ctx_name,
              "--docker", f"host=ssh://{ctx_name}",

@@ -48,12 +48,36 @@ def find_threat_doc(scenario_dir: Path) -> Path | None:
     return None
 
 
+def detect_lab_os(scenario_dir: Path) -> str | None:
+    """Return the guest OS of an AutomatedLab/Hyper-V scenario, else None.
+
+    ``lab/automatedlab.json`` is the marker a scenario is provisioned by
+    AutomatedLab on Hyper-V rather than Vagrant/VirtualBox; its ``os`` field
+    names the guest ("windows", "freebsd", "linux").
+    """
+    manifest = scenario_dir / "lab" / "automatedlab.json"
+    if not manifest.is_file():
+        return None
+    try:
+        return json.loads(manifest.read_text(encoding="utf-8")).get("os") or None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def detect_kind(scenario_dir: Path, suite_kind: str) -> str:
     has_vagrant = (scenario_dir / "Vagrantfile").is_file()
     has_dockerfile = (scenario_dir / "Dockerfile").is_file()
     has_ps1 = any(scenario_dir.glob("*.ps1"))
     if has_vagrant:
         return "vagrant-vm"
+    # AutomatedLab scenarios are VMs even though they ship a Dockerfile: that
+    # Dockerfile builds the Linux *bridge* container the agent works from, not
+    # the target. Checked before the "mixed" logic below, which would otherwise
+    # see ps1 + Dockerfile and label hivestorm/scenario-13 a "windows-container"
+    # — telling users they can run an AD DC under Docker Windows containers.
+    lab_os = detect_lab_os(scenario_dir)
+    if lab_os:
+        return f"{lab_os}-vm"
     if suite_kind == "mixed":
         if has_ps1:
             return "windows-container" if has_dockerfile else "windows-vm"
@@ -100,15 +124,25 @@ def iter_scenarios():
                     launch = l
                     break
             if launch is None:
-                # VM scenarios (e.g. meta4/ad-vm/scenario-*) share a parent Vagrantfile.
-                parent_vagrant = entry.parent / "Vagrantfile"
-                if parent_vagrant.is_file():
-                    launch = str(parent_vagrant.relative_to(entry.parent))
+                # VM scenarios share a launcher with their siblings rather than
+                # shipping one each. meta4/ad-vm/scenario-* used a parent
+                # Vagrantfile; after the Hyper-V/AutomatedLab port that file is
+                # gone and the dispatch contract is the parent run-scenario.sh
+                # (lib/harness-schema.md). Without the second candidate all 20
+                # ad-vm scenarios regenerate with "launch_file": null.
+                for parent_launch in ("Vagrantfile", "run-scenario.sh"):
+                    candidate = entry.parent / parent_launch
+                    if candidate.is_file():
+                        launch = candidate.relative_to(entry.parent).as_posix()
+                        break
             scenario_id = f"{suite_name}/{entry.name}"
             record = {
                 "scenario_id": scenario_id,
                 "suite": suite_name,
-                "path": str(entry.relative_to(ROOT)),
+                # as_posix(), not str(): str() yields OS-native separators, so
+                # regenerating on Windows rewrote all 313 paths with backslashes
+                # and produced a whole-file diff against the published manifest.
+                "path": entry.relative_to(ROOT).as_posix(),
                 "kind": kind,
                 "launch_file": launch,
                 "verify_file": verify,

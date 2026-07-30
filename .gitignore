@@ -61,6 +61,11 @@ inspect_eval/logs-old/
 .threat_data.json
 *.logs
 *.log
+# CAUTION: this is a blanket rule. Any *.json the harness needs at runtime must be
+# negated below or it silently vanishes from a fresh clone -- that is exactly how
+# three of the four Hyper-V lab markers went missing while every VM port looked
+# complete locally. If you add a config the code reads by filename, negate it here
+# and confirm with `git ls-files --error-unmatch <path>`.
 *.json
 !croissant.json
 inspect_eval/baseline_report.json
@@ -77,3 +82,9 @@ testResults.xml
 meta4/ad-vm/gate-results.json
 
 gate-diagnostics.json
+
+# Hyper-V lab markers must be tracked. The blanket `*.json` rule above was
+# silently excluding them, which left task.py/run.py with nothing to key off on
+# a fresh clone -- every VM port looked like it had never been done.
+!hivestorm/*/lab/automatedlab.json
+!meta4/*/lab/hyperv.json

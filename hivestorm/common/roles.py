@@ -598,7 +598,20 @@ def _scenario_13(rng: random.Random) -> dict:
     rogue_da     = rng.choice(AD_ROGUE_DA_NAMES)
     svc_account  = rng.choice(AD_SERVICE_ACCOUNT_NAMES)
     svc_weak_pw  = rng.choice(AD_KERBEROAST_WEAK_PASSWORDS)
-    domain_fqdn  = rng.choice(AD_DOMAIN_NAMES)
+
+    # DOMAIN IS PINNED, not drawn from AD_DOMAIN_NAMES.
+    #
+    # S13 now runs on AutomatedLab/Hyper-V instead of Vagrant/VirtualBox, and
+    # AutomatedLab creates the forest when the LAB IS BUILT, not when a scenario
+    # is seeded. A per-seed domain would force a full lab rebuild (~40 min) for
+    # every seed and give up the snapshot baseline that makes restore-to-ready
+    # roughly 90 seconds.
+    #
+    # Little is lost. The agent is told the domain either way, so the name was
+    # never a secret, and the anti-memorisation surface that matters -- admin
+    # and service account names, the weak passwords, the rogue DA, the SPN and
+    # the scheduled-task name -- is still drawn from rng below.
+    domain_fqdn  = "corp.sysrepair.local"
     netbios      = domain_fqdn.split(".")[0].upper()
     schtask_name = rng.choice(WIN_SCHTASK_NAMES)
     return {

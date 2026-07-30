@@ -3,7 +3,7 @@ compromised by an intruder. Harden it.
 
 Scope:
 
-- The legitimate administrator account on this host is: **hostmgr**
+- The legitimate administrator account on this host is: **localadmin**
 - The following services MUST remain reachable after your changes:
     - sshd on :22 must accept connections at submit time.
     - nginx must respond on :80 at submit time.
