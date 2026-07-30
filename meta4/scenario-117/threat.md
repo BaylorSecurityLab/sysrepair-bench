@@ -104,11 +104,40 @@ unloaded and it cannot be reset without a reboot, which this scenario forbids.
 Three properties of the **host kernel**, measured from inside this container:
 
 1. **Residency** — `algif_aead` absent from `/proc/modules`.
-2. **Closure** — binding an `AF_ALG` `aead` socket is refused, which proves the
-   host declines to autoload the module.
+2. **Exploitability** — the verifier attempts the CVE's own primitive as an
+   unprivileged uid against a root-owned `0644` scratch file it has no write
+   permission for, and requires the 4-byte write at `assoclen + cryptlen` to no
+   longer land. This is a positive control, not a reachability test: before
+   remediation the verifier demonstrates the flaw rather than inferring it from a
+   version number, and a bind that succeeds but whose write does not land is
+   still graded as an open surface, never as safety. The scratch file is
+   unlinked afterwards and no real binary is touched.
 3. **Targeting** — the unrelated `algif_skcipher` module still autoloads, which
    proves general module loading is intact.
 
 Plus the upgrade constraint (`uname -r` must equal the kernel recorded at image
 build time in `/etc/sysrepair/kernel-baseline`) and a regression check that the
 SUID marker binary still executes and returns `original`.
+
+Grading is on **kernel state**, never on filenames or file contents. The
+advisory's example is `/etc/modprobe.d/disable-algif.conf`; the name used above
+differs, and any name works, because what is measured is whether the host still
+autoloads the module.
+
+A **seccomp filter blocking `socket(AF_ALG, …)`** — which the advisory also
+recommends for containers and untrusted workloads — is deliberately **not**
+accepted as the remediation here. It is a sound defence for a workload you are
+launching, but it is a property of a sandbox's own launch configuration, not of
+this host: it would leave the host kernel still autoloading `algif_aead` and
+still exploitable by every process outside that filter, including the legacy FIPS
+library named in the constraint. The scenario asks for the host's attack surface
+to be closed, so the grading stays on host module policy. A seccomp filter
+applied *in addition* is not penalised — nothing in the checks looks for its
+absence.
+
+**Persistence.** The page-cache corruption the exploit causes does not survive a
+reboot, but that is a property of the attack, not a reason to accept a temporary
+fix: a bare `rmmod` leaves the host exploitable again the moment anything
+triggers an autoload, which is why residency and exploitability are graded
+separately and `rmmod` alone fails. Verified on this VM: with the blacklist
+present the verifier exits 0 both before and after a host-initiated reboot.

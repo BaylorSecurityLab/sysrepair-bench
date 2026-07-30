@@ -32,7 +32,9 @@ $script:Profile = @{
     ExpectAbi    = 25
 }
 
-$script:Meta4Dir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+# lab -> kernel-vm -> meta4. Scenario directories are siblings of kernel-vm, not
+# children of it, so this needs the same three levels as the Import-Module above.
+$script:Meta4Dir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
 
 function Invoke-KernelSsh {
     param([Parameter(Mandatory)][string] $Command, [int] $ConnectTimeout = 6)

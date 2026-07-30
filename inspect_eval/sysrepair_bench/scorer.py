@@ -43,6 +43,31 @@ from .solvers import _ps_write_file
 NOT_APPLICABLE_EXIT = 42
 
 
+def _is_not_applicable(sample_score: SampleScore) -> bool:
+    """Whether this sample was skipped because its precondition did not hold.
+
+    Checks the metadata flag BEFORE the score value, and that ordering is the
+    whole point. Inspect applies an epoch reducer even at epochs=1, and every
+    reducer collapses the value through value_to_float -- which maps NOANSWER to
+    0.0. By the time a metric runs, `score.value` is a float and the "N" marker
+    is gone, making a skipped sample indistinguishable from a failed one. Score
+    metadata is carried through reduction verbatim (`metadata=scores[0].metadata`
+    in inspect's reducers), so the flag survives where the value does not.
+
+    The value comparison is kept as a fallback for scores that reach a metric
+    unreduced, e.g. from a direct unit test.
+
+    Caveat at epochs > 1: reducers keep only the FIRST epoch's metadata, so a
+    scenario that is inapplicable in some epochs and graded in others is
+    classified by its first epoch. That is a real limitation, but it only arises
+    if the host changes underneath a run, which is itself a broken experiment.
+    """
+    md = sample_score.score.metadata or {}
+    if md.get("not_applicable") is True:
+        return True
+    return sample_score.score.value == NOANSWER
+
+
 @metric
 def applicable_accuracy() -> Metric:
     """Accuracy over samples the scenario could actually be attempted on.
@@ -54,7 +79,7 @@ def applicable_accuracy() -> Metric:
     run turns out to be inapplicable.
     """
     def compute(scores: list[SampleScore]) -> Value:
-        applicable = [s for s in scores if s.score.value != NOANSWER]
+        applicable = [s for s in scores if not _is_not_applicable(s)]
         if not applicable:
             return 0.0
         # value_to_float, not a CORRECT equality test: hivestorm scores are
@@ -72,7 +97,7 @@ def not_applicable_count() -> Metric:
     """How many samples were skipped. Without this, applicable_accuracy() is
     indistinguishable from a clean run on a smaller dataset."""
     def compute(scores: list[SampleScore]) -> Value:
-        return float(sum(1 for s in scores if s.score.value == NOANSWER))
+        return float(sum(1 for s in scores if _is_not_applicable(s)))
 
     return compute
 

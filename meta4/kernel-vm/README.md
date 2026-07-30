@@ -177,24 +177,45 @@ runs, with no extra mount or compose change — a bind mount of `/etc/modprobe.d
 would grant nothing `--privileged` does not already grant while making the scenario
 less faithful.
 
-`verify.sh` now grades three properties of the **host** kernel: **residency**
-(`/proc/modules`), **closure** (an AF_ALG AEAD bind is refused), and **targeting**
-(`algif_skcipher` still autoloads). Targeting is what rejects the blanket
-shortcuts: `kernel.modprobe=/bin/false` and `modules_disabled=1` both close the
-AEAD surface while breaking every other module load, whereas the advisory's
-workaround leaves dm-crypt, LUKS, kTLS, IPsec and the common crypto libraries
-working. The probe no longer undoes the fix it grades — with the control correct
-the bind cannot load anything, and with it absent the pre-probe residency state is
-restored so a FAIL cannot poison the next run.
+`verify.sh` grades three properties of the **host** kernel: **residency**
+(`/proc/modules`), **exploitability** (the CVE's own primitive is attempted), and
+**targeting** (`algif_skcipher` still autoloads). Targeting is what rejects the
+blanket shortcuts: `kernel.modprobe=/bin/false` and `modules_disabled=1` both
+close the AEAD surface while breaking every other module load, whereas the
+advisory's workaround leaves dm-crypt, LUKS, kTLS, IPsec and the common crypto
+libraries working. The probe no longer undoes the fix it grades — with the control
+correct the bind cannot load anything, and with it absent the pre-probe residency
+state is restored so a FAIL cannot poison the next run.
+
+**Exploitability is a positive control, not a reachability proxy.** A refused bind
+cannot tell "the AEAD socket is unreachable" from "the surface is open but the flaw
+does not work here", so the verifier performs the actual 4-byte page-cache write as
+uid 65534 against a root-owned `0644` scratch file, and requires it to land at
+exactly `assoclen + cryptlen`. Confirmed on `5.15.0-25` inside the scenario's own
+sandbox: 4 bytes at offset 4080, `recv` returning `EBADMSG`. The scratch file is
+unlinked afterwards; no real binary is touched, and page-cache damage does not
+survive a reboot in any case. See
+[`KERNEL-VERSION-CHECKS.md`](../KERNEL-VERSION-CHECKS.md) §8a for the source
+evidence that 5.15's `_aead_recvmsg()` and `authencesn.c` are unchanged from the
+versions the advisory verified, and for the two false-negative traps in writing
+such a probe.
 
 Use `rmmod`, not `modprobe -r`: this image has no `/lib/modules` for the host
 kernel, so `modprobe -r` fails with "Module algif_aead not found".
 
-Verified exit codes: unremediated **1**; host blacklist + `rmmod` done only inside
-the sandbox **0** (idempotent over three runs); unload without a host block **1**;
-blacklist written container-side only **1**; `kernel.modprobe=/bin/false` **1**;
+Verified exit codes: unremediated **1** (exploit lands); host blacklist + `rmmod`
+done only inside the sandbox **0**; **0** again after `Restart-VM -Force`, so the
+documented fix is reboot-persistent; unload without a host block **1** (the
+autoload is forced, so `rmmod` alone is caught with no reboot needed); blacklist
+written container-side only **1**; `kernel.modprobe=/bin/false` **1**;
 unprivileged sandbox **42**; kernel changed against the recorded baseline **1**;
 patched (6.6.200) or unprovable (5.19.17) host **42**.
+
+A **seccomp** filter on `socket(AF_ALG, …)` — the advisory's other suggestion — is
+not accepted as the fix here, because it configures a workload rather than the
+host and would leave every process outside the filter exploitable. Grading is on
+kernel state, so the blacklist's filename is irrelevant; the advisory's own example
+name differs from `threat.md`'s and both pass.
 
 ### S19 reproduction — use `meta4/dirtypipe-vm`
 

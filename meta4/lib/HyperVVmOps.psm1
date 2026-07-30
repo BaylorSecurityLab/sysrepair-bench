@@ -123,6 +123,29 @@ function Restore-VmBaseline {
     if ((Get-VM -Name $Profile.VmName).State -eq 'Running') {
         Stop-VM -Name $Profile.VmName -TurnOff -Force
     }
+
+    # AutomaticStopAction can only be changed while the VM is off, and this is the
+    # one routine guaranteed to have it off, so the correction lands here rather
+    # than in a setup script nobody re-runs.
+    #
+    # The default, Save, suspends a running guest on host shutdown/sleep instead of
+    # shutting it down. A guest resumed from a save whose write-back never
+    # completed comes up with ext4 replayed to its last committed state, quietly
+    # losing recent writes -- and scp does not fsync, so a freshly deployed
+    # verify.sh is exactly the kind of thing that disappears. ShutDown gives the
+    # guest an ACPI shutdown and a chance to flush.
+    $vm = Get-VM -Name $Profile.VmName
+    if ($vm.AutomaticStopAction -ne 'ShutDown') {
+        Set-VM -Name $Profile.VmName -AutomaticStopAction ShutDown
+        Write-Host "[$($Profile.Tag)] AutomaticStopAction $($vm.AutomaticStopAction) -> ShutDown"
+    }
+    if ($vm.AutomaticCheckpointsEnabled) {
+        # An automatic checkpoint would silently insert a differencing disk under
+        # the baseline chain, so a later restore would not land where expected.
+        Set-VM -Name $Profile.VmName -AutomaticCheckpointsEnabled $false
+        Write-Host "[$($Profile.Tag)] disabled automatic checkpoints"
+    }
+
     Restore-VMSnapshot -VMSnapshot $snap -Confirm:$false
     Write-Host "[$($Profile.Tag)] restored to baseline"
 }
@@ -205,6 +228,15 @@ function Copy-VmScenarios {
     Replaces the Vagrant `synced_folder "..", "/meta4"`, which Hyper-V has no
     equivalent for. Deliberately a copy, not a live mount: these containers run
     --privileged and the Vagrant share let them write back into the host checkout.
+
+    Every copied file is verified by SHA256 against the host, and the guest is
+    told to fsync before that comparison. Both matter: scp does not fsync, so a
+    freshly copied verify.sh can live only in the guest's page cache. If the VM
+    is then saved-and-restored, reset, or the host loses power mid-write, ext4
+    journal replay rolls the file back to its last committed content -- an OLDER
+    verify.sh -- and a grading run afterwards silently measures the wrong script.
+    A hash mismatch is the only way to notice; nothing else about that failure is
+    loud.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][hashtable] $Profile,
@@ -227,7 +259,34 @@ function Copy-VmScenarios {
             if (-not (Test-Path $src)) { throw "Copy-VmScenarios: no such scenario '$src'" }
             & scp @sshArgs -q -r $src "${target}:/meta4/" 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Copy-VmScenarios: scp of $s failed ($LASTEXITCODE)" }
-            Write-Host "[$($Profile.Tag)] copied $s -> /meta4/$s"
+
+            # -Force so dotfiles are included: .needs-privileged decides whether the
+            # sandbox gets --privileged, and these scenarios grade host kernel state
+            # that an unprivileged sandbox cannot even observe.
+            $wantMap = @{}
+            foreach ($f in (Get-ChildItem -Path $src -Recurse -File -Force)) {
+                $rel = $f.FullName.Substring($src.Length + 1) -replace '\\', '/'
+                $wantMap[$rel] = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+            }
+
+            $vr = Invoke-VmSsh -Profile $Profile -Command "sync; cd /meta4/$s && find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 -r sha256sum"
+            if ($vr.ExitCode -ne 0) { throw "Copy-VmScenarios: could not hash /meta4/$s in the guest: $($vr.Output)" }
+            $gotMap = @{}
+            foreach ($line in ($vr.Output -split "`r?`n")) {
+                # sha256sum's format is '<64 hex><two spaces><name>'; the name can
+                # begin with a dot, so it must be taken as the literal remainder of
+                # the line rather than whitespace-split.
+                if ($line -match '^([0-9a-f]{64})\s\s?(.+?)\s*$') { $gotMap[$Matches[2]] = $Matches[1] }
+            }
+
+            $bad = @()
+            foreach ($k in $wantMap.Keys) {
+                if (-not $gotMap.ContainsKey($k)) { $bad += "missing in guest: $k" }
+                elseif ($gotMap[$k] -ne $wantMap[$k]) { $bad += "content differs: $k (host $($wantMap[$k]), guest $($gotMap[$k]))" }
+            }
+            if ($bad.Count) { throw "Copy-VmScenarios: /meta4/$s does not match the host checkout after copy:`n  $($bad -join "`n  ")" }
+
+            Write-Host "[$($Profile.Tag)] copied $s -> /meta4/$s ($($wantMap.Count) files, sha256 verified)"
         }
     } finally { $ErrorActionPreference = $prev }
 }

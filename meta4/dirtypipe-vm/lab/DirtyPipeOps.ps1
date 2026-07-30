@@ -35,7 +35,9 @@ $script:Profile = @{
     ExpectAbi    = 27
 }
 
-$script:Meta4Dir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+# lab -> dirtypipe-vm -> meta4. Scenario directories are siblings of
+# dirtypipe-vm, not children of it, so this needs three levels.
+$script:Meta4Dir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
 
 function Invoke-DirtyPipeSsh {
     param([Parameter(Mandatory)][string] $Command, [int] $ConnectTimeout = 6)
