@@ -10,12 +10,12 @@ Vagrant/VirtualBox has been retired — see `lab/KernelLab.ps1` and `lab/KernelO
 
 | scenario | CVE | this VM? |
 |---|---|---|
-| S21 GameOverlay | CVE-2023-2640/32629 | yes — fixed at ABI 75, we pin 25 |
-| S22 nf_tables UAF | CVE-2024-1086 | yes — fixed at ABI 97 |
+| S21 GameOverlay | CVE-2023-2640/32629 | yes — fixed at ABI 78, we pin 25 |
+| S22 nf_tables UAF | CVE-2024-1086 | yes — fixed at ABI 101 |
 | S117 Copy Fail | CVE-2026-31431 | yes — never backported to 5.15.x |
 | S19 Dirty Pipe | CVE-2022-0847 | **no** — see [`meta4/dirtypipe-vm`](../dirtypipe-vm) |
 
-S19 moved out because 5.15.0-25 **already carries** the Dirty Pipe fix, so here it could only ever be graded through the `chattr +i` compensating control. `meta4/dirtypipe-vm` pins 20.04 HWE `5.13.0-27` — the last ABI before USN-5317-1 — where the real exploit path is reachable.
+S19 moved out because 5.15.0-25 **already carries** the Dirty Pipe fix, so here it could only ever be graded through the `chattr +i` compensating control. `meta4/dirtypipe-vm` pins 20.04 HWE `5.13.0-27` — inside the affected window, since USN-5317-1 landed the fix at `5.13.0-35.40` — where the real exploit path is reachable.
 
 ## Build
 
@@ -132,14 +132,14 @@ The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vag
 
 | Scenario | CVE | Kernel fix | Covered? |
 |---|---|---|---|
-| S19 Dirty Pipe | CVE-2022-0847 | 5.15.0-25.25 (pre-GA) | No — 22.04 GA already patched |
-| S21 GameOverlay | CVE-2023-2640/32629 | 5.15.0-75 | Yes — VM pins ABI < 75 |
-| S22 nf_tables UAF | CVE-2024-1086 | 5.15.0-97 | Yes — VM pins ABI < 97 |
+| S19 Dirty Pipe | CVE-2022-0847 | 5.15.25 upstream; jammy GA `5.15.0-25` | No — already patched here; verify.sh exits 42 (SKIP) |
+| S21 GameOverlay | CVE-2023-2640/32629 | `5.15.0-78.85` (USN-6248-1) | Yes — VM pins ABI 25 |
+| S22 nf_tables UAF | CVE-2024-1086 | `5.15.0-101.111` (USN-6704-1) | Yes — VM pins ABI 25 |
 | S117 Copy Fail | CVE-2026-31431 | 6.18.22 / 6.19.12 / 7.0 | Yes — fix not backported to 5.15.x; VM's pinned kernel is vulnerable |
 
 ### S19 reproduction — use `meta4/dirtypipe-vm`
 
-S19 needs Ubuntu 20.04 HWE on `5.13.0-27` or earlier (pre-USN-5317-1). That VM now exists and is built the same way as this one:
+S19 needs Ubuntu 20.04 HWE below `5.13.0-35` (USN-5317-1). That VM now exists and is built the same way as this one:
 
 ```powershell
 cd meta4\dirtypipe-vm\lab
@@ -154,8 +154,12 @@ uv run python -m sysrepair_bench.run dirtypipe_e2e
 
 Its `install-old-kernel.sh` fetches the kernel debs by **direct URL** — 5.13 HWE is EOL and superseded, so `apt-get install linux-image-5.13.0-27-generic` on a current focal resolves to something newer or nothing. Both debs must go in **one** `dpkg -i` call: `linux-modules-X` depends on `linux-image-X`, so installing them separately fails whichever order you try.
 
-Compensating-control mode still works on any host (the agent applies `chattr +i /opt/suid-marker` and `verify.sh` accepts it regardless of kernel) — but that grades the mitigation, not the CVE, which is why the dedicated VM exists.
+Compensating-control mode (`chattr +i /opt/suid-marker`) is accepted **only once the kernel is known to be vulnerable**. On a patched or unaffected host `verify.sh` exits 42 before reaching that branch, because `+i` there is a no-op and grading it as a fix would credit work nobody did. That is why the dedicated VM exists rather than running S19 anywhere.
 
-**Caveat on this table's `Covered?` column for S19:** `verify.sh` decides "vulnerable" from `uname -r` with the ABI stripped (`5.15.0-25-generic` → `5.15.0`), then compares against upstream `5.15.26`. Ubuntu backports fixes into the **ABI**, not the point release, so a patched 22.04 GA kernel is reported vulnerable. The check cannot distinguish patched from unpatched on any Ubuntu `5.15.0-NN`. Not yet fixed — it changes grading on every Ubuntu host.
+**How the kernel state is decided (fixed — was broken).** `verify.sh` used to strip the Ubuntu ABI from `uname -r` (`5.15.0-25-generic` → `5.15.0`) and compare that to upstream `5.15.26`. Ubuntu backports into the **ABI**, not the point release, so the test could never pass and every `5.15.0-NN` was declared vulnerable — including this VM's patched kernel, which then scored CORRECT via `chattr +i`.
+
+It now reads `/proc/version_signature` field 3 (the upstream stable base — the only Ubuntu-reported value comparable to a fix version, kernel-generated so a container sees the *host's*), backed by an ABI table because 5.13 reports `5.13.19` at both ABI 27 and 35. Cloud flavours are refused so `5.15.0-1057-azure` cannot satisfy "≥ 25", and anything pre-5.8 is `not_affected` outright since `PIPE_BUF_FLAG_CAN_MERGE` did not exist yet.
+
+`meta4/lib/kernel-affected.sh` is the reference copy; the logic is inlined into `verify.sh` because the harness uploads that file to the sandbox alone. Keep the two in step. Remaining known gaps are in [`meta4/KERNEL-VERSION-CHECKS.md`](../KERNEL-VERSION-CHECKS.md).
 
 Kernel-LPE scenarios require `--privileged` — Docker's default seccomp profile blocks `unshare -U` from unprivileged users, so the behavioral probe needs the flag to reach actual host-kernel userns behavior.
