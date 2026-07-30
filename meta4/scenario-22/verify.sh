@@ -4,11 +4,9 @@ ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 
 KV=$(uname -r | sed -E 's/-.*//')
 # Ubuntu's jammy 5.15 kernels carry the backported fix at ABI >= 101
-# (5.15.0-101.111, USN-6704-1), so the mainline 5.15.149 bar doesn't apply —
-# parse the Ubuntu ABI when we're on a 5.15.0-XXX-generic kernel.
-#
-# Was 97, which graded ABI 97-100 as patched while still vulnerable. USN-6653-1
-# does ship -97.107 but does not carry this CVE.
+# (5.15.0-101.111, USN-6704-1 -- the first jammy 5.15 changelog citing this CVE),
+# so the mainline 5.15.149 bar doesn't apply: an Ubuntu 5.15.0-XXX kernel never
+# reports a mainline patchlevel, so only the ABI distinguishes fixed from not.
 ABI=$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)
 SAFE=0
 

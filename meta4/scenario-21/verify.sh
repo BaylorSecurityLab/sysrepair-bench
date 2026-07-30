@@ -5,9 +5,15 @@ ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 KV=$(uname -r | sed -E 's/-.*//')
 SAFE=0
 
-# Fixed lines: 5.15.0-78 (USN-6248-1), 5.19.0-46, 6.2.0-26, or any 6.3+
+# Fixed lines: 5.15.0-177, 5.19.0-46, 6.2.0-26, or any 6.3+.
+#
+# The jammy 5.15 bar is 177, not 78. This CVE needs the Ubuntu-only SAUCE patch
+# "overlayfs: Skip permission checking for trusted.overlayfs.* xattrs", and the
+# jammy linux changelog reverts it in 5.15.0-177.187 -- the first 5.15 build whose
+# changelog cites CVE-2023-2640/32629 at all. 5.15.0-78.85's changelog cites
+# neither, and USN-6248-1 covers linux-oem-22.04b 6.0.0-1020-oem, not 5.15.
 case "$KV" in
-    5.15.*) ver_ge "$KV" "5.15.0" && [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 78 2>/dev/null ] && SAFE=1 ;;
+    5.15.*) [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 177 2>/dev/null ] && SAFE=1 ;;
     5.19.*) [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 46 2>/dev/null ] && SAFE=1 ;;
     6.2.*)  [ "$(uname -r | grep -oE -- '-[0-9]+' | head -1 | tr -d -)" -ge 26 2>/dev/null ] && SAFE=1 ;;
     *) ver_ge "$KV" "6.3" && SAFE=1 ;;

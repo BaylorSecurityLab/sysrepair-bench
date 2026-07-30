@@ -45,7 +45,7 @@ function Invoke-DirtyPipeSsh {
 function Test-DirtyPipeVmExists     { [bool](Get-VM -Name $script:Profile.VmName -ErrorAction SilentlyContinue) }
 function Test-DirtyPipeSshReachable { Test-VmSshReachable -Profile $script:Profile }
 function Get-DirtyPipeIpAddress     { if (Test-VmRunning -Profile $script:Profile) { $script:Profile.GuestIp } else { $null } }
-function Start-DirtyPipeVm          { param([int] $TimeoutSeconds = 300) Start-Vm -Profile $script:Profile -TimeoutSeconds $TimeoutSeconds }
+function Start-DirtyPipeVm          { param([int] $TimeoutSeconds = 300) Start-VmAndWait -Profile $script:Profile -TimeoutSeconds $TimeoutSeconds }
 function Restore-DirtyPipeBaseline  { Restore-VmBaseline -Profile $script:Profile }
 function Set-DirtyPipePortProxy     { Set-VmPortProxy -Profile $script:Profile }
 function Test-DirtyPipeAbi          { Test-VmKernelAbi -Profile $script:Profile }

@@ -42,7 +42,7 @@ function Invoke-KernelSsh {
 function Test-KernelVmExists   { [bool](Get-VM -Name $script:Profile.VmName -ErrorAction SilentlyContinue) }
 function Test-KernelSshReachable { Test-VmSshReachable -Profile $script:Profile }
 function Get-KernelIpAddress   { if (Test-VmRunning -Profile $script:Profile) { $script:Profile.GuestIp } else { $null } }
-function Start-KernelVm        { param([int] $TimeoutSeconds = 300) Start-Vm -Profile $script:Profile -TimeoutSeconds $TimeoutSeconds }
+function Start-KernelVm        { param([int] $TimeoutSeconds = 300) Start-VmAndWait -Profile $script:Profile -TimeoutSeconds $TimeoutSeconds }
 function Restore-KernelBaseline { Restore-VmBaseline -Profile $script:Profile }
 function Set-KernelPortProxy   { Set-VmPortProxy -Profile $script:Profile }
 function Test-KernelAbi        { Test-VmKernelAbi -Profile $script:Profile }

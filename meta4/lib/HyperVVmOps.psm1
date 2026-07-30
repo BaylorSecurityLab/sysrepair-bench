@@ -74,7 +74,17 @@ function Test-VmSshReachable {
 }
 
 
-function Start-Vm {
+function Start-VmAndWait {
+    <#
+    .DESCRIPTION
+    NOT named Start-Vm. PowerShell resolves command names case-insensitively, so a
+    function called Start-Vm shadows the Hyper-V Start-VM cmdlet everywhere inside
+    this module -- including in its own body, where `Start-VM -Name ...` then binds
+    against this function's parameters and dies on "A parameter cannot be found
+    that matches parameter name 'Name'". The guest is never started, and because
+    the guard below skips the call whenever the VM already happens to be Running,
+    the failure is invisible until something restores a checkpoint first.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][hashtable] $Profile,
           [int] $TimeoutSeconds = 300)
@@ -92,7 +102,7 @@ function Start-Vm {
         }
         Start-Sleep -Seconds 5
     }
-    throw "Start-Vm: SSH did not answer within $TimeoutSeconds s"
+    throw "Start-VmAndWait: SSH did not answer within $TimeoutSeconds s"
 }
 
 
@@ -284,7 +294,7 @@ function Initialize-VmHost {
 
     Assert-VmExists -Profile $Profile
     if (-not $NoRestore) { Restore-VmBaseline -Profile $Profile }
-    Start-Vm -Profile $Profile
+    Start-VmAndWait -Profile $Profile
     Set-VmPortProxy -Profile $Profile
     Test-VmKernelAbi -Profile $Profile | Out-Null
     Wait-VmNetworkReady -Profile $Profile
@@ -292,6 +302,6 @@ function Initialize-VmHost {
 }
 
 Export-ModuleMember -Function Invoke-VmSsh, Test-VmRunning, Assert-VmExists,
-    Test-VmSshReachable, Start-Vm, Restore-VmBaseline, Set-VmPortProxy,
+    Test-VmSshReachable, Start-VmAndWait, Restore-VmBaseline, Set-VmPortProxy,
     Test-VmKernelAbi, Wait-VmNetworkReady, Copy-VmScenarios,
     Invoke-VmScenarioTest, Get-VmSshConfig, Initialize-VmHost
