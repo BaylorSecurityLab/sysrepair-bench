@@ -12,7 +12,7 @@ patterns this script reuses.
 
 THE KERNEL IS THE POINT. meta4 scenarios S21 (GameOverlay, CVE-2023-2640/32629)
 and S22 (nf_tables UAF, CVE-2024-1086) run as containers INSIDE this VM so they
-share its kernel. Dirty Pipe (CVE-2022-0847) affects 5.8 <= k < 5.13.0-28, so
+share its kernel. Dirty Pipe (CVE-2022-0847) affects 5.8 <= k < 5.13.0-35, so
 GameOverlay fix (ABI 75) and the nf_tables fix (ABI 97). If the VM boots anything
 >= 75 the scenarios silently stop being exploitable and verify.sh "passes" for
 the wrong reason -- so provision.sh hard-fails rather than continue.

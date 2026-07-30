@@ -2,12 +2,12 @@
 # Stage 1 for the Dirty Pipe VM. Installs Ubuntu 20.04 HWE kernel 5.13.0-27,
 # which is vulnerable to CVE-2022-0847 (Dirty Pipe).
 #
-# WHY THIS VM EXISTS. Dirty Pipe affects 5.8 <= k < 5.15.25 / 5.13.0-28 /
+# WHY THIS VM EXISTS. Dirty Pipe affects 5.8 <= k < 5.15.25 / 5.13.0-35 /
 # 5.10.102. meta4-kernel pins 5.15.0-25, which is 22.04 GA and ALREADY CARRIES
 # the fix -- so scenario-19 can only be graded there in compensating-control mode
 # (chattr +i on the SUID marker), never as a real exploit. 5.13.0-27 is the last
-# 20.04 HWE ABI before USN-5317-1 landed the fix in -28, so the true kernel path
-# is reachable here.
+# 20.04 HWE ABI we pin; USN-5317-1 landed the fix in 5.13.0-35.40, so 27 is
+# comfortably inside the affected window and the real exploit path is reachable.
 #
 # WHY DIRECT .deb URLs. 5.13 HWE is EOL and superseded; `apt-get install
 # linux-image-5.13.0-27-generic` on a current focal resolves to something newer
