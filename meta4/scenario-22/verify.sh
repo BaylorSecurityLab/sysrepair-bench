@@ -105,6 +105,19 @@ esac
 
 # Behavioural probe: can an unprivileged uid still create a user namespace?
 #
+# WHAT THIS PROBE MEASURES, AND WHAT IT DOES NOT. It exercises the compensating
+# control -- whether an unprivileged user can still obtain a user namespace, which
+# is the reachability precondition for the nf_tables UAF -- not the CVE itself. It
+# never attempts the use-after-free. So "vulnerable" here is an inference from the
+# kernel version, and the probe only separates "mitigation applied" from
+# "mitigation absent".
+#
+# That split is deliberate, and scenario-21 documents the same reasoning: a
+# behavioural exploit attempt must not be the verdict source, because a host can
+# carry the vulnerable code while a given PoC fails to complete on it, and grading
+# on the PoC would then mark a vendor-affected host as safe. Version decides
+# affected-ness; this probe decides whether the control is in place.
+#
 # setpriv, not su: su needs an existing account and goes through PAM, so a
 # missing user, a PAM refusal or an absent su binary is indistinguishable from
 # the kernel refusing the namespace -- which is how an unremediated host could
