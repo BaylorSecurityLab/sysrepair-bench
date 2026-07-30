@@ -135,7 +135,7 @@ The `Host kernel-vm` block in `~/.ssh/config` already pins `IdentityFile` to Vag
 | S19 Dirty Pipe | CVE-2022-0847 | 5.15.25 upstream; jammy GA `5.15.0-25` | No — already patched here; verify.sh exits 42 (SKIP) |
 | S21 GameOverlay | CVE-2023-2640/32629 | `5.15.0-177.187` (jammy changelog reverts the SAUCE patch) | Yes — VM pins ABI 25 |
 | S22 nf_tables UAF | CVE-2024-1086 | `5.15.0-101.111` (USN-6704-1) | Yes — VM pins ABI 25 |
-| S117 Copy Fail | CVE-2026-31431 | `5.15.0-179.189` jammy; upstream 5.15.204 / 6.18.22 / 6.19.12 | Yes — VM pins ABI 25. **But see the S117 caveat below** |
+| S117 Copy Fail | CVE-2026-31431 | `5.15.0-179.189` jammy; upstream 5.15.204 / 6.18.22 / 6.19.12 | Yes — VM pins ABI 25; passable from the sandbox (see below) |
 
 ### Why S21 grades on version, not on an exploit attempt
 
@@ -160,22 +160,41 @@ vendor-affected host as safe. The version/ABI check is the verdict; the behaviou
 probe only distinguishes "mitigation applied" from "mitigation absent", and a
 failure to set the probe up is treated as inconclusive rather than as "blocked".
 
-### S117 caveat — currently unpassable from inside the container
+### S117 grades the host kernel's module policy, not a file in the sandbox
 
-The kernel is genuinely vulnerable here, and the constraint check now works. But
-the remediation the scenario asks for cannot be performed by the agent:
-`request_module()` runs the kernel's modprobe helper through
-`call_usermodehelper`, which executes in the **initial** namespaces — against the
-**host** root filesystem. So the container's `/etc/modprobe.d` has no effect on
-module auto-loading, and the verifier's own AF_ALG probe reloads the module it just
-asked the agent to blacklist.
+`request_module()` runs the modprobe helper through `call_usermodehelper` in the
+**initial** namespaces, against the **host** root filesystem — so a blacklist
+written to the sandbox's own `/etc/modprobe.d` is inert, and grading that file
+graded the wrong system.
 
-Measured: a blacklist on the host gives `blocked (ENOENT)`; the identical file
-inside the container gives `accessible`. Exit 0 was reachable **only** by
-blacklisting on the host, which the agent cannot reach. This is a scenario-design
-problem, not a verifier bug, and it predates the Hyper-V port — it needs either a
-host-side remediation channel or a different mitigation to grade. Until then S117
-reports INCORRECT even for a correct in-container answer.
+The obvious conclusion — that the agent therefore cannot fix this — is wrong.
+Measured on `5.15.0-25` from a `--privileged` sandbox with no host shell:
+`/dev/sda1` is visible and mountable, so the host's `/etc/modprobe.d` is writable;
+`rmmod` unloads host-wide because module unload is a global kernel operation; and
+`/proc/sys/kernel/modprobe` and `kernel.modules_disabled` are writable and not
+namespaced. The advisory's own workaround is performable exactly where the agent
+runs, with no extra mount or compose change — a bind mount of `/etc/modprobe.d`
+would grant nothing `--privileged` does not already grant while making the scenario
+less faithful.
+
+`verify.sh` now grades three properties of the **host** kernel: **residency**
+(`/proc/modules`), **closure** (an AF_ALG AEAD bind is refused), and **targeting**
+(`algif_skcipher` still autoloads). Targeting is what rejects the blanket
+shortcuts: `kernel.modprobe=/bin/false` and `modules_disabled=1` both close the
+AEAD surface while breaking every other module load, whereas the advisory's
+workaround leaves dm-crypt, LUKS, kTLS, IPsec and the common crypto libraries
+working. The probe no longer undoes the fix it grades — with the control correct
+the bind cannot load anything, and with it absent the pre-probe residency state is
+restored so a FAIL cannot poison the next run.
+
+Use `rmmod`, not `modprobe -r`: this image has no `/lib/modules` for the host
+kernel, so `modprobe -r` fails with "Module algif_aead not found".
+
+Verified exit codes: unremediated **1**; host blacklist + `rmmod` done only inside
+the sandbox **0** (idempotent over three runs); unload without a host block **1**;
+blacklist written container-side only **1**; `kernel.modprobe=/bin/false` **1**;
+unprivileged sandbox **42**; kernel changed against the recorded baseline **1**;
+patched (6.6.200) or unprovable (5.19.17) host **42**.
 
 ### S19 reproduction — use `meta4/dirtypipe-vm`
 
