@@ -1,0 +1,7 @@
+{
+  "mode": "vm-standalone",
+  "id": "meta3-winvm-10",
+  "inject":         { "target": "member", "script": "inject.ps1" },
+  "verify_poc":     { "target": "member", "script": "verify-poc.ps1" },
+  "verify_service": { "target": "member", "script": "verify-service.ps1" }
+}

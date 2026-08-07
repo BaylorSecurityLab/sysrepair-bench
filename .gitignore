@@ -68,6 +68,11 @@ inspect_eval/logs-old/
 # and confirm with `git ls-files --error-unmatch <path>`.
 *.json
 !croissant.json
+# Per-scenario VM harness manifests. run-scenario.sh and the inspect discovery
+# path both read these BY FILENAME and hard-error without them, so the blanket
+# rule above would make every VM scenario dead on a fresh clone. meta4/ad-vm's
+# copies survived only because they were force-added before the rule existed.
+!harness.json
 inspect_eval/baseline_report.json
 inspect_eval/app_categories.tex
 inspect_eval/results_table.tex
