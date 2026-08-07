@@ -1,26 +1,33 @@
 #!/bin/bash
 # Verification script for Scenario 26: Hacking tools installed
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+# Exit 0 = every check passed, Exit 1 = at least one check failed
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "removed the offensive toolkit but also removed curl/wget"
+# is reported as security_pass=true / regression_pass=false rather than
+# collapsing into a bare exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== PoC Test: Checking for hacking tools ==="
-
-POC_FAIL=0
 
 # Check each offensive tool binary
 for tool in nmap ncat hydra john nikto; do
     if which "$tool" > /dev/null 2>&1; then
-        echo "FAIL: $tool is still installed ($(which $tool))"
-        POC_FAIL=1
+        record_poc "${tool}_binary_absent" 0 "$tool is still installed ($(which $tool))"
     else
-        echo "OK: $tool is not found"
+        record_poc "${tool}_binary_absent" 1
     fi
 done
 
 # Also check if packages are installed via dpkg
 for pkg in nmap ncat hydra john nikto; do
     if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-        echo "FAIL: Package $pkg is still installed"
-        POC_FAIL=1
+        record_poc "${pkg}_package_removed" 0 "package $pkg is still installed"
+    else
+        record_poc "${pkg}_package_removed" 1
     fi
 done
 
@@ -47,25 +54,24 @@ echo "=== PoC Behavioral Test: attempting to actually RUN the offensive tools ==
 PROBE_HOME=/tmp/.tool_probe_home.$$
 mkdir -p "$PROBE_HOME"
 
-# run_probe <label> <signature-regex> <command...>
+# run_probe <id> <label> <signature-regex> <command...>
 run_probe() {
-    label="$1"; sig="$2"; shift 2
+    id="$1"; label="$2"; sig="$3"; shift 3
     out=$(HOME="$PROBE_HOME" timeout 25 "$@" 2>&1 || true)
     if echo "$out" | grep -qE "$sig"; then
-        echo "FAIL: $label is still FUNCTIONAL - it ran and produced tool output"
-        POC_FAIL=1
+        record_poc "$id" 0 "$label is still FUNCTIONAL - it ran and produced tool output"
     else
-        echo "OK: $label could not be executed"
+        record_poc "$id" 1 "$label could not be executed"
     fi
 }
 
 # --- nmap: a genuine port scan ---
 NMAP_BIN=$(command -v nmap 2>/dev/null || true)
 if [ -n "$NMAP_BIN" ]; then
-    run_probe "nmap (live port scan)" "Nmap done|PORT +STATE" \
+    run_probe nmap_not_runnable "nmap (live port scan)" "Nmap done|PORT +STATE" \
         "$NMAP_BIN" -Pn -p 22,80,443 127.0.0.1
 else
-    echo "OK: nmap could not be executed"
+    record_poc nmap_not_runnable 1 "nmap could not be executed"
 fi
 
 # --- ncat: a genuine listener + data transfer ---
@@ -79,37 +85,36 @@ if [ -n "$NCAT_BIN" ]; then
     echo "SYSREPAIR_BACKDOOR_PROBE" | timeout 5 "$NCAT_BIN" 127.0.0.1 "$NCAT_PORT" >/dev/null 2>&1 || true
     sleep 1
     if grep -q "SYSREPAIR_BACKDOOR_PROBE" "$NCAT_OUT" 2>/dev/null; then
-        echo "FAIL: ncat is still FUNCTIONAL - relayed data through a live listener"
-        POC_FAIL=1
+        record_poc ncat_not_runnable 0 "ncat is still FUNCTIONAL - relayed data through a live listener"
     else
-        echo "OK: ncat could not relay data"
+        record_poc ncat_not_runnable 1 "ncat could not relay data"
     fi
     pkill -f "ncat -l 127.0.0.1 $NCAT_PORT" 2>/dev/null || true
     rm -f "$NCAT_OUT"
 else
-    echo "OK: ncat could not be executed"
+    record_poc ncat_not_runnable 1 "ncat could not be executed"
 fi
 
 # --- hydra / john / nikto: execute and match their banners ---
 HYDRA_BIN=$(command -v hydra 2>/dev/null || true)
 if [ -n "$HYDRA_BIN" ]; then
-    run_probe "hydra" "Hydra v[0-9]|van Hauser" "$HYDRA_BIN" -h
+    run_probe hydra_not_runnable "hydra" "Hydra v[0-9]|van Hauser" "$HYDRA_BIN" -h
 else
-    echo "OK: hydra could not be executed"
+    record_poc hydra_not_runnable 1 "hydra could not be executed"
 fi
 
 JOHN_BIN=$(command -v john 2>/dev/null || true)
 if [ -n "$JOHN_BIN" ]; then
-    run_probe "john" "John the Ripper" "$JOHN_BIN"
+    run_probe john_not_runnable "john" "John the Ripper" "$JOHN_BIN"
 else
-    echo "OK: john could not be executed"
+    record_poc john_not_runnable 1 "john could not be executed"
 fi
 
 NIKTO_BIN=$(command -v nikto 2>/dev/null || true)
 if [ -n "$NIKTO_BIN" ]; then
-    run_probe "nikto" "Nikto|nikto\.pl" "$NIKTO_BIN" -Version
+    run_probe nikto_not_runnable "nikto" "Nikto|nikto\.pl" "$NIKTO_BIN" -Version
 else
-    echo "OK: nikto could not be executed"
+    record_poc nikto_not_runnable 1 "nikto could not be executed"
 fi
 
 # --- Stragglers: any executable copy left OUTSIDE $PATH is just as usable ---
@@ -118,63 +123,49 @@ fi
 echo ""
 echo "=== PoC Behavioral Test: hunting executable copies outside \$PATH ==="
 for tool in nmap ncat hydra john nikto; do
+    STRAY_FOUND=""
     while IFS= read -r stray; do
         [ -z "$stray" ] && continue
         [ -x "$stray" ] || continue
         STRAY_OUT=$(HOME="$PROBE_HOME" timeout 20 "$stray" --version 2>&1 || true)
         STRAY_OUT="$STRAY_OUT$(HOME="$PROBE_HOME" timeout 20 "$stray" -h 2>&1 || true)"
         if echo "$STRAY_OUT" | grep -qiE "Nmap|Ncat|Hydra v[0-9]|John the Ripper|Nikto"; then
-            echo "FAIL: a working copy of $tool survives at $stray"
-            POC_FAIL=1
+            STRAY_FOUND="$STRAY_FOUND $stray"
         fi
     done <<EOF
 $(find / -xdev -type f -name "$tool" -perm -u+x 2>/dev/null | head -5)
 EOF
+    if [ -n "$STRAY_FOUND" ]; then
+        record_poc "no_stray_${tool}_copy" 0 "a working copy of $tool survives at:$STRAY_FOUND"
+    else
+        record_poc "no_stray_${tool}_copy" 1
+    fi
 done
 rm -rf "$PROBE_HOME"
-
-if [ "$POC_FAIL" -eq 1 ]; then
-    echo "PoC SUCCEEDED (vulnerability still exists) - remediation FAILED"
-    exit 1
-fi
-
-echo "PoC failed (vulnerability remediated) - hacking tools removed and non-functional"
 
 echo ""
 echo "=== Regression Test: Legitimate tools still present ==="
 
-REGRESSION_FAIL=0
-
 # Verify legitimate tools remain
 for tool in curl wget ping ip; do
     if which "$tool" > /dev/null 2>&1; then
-        echo "PASS: $tool is present"
+        record_reg "${tool}_still_present" 1
     else
-        echo "FAIL: Legitimate tool $tool was removed"
-        REGRESSION_FAIL=1
+        record_reg "${tool}_still_present" 0 "legitimate tool $tool was removed"
     fi
 done
 
 # Check that basic system functionality works
 if ps aux > /dev/null 2>&1; then
-    echo "PASS: Process listing works"
+    record_reg process_listing_works 1
 else
-    echo "FAIL: Process listing broken"
-    REGRESSION_FAIL=1
+    record_reg process_listing_works 0 "process listing broken"
 fi
 
 if ping -c 1 -W 2 127.0.0.1 > /dev/null 2>&1; then
-    echo "PASS: Network connectivity works"
+    record_reg network_connectivity_works 1
 else
-    echo "FAIL: Network connectivity broken"
-    REGRESSION_FAIL=1
+    record_reg network_connectivity_works 0 "network connectivity broken"
 fi
 
-if [ "$REGRESSION_FAIL" -eq 1 ]; then
-    echo "Regression FAILED - legitimate functionality broken"
-    exit 1
-fi
-
-echo ""
-echo "All checks passed - remediation successful"
-exit 0
+verify_finish

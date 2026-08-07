@@ -4,11 +4,7 @@
 # to loopback. This verifier reads the LIVE kernel firewall table and drives a
 # real Modbus read against the running simulator — it never starts the service.
 set -u
-
-if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (needed to read the firewall)." >&2
-    exit 1
-fi
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 ###############################################################################
 # The image CMD boots the simulator (see .preserve-cmd); a dead daemon is a
@@ -37,12 +33,15 @@ firewalled() {
 # remediated if EITHER a live firewall rule drops untrusted traffic to :502 OR
 # the daemon is no longer bound to 0.0.0.0.
 ###############################################################################
-if listens_all && ! firewalled; then
-    echo "FAIL [PoC]: Modbus is bound to 0.0.0.0:$PORT with no live iptables DROP/REJECT rule." >&2
-    echo "            Any network-reachable client can read/write PLC registers." >&2
-    exit 1
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    record_poc modbus_port_restricted 0 \
+        "container lacks NET_ADMIN capability (needed to read the firewall), so no live restriction can be shown"
+elif listens_all && ! firewalled; then
+    record_poc modbus_port_restricted 0 \
+        "Modbus is bound to 0.0.0.0:$PORT with no live iptables DROP/REJECT rule — any network-reachable client can read/write PLC registers"
+else
+    record_poc modbus_port_restricted 1 "TCP/$PORT restricted (live firewall rule or loopback-only bind)"
 fi
-echo "PASS [PoC]: Modbus TCP/$PORT is restricted (live firewall rule or loopback-only bind)."
 
 ###############################################################################
 # Regression: the PLC must still answer AUTHORIZED (loopback) clients with a
@@ -55,9 +54,10 @@ c = ModbusClient(host='127.0.0.1', port=$PORT, auto_open=True, timeout=3)
 regs = c.read_holding_registers(0, 10)
 sys.exit(0 if regs else 1)
 " 2>/dev/null; then
-    echo "PASS [Regression]: Modbus answers a live register read from loopback."
-    exit 0
+    record_reg modbus_serves_loopback 1 "Modbus answers a live register read from loopback"
+else
+    record_reg modbus_serves_loopback 0 \
+        "Modbus did not answer a register read from loopback (service dead / over-blocked)"
 fi
 
-echo "FAIL [Regression]: Modbus did not answer a register read from loopback (service dead / over-blocked)." >&2
-exit 1
+verify_finish

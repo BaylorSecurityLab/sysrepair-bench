@@ -6,7 +6,12 @@
 # 0.0.0.0:7001. Remediation: move the backend to loopback and put an nginx proxy
 # on 7001 that denies /console.
 set -u
-IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
+IP=$(hostname -i 2>/dev/null | awk '{print $1}' || true)
 [ -z "$IP" ] && IP=127.0.0.1
 
 code_of() { curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$IP:7001$1" 2>/dev/null || echo 000; }
@@ -18,9 +23,10 @@ for i in $(seq 1 20); do
     [ "$(code_of /)" != "000" ] && { UP=1; break; }
     sleep 2
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: nothing serving on 7001 (dead / not started)." >&2
-    exit 1
+if [ "$UP" = "1" ]; then
+    record_reg port_7001_serving 1
+else
+    record_reg port_7001_serving 0 "nothing serving on 7001 (dead / not started)"
 fi
 
 ###############################################################################
@@ -29,30 +35,37 @@ fi
 BP='/console/css/%252e%252e%252fconsole.portal'
 CODE=$(code_of "$BP"); BODY=$(body_of "$BP")
 if [ "$CODE" = "200" ] || printf '%s' "$BODY" | grep -qi 'WebLogic .*Console\|Administration Console'; then
-    echo "FAIL [PoC]: URL-encoding bypass reachable on 7001 (HTTP $CODE) — console exposed." >&2
-    exit 1
+    record_poc url_encoding_bypass_blocked 0 "URL-encoding bypass reachable on 7001 (HTTP $CODE) - console exposed"
+else
+    record_poc url_encoding_bypass_blocked 1 "URL-encoding bypass blocked ($CODE)"
 fi
-echo "PASS [PoC]: URL-encoding bypass blocked ($CODE)."
 
 ###############################################################################
 # PoC 2: direct /console must also be blocked
 ###############################################################################
 CODE=$(code_of "/console"); BODY=$(body_of "/console")
 if [ "$CODE" = "200" ] || printf '%s' "$BODY" | grep -qi 'Administration Console'; then
-    echo "FAIL [PoC]: /console reachable on 7001 (HTTP $CODE) — console not blocked." >&2
-    exit 1
+    record_poc console_path_blocked 0 "/console reachable on 7001 (HTTP $CODE) - console not blocked"
+else
+    record_poc console_path_blocked 1 "/console blocked ($CODE)"
 fi
-echo "PASS [PoC]: /console blocked ($CODE)."
 
 ###############################################################################
 # Regression: non-console paths must still be served via the proxy
 ###############################################################################
+ROOT_OK=0
 for i in 1 2 3 4 5; do
     if [ "$(code_of /)" = "200" ]; then
-        echo "PASS [Regression]: WebLogic root path served on 7001 (HTTP 200)."
-        exit 0
+        ROOT_OK=1
+        break
     fi
     sleep 2
 done
-echo "FAIL [Regression]: root path not served on 7001." >&2
-exit 1
+
+if [ "$ROOT_OK" = "1" ]; then
+    record_reg root_path_served 1 "WebLogic root path served on 7001 (HTTP 200)"
+else
+    record_reg root_path_served 0 "root path not served on 7001"
+fi
+
+verify_finish

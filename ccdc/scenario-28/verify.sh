@@ -1,8 +1,15 @@
 #!/bin/bash
 # Scenario 28: rsh/rlogin services enabled
 # Verification: PoC should fail (rsh removed) AND functionality test should pass
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "removed the r-services but destroyed the accounts" is
+# reported as security_pass=true / regression_pass=false rather than collapsing
+# into a bare exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # --- PoC Test: the r-services server should not be installed ---
 # BROKEN BEFORE: this grepped `dpkg -l rsh-server`, but the Dockerfile installs
@@ -11,18 +18,20 @@ PASS=true
 # provide these daemons is checked, plus the daemon binaries themselves, so an
 # unpackaged/hand-copied in.rshd is caught too.
 for PKG in rsh-redone-server rsh-server rsh-redone-client rsh-client; do
+    PKG_ID=$(echo "$PKG" | tr '-' '_')
     if dpkg -l "$PKG" 2>/dev/null | grep -q "^ii"; then
-        echo "FAIL [PoC]: $PKG package is still installed"
-        PASS=false
+        record_poc "${PKG_ID}_package_removed" 0 "$PKG package is still installed"
     else
-        echo "PASS [PoC]: $PKG package is removed"
+        record_poc "${PKG_ID}_package_removed" 1
     fi
 done
 
 for BIN in /usr/sbin/in.rshd /usr/sbin/in.rlogind /usr/sbin/in.rexecd; do
+    BIN_ID=$(basename "$BIN" | tr '.-' '__')
     if [ -e "$BIN" ]; then
-        echo "FAIL [PoC]: r-services daemon binary $BIN is still present"
-        PASS=false
+        record_poc "${BIN_ID}_binary_absent" 0 "r-services daemon binary $BIN is still present"
+    else
+        record_poc "${BIN_ID}_binary_absent" 1
     fi
 done
 
@@ -57,22 +66,20 @@ fi
 
 if awk '$4 == "0A" && ($2 ~ /:0201$/ || $2 ~ /:0202$/) { f = 1 } END { exit !f }' \
         /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
-    echo "FAIL [PoC]: rsh/rlogin ports (513/514) are still listening"
-    PASS=false
+    record_poc rsh_ports_not_listening 0 "rsh/rlogin ports (513/514) are still listening"
 else
-    echo "PASS [PoC]: rsh/rlogin ports (513/514) are not listening"
+    record_poc rsh_ports_not_listening 1
 fi
 
 if command -v rsh > /dev/null 2>&1; then
     RSH_OUT=$(timeout 15 rsh -l root 127.0.0.1 id 2>/dev/null)
     if echo "$RSH_OUT" | grep -q "uid=0"; then
-        echo "FAIL [PoC]: unauthenticated rsh gave a root shell ($RSH_OUT)"
-        PASS=false
+        record_poc unauthenticated_rsh_root_refused 0 "unauthenticated rsh gave a root shell ($RSH_OUT)"
     else
-        echo "PASS [PoC]: unauthenticated rsh to root was refused"
+        record_poc unauthenticated_rsh_root_refused 1 "unauthenticated rsh to root was refused"
     fi
 else
-    echo "PASS [PoC]: rsh client is not even installed"
+    record_poc unauthenticated_rsh_root_refused 1 "rsh client is not even installed"
 fi
 
 # Leave the box as we found it - only undo the xinetd WE started.
@@ -80,35 +87,31 @@ _xinetd_probe_cleanup
 
 # --- PoC Test: a still-running xinetd means the r-services are still exposed ---
 if pgrep -x xinetd > /dev/null 2>&1; then
-    echo "FAIL [PoC]: xinetd is still running (the r-services super-server was never stopped)"
-    PASS=false
+    record_poc xinetd_not_running 0 "xinetd is still running (the r-services super-server was never stopped)"
 else
-    echo "PASS [PoC]: xinetd is not running"
+    record_poc xinetd_not_running 1
 fi
 
 # Check .rhosts files
 if [ -f /root/.rhosts ]; then
-    echo "FAIL [PoC]: /root/.rhosts still exists"
-    PASS=false
+    record_poc root_rhosts_removed 0 "/root/.rhosts still exists"
 else
-    echo "PASS [PoC]: /root/.rhosts is removed"
+    record_poc root_rhosts_removed 1
 fi
 
 # Check for .rhosts in home directories
 RHOSTS_FOUND=$(find /home -name .rhosts 2>/dev/null)
 if [ -n "$RHOSTS_FOUND" ]; then
-    echo "FAIL [PoC]: .rhosts files found in home directories: $RHOSTS_FOUND"
-    PASS=false
+    record_poc no_home_rhosts 0 ".rhosts files found in home directories: $RHOSTS_FOUND"
 else
-    echo "PASS [PoC]: No .rhosts files in home directories"
+    record_poc no_home_rhosts 1
 fi
 
 # --- Regression Test: Users should still exist ---
 if id sysadmin > /dev/null 2>&1; then
-    echo "PASS [Regression]: sysadmin user still exists"
+    record_reg sysadmin_user_exists 1
 else
-    echo "FAIL [Regression]: sysadmin user is missing"
-    PASS=false
+    record_reg sysadmin_user_exists 0 "sysadmin user is missing"
 fi
 
 # BROKEN BEFORE: nothing checked that the accounts were still USABLE - a
@@ -116,16 +119,9 @@ fi
 if [ -n "$(getent passwd sysadmin | cut -d: -f6)" ] \
    && [ -x "$(getent passwd sysadmin | cut -d: -f7)" ] \
    && getent shadow sysadmin 2>/dev/null | cut -d: -f2 | grep -qE '^\$'; then
-    echo "PASS [Regression]: sysadmin still has a valid shell and password hash"
+    record_reg sysadmin_account_usable 1 "sysadmin still has a valid shell and password hash"
 else
-    echo "FAIL [Regression]: sysadmin account is no longer usable"
-    PASS=false
+    record_reg sysadmin_account_usable 0 "sysadmin account is no longer usable"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

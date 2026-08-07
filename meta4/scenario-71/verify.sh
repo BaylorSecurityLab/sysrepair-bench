@@ -9,14 +9,16 @@
 # a missing tool, and the gate IS the live exploit — it is path-independent, so a
 # sham fix that relocates the SUID binary elsewhere cannot evade it).
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
-FAIL=0
+# NOTE: the old `FAIL=0` accumulator is gone deliberately. verifylib exports
+# FAIL=1 as the failure EXIT CODE, so reusing that name as a counter would make
+# verify_finish exit 0 on a failed run. verify_finish now tallies the checks.
 APPUSER=appuser
 HELPER=/usr/local/bin/suidhelper
-if ! id "$APPUSER" >/dev/null 2>&1; then
-    echo "FAIL [PoC]: no '$APPUSER' user to run the unprivileged escalation PoC." >&2
-    exit 1
-fi
+
+HAVE_APPUSER=0
+id "$APPUSER" >/dev/null 2>&1 && HAVE_APPUSER=1
 
 # As non-root appuser, use a candidate SUID binary to try to read /etc/shadow
 # (mode 640 root:shadow — unreadable to appuser unless it becomes root).
@@ -36,43 +38,53 @@ esc_try() {
 # failure. The gate IS the live exploit, so a missing tool cannot buy a pass.
 ###############################################################################
 ESC=0
-for b in $(find / -xdev -type f -perm -4000 -user root 2>/dev/null); do
-    [ -x "$b" ] || continue
-    OUT=$(esc_try "$b")
-    if [ -n "$OUT" ]; then
-        echo "FAIL [PoC-live]: non-root '$APPUSER' read /etc/shadow AS ROOT via SUID-root binary $b." >&2
-        ESC=1
-    fi
-done
-if [ "$ESC" = "1" ]; then
-    FAIL=1
+ESC_VIA=""
+if [ "$HAVE_APPUSER" = "1" ]; then
+    for b in $(find / -xdev -type f -perm -4000 -user root 2>/dev/null); do
+        [ -x "$b" ] || continue
+        OUT=$(esc_try "$b" || true)
+        if [ -n "$OUT" ]; then
+            ESC=1
+            ESC_VIA="$ESC_VIA $b"
+        fi
+    done
+fi
+
+if [ "$HAVE_APPUSER" != "1" ]; then
+    record_poc no_suid_root_escalation 0 "no '$APPUSER' user to run the unprivileged escalation PoC"
+elif [ "$ESC" = "1" ]; then
+    record_poc no_suid_root_escalation 0 \
+        "non-root '$APPUSER' read /etc/shadow AS ROOT via SUID-root binary$ESC_VIA"
 else
-    echo "PASS [PoC]: no SUID-root binary lets non-root '$APPUSER' escalate to root."
+    record_poc no_suid_root_escalation 1 "no SUID-root binary lets non-root '$APPUSER' escalate to root"
 fi
 
 ###############################################################################
-# Regression: the fix is to strip SUID, NOT delete the binary. If the helper is
-# still present it must run WITHOUT granting root.
+# PoC 2: the fix is to strip SUID, NOT delete the binary. If the helper is still
+# present it must run WITHOUT granting root.
+#
+# RECLASSIFIED regression -> poc. On the untouched box the helper IS SUID-root
+# and returns uid 0, so this check FAILS AT BASELINE. A regression check asserts
+# "the agent broke nothing" and must hold before any remediation; one that only
+# passes afterwards is a PoC check wearing the wrong label. Condition,
+# strictness and the exit-0 state set are unchanged.
 ###############################################################################
-if [ -x "$HELPER" ]; then
-    UIDOUT=$(timeout 10 su -s /bin/sh "$APPUSER" -c "'$HELPER' -c 'id -u'" 2>/dev/null | tr -cd '0-9')
-    if [ "$UIDOUT" = "0" ]; then
-        echo "FAIL [Regression]: helper still yields uid 0 to non-root '$APPUSER'." >&2
-        FAIL=1
+if [ -x "$HELPER" ] && [ "$HAVE_APPUSER" = "1" ]; then
+    UIDOUT=$(timeout 10 su -s /bin/sh "$APPUSER" -c "'$HELPER' -c 'id -u'" 2>/dev/null | tr -cd '0-9' || true)
+    if [ "${UIDOUT:-}" = "0" ]; then
+        record_poc helper_runs_unprivileged 0 "helper still yields uid 0 to non-root '$APPUSER'"
     else
-        echo "PASS [Regression]: helper present but runs as non-root (uid=${UIDOUT:-unknown})."
+        record_poc helper_runs_unprivileged 1 "helper present but runs as non-root (uid=${UIDOUT:-unknown})"
     fi
 fi
 
-if ! ls /tmp >/dev/null 2>&1; then
-    echo "FAIL [Regression]: 'ls /tmp' failed — container is broken." >&2
-    FAIL=1
+###############################################################################
+# Regression: the container must still be usable.
+###############################################################################
+if ls /tmp >/dev/null 2>&1; then
+    record_reg basic_file_ops 1 "basic file operations work normally"
 else
-    echo "PASS [Regression]: basic file operations work normally."
+    record_reg basic_file_ops 0 "'ls /tmp' failed — container is broken"
 fi
 
-if [ "$FAIL" = "0" ]; then
-    echo "All checks passed."
-    exit 0
-fi
-exit 1
+verify_finish

@@ -1,41 +1,46 @@
 #!/bin/bash
 # Verification script for Scenario 05: Unprotected Installer Pages
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Exit 0 = every check passed, Exit 1 = at least one check failed
 #
 # Fully dynamic: it drives the live Apache with real HTTP requests. It never
 # starts the web server (it is booted by the image CMD); if Apache is down the
-# homepage checks fail, which is the correct outcome.
+# homepage regression checks fail, which is the correct outcome.
+#
+# Two-component protocol: every check runs and is recorded with its kind, so
+# "blocked the installers by killing Apache" reports security_pass=true /
+# regression_pass=false instead of collapsing into a bare exit 1.
 
-PASS=true
-code() { timeout 20 curl -so /dev/null -w '%{http_code}' "http://localhost/$1"; }
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
+code() { timeout 20 curl -so /dev/null -w '%{http_code}' "http://localhost/$1" || true; }
 
 # --- PoC: installer/setup endpoints must be blocked (403, files still present) ---
+#
+# Only a real 403 counts. Anything else -- including curl's 000 "no response" --
+# keeps the original strictness and fails: a request that was never answered is
+# not evidence that a deny rule was deployed. Service death is caught by the
+# regression checks below, which is where it belongs.
 for path in drupal/install.php phpmyadmin/setup/index.php; do
+    id="$(echo "$path" | tr '/.' '__')"
     c=$(code "$path")
     if [ "$c" = "403" ]; then
-        echo "PASS [PoC]: /$path is blocked (HTTP 403)."
+        record_poc "blocked_$id" 1
     else
-        echo "FAIL [PoC]: /$path returned HTTP $c -- expected 403." >&2
-        PASS=false
+        record_poc "blocked_$id" 0 "/$path returned HTTP $c -- expected 403"
     fi
 done
 
 # --- Regression: the applications themselves must remain reachable ---
 for path in drupal/ phpmyadmin/; do
+    id="$(echo "$path" | tr -d '/')"
     c=$(code "$path")
     if [ "$c" = "200" ]; then
-        echo "PASS [Regression]: /$path is reachable (HTTP 200)."
+        record_reg "app_reachable_$id" 1
     else
-        echo "FAIL [Regression]: /$path returned HTTP $c -- expected 200." >&2
-        PASS=false
+        record_reg "app_reachable_$id" 0 "/$path returned HTTP $c -- expected 200"
     fi
 done
 
-if $PASS; then
-    echo "All checks passed."
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

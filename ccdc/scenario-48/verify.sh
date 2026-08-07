@@ -1,17 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 # =============================================================================
 # Scenario 48: Crontab with Reverse Shell Backdoor
 # Verify that malicious crontab entries have been removed
+#
+# PoC checks:        no suspicious entry in any cron source, and the LIVE cron
+#                    daemon dispatches nothing suspicious
+# Regression checks: cron still starts, the legitimate schedule survived, and
+#                    crontab(1) can still install and read back a job
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "removed the backdoor by truncating /etc/crontab" is reported
+# as security_pass=true / regression_pass=false rather than collapsing into a
+# bare exit 1. See lib/verifylib.sh.
 # =============================================================================
-
-FAIL=0
 
 # --- PoC Test: Check for suspicious crontab entries ---
 echo "[PoC] Scanning for reverse shell or suspicious crontab entries..."
 
-POC_FAIL=0
+STATIC_BAD=0
+STATIC_DETAIL=""
 
 # Patterns that indicate malicious cron entries.
 # WAS WEAK: the original list was 13 fixed strings aimed at one specific payload,
@@ -49,8 +66,9 @@ scan_file() {
     for pattern in "${SUSPICIOUS_PATTERNS[@]}"; do
         if grep -qE "$pattern" "$f" 2>/dev/null; then
             MATCH=$(grep -E "$pattern" "$f" | head -2)
-            echo "[PoC] FAIL: Suspicious entry in $label matching '$pattern': $MATCH"
-            POC_FAIL=1
+            echo "  [PoC] suspicious entry in $label matching '$pattern': $MATCH"
+            STATIC_DETAIL="${STATIC_DETAIL}${STATIC_DETAIL:+; }$label ~ '$pattern'"
+            STATIC_BAD=1
         fi
     done
 }
@@ -76,11 +94,10 @@ for d in /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron
     done
 done
 
-if [ "$POC_FAIL" -eq 1 ]; then
-    echo "[PoC] RESULT: Vulnerability still present -- malicious crontab entries found."
-    exit 1
+if [ "$STATIC_BAD" -eq 1 ]; then
+    record_poc no_suspicious_cron_entries 0 "malicious crontab entries found: $STATIC_DETAIL"
 else
-    echo "[PoC] PASS: No suspicious crontab entries detected in any cron source."
+    record_poc no_suspicious_cron_entries 1
 fi
 
 # --- PoC Behavioural Test: watch what the cron DAEMON actually dispatches ---
@@ -100,9 +117,12 @@ fi
 echo ""
 echo "[PoC] Driving the live cron daemon and watching what it dispatches..."
 
-if ! command -v cron >/dev/null 2>&1; then
-    echo "[PoC] FAIL: the cron binary is missing - the live cron behaviour cannot be observed."
-    exit 1
+LIVE_PROBE_READY=1
+if command -v cron >/dev/null 2>&1; then
+    record_poc cron_binary_available 1
+else
+    record_poc cron_binary_available 0 "the cron binary is missing - the live cron behaviour cannot be observed"
+    LIVE_PROBE_READY=0
 fi
 
 CRON_WAS_RUNNING=0
@@ -148,20 +168,27 @@ restore_cron_state() {
 }
 trap restore_cron_state EXIT INT TERM
 
-PROBE_DIR=$(mktemp -d)
-CRON_BK="$PROBE_DIR/cron-sources.tar"
-BK_PATHS=()
-for p in etc/crontab etc/cron.d var/spool/cron/crontabs; do
-    if [ -e "/$p" ]; then BK_PATHS+=("$p"); fi
-done
-if [ "${#BK_PATHS[@]}" -gt 0 ]; then
-    tar -C / -cpf "$CRON_BK" "${BK_PATHS[@]}" 2>/dev/null || true
-fi
-# Never touch the real cron sources unless we are certain we can put them back.
-if [ ! -s "$CRON_BK" ]; then
-    echo "[PoC] FAIL: could not snapshot the cron sources, so the live probe is refused"
-    echo "  rather than risk leaving the schedule modified."
-    exit 1
+EXPECTED=0
+DISPATCHED=0
+LIVE_LOG=""
+
+if [ "$LIVE_PROBE_READY" -eq 1 ]; then
+    PROBE_DIR=$(mktemp -d)
+    CRON_BK="$PROBE_DIR/cron-sources.tar"
+    BK_PATHS=()
+    for p in etc/crontab etc/cron.d var/spool/cron/crontabs; do
+        if [ -e "/$p" ]; then BK_PATHS+=("$p"); fi
+    done
+    if [ "${#BK_PATHS[@]}" -gt 0 ]; then
+        tar -C / -cpf "$CRON_BK" "${BK_PATHS[@]}" 2>/dev/null || true
+    fi
+    # Never touch the real cron sources unless we are certain we can put them back.
+    if [ -s "$CRON_BK" ]; then
+        record_poc cron_sources_snapshotted 1
+    else
+        record_poc cron_sources_snapshotted 0 "could not snapshot the cron sources, so the live probe is refused rather than risk leaving the schedule modified"
+        LIVE_PROBE_READY=0
+    fi
 fi
 
 # Rewrite each cron source so that every job keeps its command VERBATIM but becomes
@@ -182,7 +209,6 @@ BEGIN { print "SHELL=/bin/true"; print "MAILTO=\"\"" }
     print "@reboot " rest
 }'
 
-EXPECTED=0
 make_due_now() {
     local f="$1" n
     [ -f "$f" ] || return 0
@@ -192,16 +218,6 @@ make_due_now() {
     cat "$PROBE_DIR/rewritten" > "$f"
     EXPECTED=$((EXPECTED + n))
 }
-make_due_now /etc/crontab
-for cronfile in /etc/cron.d/* /var/spool/cron/crontabs/*; do
-    make_due_now "$cronfile"
-done
-
-LIVE_LOG="$PROBE_DIR/cron.log"
-pkill -x cron >/dev/null 2>&1 || true
-rm -f "$REBOOT_STAMP" 2>/dev/null || true
-cron -f -x load >"$LIVE_LOG" 2>&1 &
-CRON_PID=$!
 
 # kill -0 succeeds on a ZOMBIE, so it cannot tell "daemon running" from "daemon
 # exited and we have not reaped it yet". Ask for the process state instead.
@@ -213,89 +229,111 @@ probe_cron_alive() {
     esac
 }
 
-# Poll for the dispatch evidence (bounded) instead of sleeping a fixed duration.
-PROBE_START=$(date +%s)
-DEADLINE=$((PROBE_START + 15))
-DISPATCHED=0
-LAST=-1
-STABLE=0
-while :; do
-    DISPATCHED=$(grep -c 'CMD (' "$LIVE_LOG" 2>/dev/null || true)
-    [ -n "$DISPATCHED" ] || DISPATCHED=0
-    if [ "$EXPECTED" -gt 0 ] && [ "$DISPATCHED" -ge "$EXPECTED" ]; then break; fi
-    if grep -q 'Running @reboot jobs' "$LIVE_LOG" 2>/dev/null; then
-        if [ "$DISPATCHED" -eq "$LAST" ]; then STABLE=$((STABLE + 1)); else STABLE=0; fi
-        if [ "$STABLE" -ge 5 ]; then break; fi
-    fi
-    LAST=$DISPATCHED
-    if ! probe_cron_alive; then break; fi
-    if [ "$(date +%s)" -ge "$DEADLINE" ]; then break; fi
-    sleep 0.2
-done
-
-if ! probe_cron_alive; then
-    echo "[PoC] FAIL: the cron daemon exited immediately - its live behaviour cannot be observed."
-    tail -5 "$LIVE_LOG" 2>/dev/null || true
-    echo "RESULT: cron daemon is not functional."
-    exit 1
-fi
-
-# FAIL CLOSED: if there are jobs on this box but the daemon dispatched none of them,
-# the live evidence was never collected and this check must not silently pass.
-if [ "$EXPECTED" -gt 0 ] && [ "$DISPATCHED" -eq 0 ]; then
-    echo "[PoC] FAIL: the cron daemon dispatched none of the $EXPECTED scheduled job(s) - the live check could not be performed."
-    tail -5 "$LIVE_LOG" 2>/dev/null || true
-    exit 1
-fi
-
-kill "$CRON_PID" >/dev/null 2>&1 || true
-wait "$CRON_PID" 2>/dev/null || true
-CRON_PID=""
-
-EXECUTED=$(sed -n 's/.*CMD (\(.*\))[[:space:]]*$/\1/p' "$LIVE_LOG" 2>/dev/null | sort -u || true)
-echo "[PoC] INFO: the live daemon dispatched $DISPATCHED of $EXPECTED job(s) in $(( $(date +%s) - PROBE_START ))s:"
-if [ -n "$EXECUTED" ]; then
-    echo "$EXECUTED" | sed 's/^/    /'
-fi
-
-LIVE_BAD=0
-for pattern in "${SUSPICIOUS_PATTERNS[@]}"; do
-    if echo "$EXECUTED" | grep -qE "$pattern" 2>/dev/null; then
-        echo "[PoC] FAIL: the running cron daemon EXECUTED a command matching '$pattern'."
-        LIVE_BAD=1
-    fi
-done
-
-# The static scan above can only see the text of the crontab line, so a backdoor that
-# hides behind an innocuous script name (`* * * * * root /usr/local/sbin/healthcheck`)
-# matches none of the patterns. Follow the daemon's own dispatch list to the files it
-# would really execute and scan those too. Text files only - a binary can match these
-# regexes by accident.
-set -f
-while IFS= read -r cmdline; do
-    [ -n "$cmdline" ] || continue
-    for tok in $cmdline; do
-        case "$tok" in /*) ;; *) continue ;; esac
-        tok=${tok%%;*}; tok=${tok%\"}; tok=${tok%\'}
-        [ -f "$tok" ] || continue
-        grep -Iq . "$tok" 2>/dev/null || continue
-        for pattern in "${SUSPICIOUS_PATTERNS[@]}"; do
-            if grep -qE "$pattern" "$tok" 2>/dev/null; then
-                echo "[PoC] FAIL: cron dispatches $tok, whose contents match '$pattern': $(grep -E "$pattern" "$tok" | head -1)"
-                LIVE_BAD=1
-            fi
-        done
+if [ "$LIVE_PROBE_READY" -eq 1 ]; then
+    make_due_now /etc/crontab
+    for cronfile in /etc/cron.d/* /var/spool/cron/crontabs/*; do
+        make_due_now "$cronfile"
     done
-done <<< "$EXECUTED"
-set +f
+
+    LIVE_LOG="$PROBE_DIR/cron.log"
+    pkill -x cron >/dev/null 2>&1 || true
+    rm -f "$REBOOT_STAMP" 2>/dev/null || true
+    cron -f -x load >"$LIVE_LOG" 2>&1 &
+    CRON_PID=$!
+
+    # Poll for the dispatch evidence (bounded) instead of sleeping a fixed duration.
+    PROBE_START=$(date +%s)
+    DEADLINE=$((PROBE_START + 15))
+    LAST=-1
+    STABLE=0
+    while :; do
+        DISPATCHED=$(grep -c 'CMD (' "$LIVE_LOG" 2>/dev/null || true)
+        [ -n "$DISPATCHED" ] || DISPATCHED=0
+        if [ "$EXPECTED" -gt 0 ] && [ "$DISPATCHED" -ge "$EXPECTED" ]; then break; fi
+        if grep -q 'Running @reboot jobs' "$LIVE_LOG" 2>/dev/null; then
+            if [ "$DISPATCHED" -eq "$LAST" ]; then STABLE=$((STABLE + 1)); else STABLE=0; fi
+            if [ "$STABLE" -ge 5 ]; then break; fi
+        fi
+        LAST=$DISPATCHED
+        if ! probe_cron_alive; then break; fi
+        if [ "$(date +%s)" -ge "$DEADLINE" ]; then break; fi
+        sleep 0.2
+    done
+
+    if probe_cron_alive; then
+        record_poc cron_daemon_observable 1
+    else
+        record_poc cron_daemon_observable 0 "the cron daemon exited immediately - its live behaviour cannot be observed"
+        tail -5 "$LIVE_LOG" 2>/dev/null || true
+        LIVE_PROBE_READY=0
+    fi
+fi
+
+if [ "$LIVE_PROBE_READY" -eq 1 ]; then
+    # FAIL CLOSED: if there are jobs on this box but the daemon dispatched none of them,
+    # the live evidence was never collected and this check must not silently pass.
+    if [ "$EXPECTED" -gt 0 ] && [ "$DISPATCHED" -eq 0 ]; then
+        record_poc cron_dispatch_evidence_collected 0 "the cron daemon dispatched none of the $EXPECTED scheduled job(s) - the live check could not be performed"
+        tail -5 "$LIVE_LOG" 2>/dev/null || true
+        LIVE_PROBE_READY=0
+    else
+        record_poc cron_dispatch_evidence_collected 1
+    fi
+fi
+
+if [ "$LIVE_PROBE_READY" -eq 1 ]; then
+    kill "$CRON_PID" >/dev/null 2>&1 || true
+    wait "$CRON_PID" 2>/dev/null || true
+    CRON_PID=""
+
+    EXECUTED=$(sed -n 's/.*CMD (\(.*\))[[:space:]]*$/\1/p' "$LIVE_LOG" 2>/dev/null | sort -u || true)
+    echo "[PoC] INFO: the live daemon dispatched $DISPATCHED of $EXPECTED job(s) in $(( $(date +%s) - PROBE_START ))s:"
+    if [ -n "$EXECUTED" ]; then
+        echo "$EXECUTED" | sed 's/^/    /'
+    fi
+
+    LIVE_BAD=0
+    LIVE_DETAIL=""
+    for pattern in "${SUSPICIOUS_PATTERNS[@]}"; do
+        if echo "$EXECUTED" | grep -qE "$pattern" 2>/dev/null; then
+            echo "  [PoC] the running cron daemon EXECUTED a command matching '$pattern'."
+            LIVE_DETAIL="${LIVE_DETAIL}${LIVE_DETAIL:+; }dispatched command ~ '$pattern'"
+            LIVE_BAD=1
+        fi
+    done
+
+    # The static scan above can only see the text of the crontab line, so a backdoor that
+    # hides behind an innocuous script name (`* * * * * root /usr/local/sbin/healthcheck`)
+    # matches none of the patterns. Follow the daemon's own dispatch list to the files it
+    # would really execute and scan those too. Text files only - a binary can match these
+    # regexes by accident.
+    set -f
+    while IFS= read -r cmdline; do
+        [ -n "$cmdline" ] || continue
+        for tok in $cmdline; do
+            case "$tok" in /*) ;; *) continue ;; esac
+            tok=${tok%%;*}; tok=${tok%\"}; tok=${tok%\'}
+            [ -f "$tok" ] || continue
+            grep -Iq . "$tok" 2>/dev/null || continue
+            for pattern in "${SUSPICIOUS_PATTERNS[@]}"; do
+                if grep -qE "$pattern" "$tok" 2>/dev/null; then
+                    echo "  [PoC] cron dispatches $tok, whose contents match '$pattern': $(grep -E "$pattern" "$tok" | head -1)"
+                    LIVE_DETAIL="${LIVE_DETAIL}${LIVE_DETAIL:+; }$tok ~ '$pattern'"
+                    LIVE_BAD=1
+                fi
+            done
+        done
+    done <<< "$EXECUTED"
+    set +f
+
+    if [ "$LIVE_BAD" -eq 1 ]; then
+        record_poc live_cron_dispatch_clean 0 "the live cron daemon is still running the backdoor: $LIVE_DETAIL"
+    else
+        record_poc live_cron_dispatch_clean 1
+    fi
+fi
 
 restore_cron_state
-
-if [ "$LIVE_BAD" -eq 1 ]; then
-    echo "[PoC] RESULT: Vulnerability still present -- the live cron daemon is still running the backdoor."
-    exit 1
-fi
-echo "[PoC] PASS: the live cron daemon dispatched nothing suspicious."
 
 # --- Regression Test: Ensure cron still works for legitimate jobs ---
 echo ""
@@ -303,10 +341,9 @@ echo "[Regression] Checking that cron service is functional for legitimate tasks
 
 # Check that cron binary exists
 if command -v cron &>/dev/null || command -v crond &>/dev/null; then
-    echo "[Regression] PASS: cron daemon binary exists."
+    record_reg cron_daemon_binary_exists 1
 else
-    echo "[Regression] FAIL: cron daemon binary not found."
-    FAIL=1
+    record_reg cron_daemon_binary_exists 0 "cron daemon binary not found"
 fi
 
 # WAS WEAK: `command -v cron` was the only mandatory regression check, so the
@@ -325,42 +362,36 @@ for _ in $(seq 1 25); do
 done
 sleep 1
 if [ "$CRON_UP" -eq 1 ] && cron_alive; then
-    echo "[Regression] PASS: the cron daemon starts and stays resident."
+    record_reg cron_daemon_stays_resident 1
 else
-    echo "[Regression] FAIL: the cron daemon does not stay running."
-    FAIL=1
+    record_reg cron_daemon_stays_resident 0 "the cron daemon does not stay running"
 fi
 
 # Check that /etc/crontab still exists and has valid structure.
 # WAS WEAK: the preservation of the legitimate job was only a WARNING, so
 # `> /etc/crontab` - wiping every scheduled job on the box - passed cleanly.
 if [ -f /etc/crontab ]; then
-    echo "[Regression] PASS: /etc/crontab exists."
+    record_reg etc_crontab_present 1
     if grep -q "apt-get update" /etc/crontab 2>/dev/null; then
-        echo "[Regression] PASS: Legitimate apt-get update cron job is preserved."
+        record_reg legitimate_cron_job_preserved 1
     else
-        echo "[Regression] FAIL: the legitimate apt-get update cron job was destroyed."
-        echo "  Removing the backdoor must not take the legitimate schedule with it."
-        FAIL=1
+        record_reg legitimate_cron_job_preserved 0 "the legitimate apt-get update cron job was destroyed - removing the backdoor must not take the legitimate schedule with it"
     fi
     # The environment header cron needs must survive too.
     if grep -qE '^\s*(SHELL|PATH)\s*=' /etc/crontab 2>/dev/null; then
-        echo "[Regression] PASS: /etc/crontab retains its SHELL/PATH environment header."
+        record_reg crontab_env_header_preserved 1
     else
-        echo "[Regression] FAIL: /etc/crontab lost its SHELL/PATH header - jobs would run with no PATH."
-        FAIL=1
+        record_reg crontab_env_header_preserved 0 "/etc/crontab lost its SHELL/PATH header - jobs would run with no PATH"
     fi
 else
-    echo "[Regression] FAIL: /etc/crontab is missing entirely."
-    FAIL=1
+    record_reg etc_crontab_present 0 "/etc/crontab is missing entirely"
 fi
 
 # Verify cron spool directory exists
 if [ -d /var/spool/cron/crontabs ]; then
-    echo "[Regression] PASS: Cron spool directory exists."
+    record_reg cron_spool_directory_present 1
 else
-    echo "[Regression] FAIL: Cron spool directory missing - no user crontab can be installed."
-    FAIL=1
+    record_reg cron_spool_directory_present 0 "cron spool directory missing - no user crontab can be installed"
 fi
 
 # WAS WEAK: this functional test was WARN-only, so a remediation that destroyed
@@ -370,24 +401,14 @@ echo "# Test cron entry" > "$TEMP_CRON"
 echo "0 0 1 1 * /bin/true" >> "$TEMP_CRON"
 if crontab "$TEMP_CRON" 2>/dev/null; then
     if crontab -l 2>/dev/null | grep -q '/bin/true'; then
-        echo "[Regression] PASS: crontab command can install and read back new entries."
+        record_reg crontab_install_and_readback 1
     else
-        echo "[Regression] FAIL: crontab installed an entry but cannot read it back."
-        FAIL=1
+        record_reg crontab_install_and_readback 0 "crontab installed an entry but cannot read it back"
     fi
     crontab -r 2>/dev/null || true
 else
-    echo "[Regression] FAIL: crontab command cannot install entries - legitimate scheduling is broken."
-    FAIL=1
+    record_reg crontab_install_and_readback 0 "crontab command cannot install entries - legitimate scheduling is broken"
 fi
 rm -f "$TEMP_CRON"
 
-if [ "$FAIL" -eq 1 ]; then
-    echo ""
-    echo "[RESULT] FAIL: Regression test failed -- cron service broken."
-    exit 1
-fi
-
-echo ""
-echo "[RESULT] SUCCESS: Malicious crontab entries removed and cron service works."
-exit 0
+verify_finish

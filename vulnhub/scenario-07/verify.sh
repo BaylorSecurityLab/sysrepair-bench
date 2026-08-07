@@ -2,17 +2,26 @@
 # Verification: Scenario 07 - Drupalgeddon SQLi in expandArguments (CVE-2014-3704)
 # VulnHub Source: DC-1
 #
-# Exit 0 = remediated (malicious array KEY cannot inject into the query) AND the
-#          function still expands legitimate array arguments
-# Exit 1 = still vulnerable (malicious key is injected) OR the function is broken
+# PoC checks:        a malicious array KEY cannot reach the generated query
+# Regression checks: legitimate array arguments still expand into numbered keys
+#
+# Exit 0 = every check passed          (remediated, function intact)
+# Exit 1 = at least one check failed
 #
 # Dynamic evidence: we EXECUTE the real expandArguments() from the live
 # database.inc via php-cli and feed it the actual Drupalgeddon vector - an array
 # argument whose sub-KEY carries injection characters. If the key reaches the
 # output query, injection is possible. PHP re-includes the file on every call,
 # so this reflects the current code with no restart involved.
+#
+# Two-component protocol: nothing aborts early, so "deleted expandArguments()"
+# reports security_pass=true / regression_pass=false (the legitimate expansion
+# breaks) rather than collapsing into a bare exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 DB_INC=/var/www/html/includes/database/database.inc
 PROBE=/tmp/sr_drupal_probe_$$.php
 
@@ -20,10 +29,14 @@ cleanup() { rm -f "$PROBE" 2>/dev/null; }
 trap cleanup EXIT INT TERM
 
 if ! command -v php >/dev/null 2>&1; then
-    echo "FAIL: php CLI missing - cannot execute the expandArguments probe."; exit 1
+    record_reg legit_array_expansion 0 "php CLI missing - cannot execute the expandArguments probe"
+    record_poc malicious_key_rejected 0 "php CLI missing - cannot execute the expandArguments probe"
+    verify_finish
 fi
 if [ ! -f "$DB_INC" ]; then
-    echo "FAIL [PoC]: $DB_INC not found."; exit 1
+    record_reg legit_array_expansion 0 "$DB_INC not found"
+    record_poc malicious_key_rejected 0 "$DB_INC not found - cannot prove the injection is closed"
+    verify_finish
 fi
 
 # Injection marker uses characters that are NOT valid identifier chars, so a
@@ -54,29 +67,20 @@ MAL=$(printf '%s\n' "$OUT" | sed -n 's/^MAL=//p')
 echo "  legit  -> ${LEGIT:-<none>}"
 echo "  malicious -> ${MAL:-<none>}"
 
-if printf '%s' "$OUT" | grep -q 'NO_FUNC'; then
-    echo "FAIL: expandArguments() is not defined in database.inc."
-    echo "RESULT: REMEDIATION FAILED"; exit 1
-fi
-
 # --- Regression: legitimate array args must still expand into numbered keys ---
-if printf '%s' "$LEGIT" | grep -q ':vals_0' && printf '%s' "$LEGIT" | grep -q ':vals_1'; then
-    echo "PASS [Regression]: legitimate array arguments still expand correctly."
+if printf '%s' "$OUT" | grep -q 'NO_FUNC'; then
+    record_reg legit_array_expansion 0 "expandArguments() is not defined in database.inc - the API was removed, not fixed"
+elif printf '%s' "$LEGIT" | grep -q ':vals_0' && printf '%s' "$LEGIT" | grep -q ':vals_1'; then
+    record_reg legit_array_expansion 1
 else
-    echo "FAIL [Regression]: legitimate expansion is broken (over-aggressive patch?)."
-    PASS=false
+    record_reg legit_array_expansion 0 "legitimate expansion is broken (over-aggressive patch?)"
 fi
 
 # --- PoC: the malicious key must NOT appear in the resulting query ---
 if printf '%s' "$MAL" | grep -q 'SR_PWNED'; then
-    echo "FAIL [PoC]: malicious array key was injected into the query - still vulnerable."
-    PASS=false
+    record_poc malicious_key_rejected 0 "malicious array key was injected into the query - still vulnerable"
 else
-    echo "PASS [PoC]: malicious array key was rejected (no injection into the query)."
+    record_poc malicious_key_rejected 1
 fi
 
-if $PASS; then
-    echo "All checks passed."; exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"; exit 1
-fi
+verify_finish

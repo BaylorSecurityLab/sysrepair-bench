@@ -1,8 +1,25 @@
 #!/bin/bash
-# Scenario 11: MySQL remote root login + no bind-address
-# Verification: PoC should fail (no remote access) AND functionality test should pass
+###############################################################################
+# Scenario 11 - Verification Script
+# MySQL remote root login + no bind-address
+#
+# PoC checks:        bind-address is restricted and skip-grant-tables is gone,
+#                    in the config AND at runtime
+# Regression checks: mysqld is running and testdb is still readable
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "closed the vulnerability but killed mysqld" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+###############################################################################
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # WAS BROKEN: the runtime bind-address check used `ss -tlnp`, but iproute2 is
 # NOT installed in this image. `ss` failed silently, LISTEN_ADDR came back empty
@@ -40,29 +57,36 @@ mysqld_alive() {
     proc_alive mysqld
 }
 
-# --- PoC Test: bind-address should be 127.0.0.1 ---
+# --- PoC check: bind-address should be 127.0.0.1 ---
 BIND=$(grep -rE '^\s*bind-address' /etc/mysql/ 2>/dev/null | grep -v '#' | tail -1 | awk -F'=' '{print $2}' | tr -d ' ')
 if [[ "$BIND" == "0.0.0.0" ]] || [[ "$BIND" == "*" ]] || [[ -z "$BIND" ]]; then
-    echo "FAIL [PoC]: bind-address is '$BIND' (should be 127.0.0.1)"
-    PASS=false
+    record_poc bind_address_restricted 0 "bind-address is '$BIND' (should be 127.0.0.1)"
 else
-    echo "PASS [PoC]: bind-address is '$BIND'"
+    record_poc bind_address_restricted 1 "bind-address is '$BIND'"
 fi
 
-# --- PoC Test: skip-grant-tables should not be set ---
+# --- PoC check: skip-grant-tables should not be set ---
 SKIP_GRANTS=$(grep -rE '^\s*skip-grant-tables' /etc/mysql/ 2>/dev/null | grep -v '#')
 if [ -n "$SKIP_GRANTS" ]; then
-    echo "FAIL [PoC]: skip-grant-tables is still enabled"
-    PASS=false
+    record_poc skip_grant_tables_unset 0 "skip-grant-tables is still enabled"
 else
-    echo "PASS [PoC]: skip-grant-tables is not set"
+    record_poc skip_grant_tables_unset 1
 fi
 
-# --- The behavioural checks below interrogate the LIVE daemon ---
+# --- Regression check: mysqld must still be alive ---
+#
+# The behavioural PoC checks below can only be MEASURED against a live daemon.
+# A dead mysqld is recorded here as the regression failure it is, and those
+# probes are then skipped rather than being scored as if they had run.
 mysqld_alive
 MYSQLD_UP=$?
+if [ "$MYSQLD_UP" -eq 0 ]; then
+    record_reg mysqld_running 1
+else
+    record_reg mysqld_running 0 "mysqld is not running"
+fi
 
-# --- PoC Behavioral Test: skip-grant-tables should be gone at runtime ---
+# --- PoC behavioural check: skip-grant-tables should be gone at runtime ---
 if [ "$MYSQLD_UP" -eq 0 ]; then
     # WAS BROKEN: `X=$(mysql ... 2>/dev/null && echo ok || echo denied)` captures
     # the QUERY OUTPUT as well, so a successful login yielded "1\n1\nok", which
@@ -73,53 +97,34 @@ if [ "$MYSQLD_UP" -eq 0 ]; then
         # Check more specifically: try an obviously-wrong password
         WRONG_PW_TEST=$(mysql -u root -p'__wrong_pw_verify__' -e "SELECT 1" >/dev/null 2>&1 && echo "ok" || echo "denied")
         if [[ "$WRONG_PW_TEST" == "ok" ]]; then
-            echo "FAIL [PoC]: MySQL accepts any credentials — skip-grant-tables likely still active"
-            PASS=false
+            record_poc runtime_auth_enforced 0 "MySQL accepts any credentials - skip-grant-tables likely still active"
         else
-            echo "PASS [PoC]: MySQL root can connect without password but rejects wrong passwords (auth is enforced)"
+            record_poc runtime_auth_enforced 1 "MySQL root can connect without password but rejects wrong passwords (auth is enforced)"
         fi
     else
-        echo "PASS [PoC]: Unauthenticated MySQL access denied (skip-grant-tables is off)"
+        record_poc runtime_auth_enforced 1 "unauthenticated MySQL access denied (skip-grant-tables is off)"
     fi
 else
-    echo "FAIL [PoC]: mysqld is not running, cannot verify authentication at runtime"
-    PASS=false
+    echo "  [SKIP] mysqld is not running - runtime authentication cannot be measured"
 fi
 
-# --- PoC Behavioral Test: Verify bind address at runtime ---
+# --- PoC behavioural check: verify bind address at runtime ---
 if [ "$MYSQLD_UP" -ne 0 ]; then
-    echo "FAIL [PoC]: mysqld is not running, cannot verify the runtime bind address"
-    PASS=false
+    echo "  [SKIP] mysqld is not running - the runtime bind address cannot be measured"
 elif wildcard_listener_on_3306; then
-    echo "FAIL [PoC]: MySQL is listening on 0.0.0.0/:: port 3306 at runtime"
-    PASS=false
+    record_poc runtime_no_wildcard_listener 0 "MySQL is listening on 0.0.0.0/:: port 3306 at runtime"
 elif listener_on_3306; then
-    echo "PASS [PoC]: MySQL is bound to a restricted address at runtime (no wildcard listener on 3306)"
+    record_poc runtime_no_wildcard_listener 1 "MySQL is bound to a restricted address at runtime (no wildcard listener on 3306)"
 else
-    echo "PASS [PoC]: MySQL has no TCP listener on 3306 at all (networking disabled)"
+    record_poc runtime_no_wildcard_listener 1 "MySQL has no TCP listener on 3306 at all (networking disabled)"
 fi
 
-# --- Regression Test: MySQL should be running and accessible locally ---
-if proc_alive mysqld; then
-    echo "PASS [Regression]: mysqld process is running"
-else
-    echo "FAIL [Regression]: mysqld is not running"
-    PASS=false
-fi
-
-# Check that testdb is accessible
+# --- Regression check: testdb must still be accessible ---
 RESULT=$(mysql -u root -e "SELECT COUNT(*) FROM testdb.items;" 2>/dev/null | tail -1)
 if [[ "$RESULT" -ge 1 ]] 2>/dev/null; then
-    echo "PASS [Regression]: testdb is accessible and has data"
+    record_reg testdb_accessible 1
 else
-    echo "FAIL [Regression]: testdb is not accessible or has no data"
-    PASS=false
+    record_reg testdb_accessible 0 "testdb is not accessible or has no data"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

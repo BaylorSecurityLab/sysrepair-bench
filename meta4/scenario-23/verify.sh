@@ -16,37 +16,63 @@
 #     fallback branches ("only supported on linux" / "must be run as root" ->
 #     PASS) -- those could mask a broken environment and added no signal the
 #     version gate does not already provide.
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "upgraded runc but broke the binary" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 NEED=1.1.12
 ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 
 # Collect candidate runc binaries: PATH resolution + well-known locations,
 # de-duplicated by their resolved real path.
-CANDS="$(command -v runc 2>/dev/null) /usr/local/bin/runc /usr/bin/runc /sbin/runc /usr/sbin/runc"
+CANDS="$(command -v runc 2>/dev/null || true) /usr/local/bin/runc /usr/bin/runc /sbin/runc /usr/sbin/runc"
 SEEN=""; LIST=""
 for p in $CANDS; do
     [ -n "$p" ] && [ -x "$p" ] || continue
     rp=$(readlink -f "$p" 2>/dev/null || echo "$p")
     case " $SEEN " in *" $rp "*) ;; *) SEEN="$SEEN $rp"; LIST="$LIST $p";; esac
 done
-[ -z "$LIST" ] && { echo "FAIL [PoC]: no runc binary found on disk." >&2; exit 1; }
 
-FAILED=0
-for rc in $LIST; do
-    V=$("$rc" --version 2>/dev/null | awk '/^runc version/{print $3; exit}')
-    if [ -z "$V" ]; then
-        echo "FAIL [PoC]: $rc --version returned nothing." >&2; FAILED=1; continue
-    fi
-    if ver_ge "$V" "$NEED"; then
-        echo "PASS [PoC]: $rc is runc $V (>= $NEED)."
+if [ -z "$LIST" ]; then
+    record_poc runc_all_binaries_patched 0 "no runc binary found on disk"
+else
+    # Every runc copy on disk must be >= NEED. Aggregated into one record so the
+    # id stays stable regardless of how many copies the box happens to carry.
+    FAILED=0
+    DETAIL=""
+    for rc in $LIST; do
+        V=$("$rc" --version 2>/dev/null | awk '/^runc version/{print $3; exit}' || true)
+        if [ -z "$V" ]; then
+            DETAIL="$DETAIL $rc:--version returned nothing;"; FAILED=1; continue
+        fi
+        if ver_ge "$V" "$NEED"; then
+            DETAIL="$DETAIL $rc:$V ok;"
+        else
+            DETAIL="$DETAIL $rc:$V VULNERABLE;"; FAILED=1
+        fi
+    done
+    if [ "$FAILED" -eq 0 ]; then
+        record_poc runc_all_binaries_patched 1 "all runc binaries >= $NEED:$DETAIL"
     else
-        echo "FAIL [PoC]: $rc is runc $V (vulnerable, need >= $NEED)." >&2; FAILED=1
+        record_poc runc_all_binaries_patched 0 "a runc binary is vulnerable (need >= $NEED):$DETAIL"
     fi
-done
-[ "$FAILED" -ne 0 ] && exit 1
+fi
 
+###############################################################################
 # Regression: runc must still be functionally invokable.
+###############################################################################
 PRIMARY=$(command -v runc 2>/dev/null || echo /usr/local/bin/runc)
-"$PRIMARY" --help >/dev/null 2>&1 || { echo "FAIL [Regression]: runc --help failed." >&2; exit 1; }
-echo "PASS [Regression]: runc functional."
-exit 0
+if "$PRIMARY" --help >/dev/null 2>&1; then
+    record_reg runc_functional 1
+else
+    record_reg runc_functional 0 "runc --help failed"
+fi
+
+verify_finish

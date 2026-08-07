@@ -7,6 +7,10 @@
 # UDP socket bound and FAILs here.
 set -u
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 ###############################################################################
 # PoC: real UDP amplification probe. memcached UDP frame = 8-byte header
 # (req-id, seq=0, n-datagrams=1, reserved) followed by the ascii command.
@@ -19,18 +23,19 @@ udp_stats() {
     ' 2>/dev/null
 }
 
-RESP=$(udp_stats)
+RESP=$(udp_stats || true)
 if printf '%s' "$RESP" | grep -q "STAT "; then
-    echo "FAIL [PoC]: memcached answered a UDP stats query — amplification vector is live." >&2
-    exit 1
+    record_poc udp_stats_unanswered 0 "memcached answered a UDP stats query - amplification vector is live"
+else
+    record_poc udp_stats_unanswered 1
 fi
 
 # Corroborate with the socket table (ss is present via iproute2).
 if ss -uln 2>/dev/null | grep -qE '(:|\.)11211\b'; then
-    echo "FAIL [PoC]: UDP port 11211 is still bound — amplification attack possible." >&2
-    exit 1
+    record_poc udp_11211_unbound 0 "UDP port 11211 is still bound - amplification attack possible"
+else
+    record_poc udp_11211_unbound 1
 fi
-echo "PASS [PoC]: memcached does not answer over UDP and no UDP 11211 listener present."
 
 ###############################################################################
 # Regression: TCP service on 11211 must still respond with STAT lines.
@@ -48,14 +53,20 @@ tcp_stats() {
     ' 2>/dev/null
 }
 
+TCP_OK=0
 for i in 1 2 3 4 5; do
-    STATS=$(tcp_stats)
+    STATS=$(tcp_stats || true)
     if printf '%s' "$STATS" | grep -q "^STAT "; then
-        echo "PASS [Regression]: memcached TCP responds with STAT lines on port 11211."
-        exit 0
+        TCP_OK=1
+        break
     fi
     sleep 2
 done
 
-echo "FAIL [Regression]: memcached TCP does not return STAT lines on port 11211." >&2
-exit 1
+if [ "$TCP_OK" = "1" ]; then
+    record_reg memcached_tcp_serves 1 "memcached TCP responds with STAT lines on port 11211"
+else
+    record_reg memcached_tcp_serves 0 "memcached TCP does not return STAT lines on port 11211"
+fi
+
+verify_finish

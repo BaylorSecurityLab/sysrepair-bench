@@ -8,8 +8,11 @@
 # effective set and the read succeeds; after `setcap -r` the kernel denies it.
 # The probe only READS /proc — it never mutates the container.
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
-FAIL=0
+# NOTE: the old `FAIL=0` accumulator is gone deliberately. verifylib exports
+# FAIL=1 as the failure EXIT CODE, so reusing that name as a counter would make
+# verify_finish exit 0 on a failed run. verify_finish now tallies the checks.
 
 ###############################################################################
 # PoC (static, xattr ground truth): no binary may carry cap_sys_ptrace as a
@@ -17,11 +20,9 @@ FAIL=0
 ###############################################################################
 CAPBINS=$(getcap -r / 2>/dev/null | grep -i 'cap_sys_ptrace' || true)
 if [ -n "$CAPBINS" ]; then
-    echo "FAIL [PoC]: binary carries the cap_sys_ptrace file capability:" >&2
-    echo "$CAPBINS" >&2
-    FAIL=1
+    record_poc no_ptrace_file_capability 0 "binary carries the cap_sys_ptrace file capability: $CAPBINS"
 else
-    echo "PASS [PoC]: no binary carries a cap_sys_ptrace file capability."
+    record_poc no_ptrace_file_capability 1 "no binary carries a cap_sys_ptrace file capability"
 fi
 
 ###############################################################################
@@ -41,47 +42,41 @@ if id nobody >/dev/null 2>&1; then
         CANDIDATES="$CANDIDATES $b"
     done
     LEAK=0
+    LEAK_VIA=""
     for b in $CANDIDATES; do
         [ -x "$b" ] || continue
-        OUT=$(probe_maps "$b")
+        OUT=$(probe_maps "$b" || true)
         if [ -n "$OUT" ]; then
-            echo "FAIL [PoC-live]: unprivileged 'nobody' read /proc/1/maps via $b" \
-                 "(cap_sys_ptrace is live): $OUT" >&2
             LEAK=1
+            LEAK_VIA="$LEAK_VIA $b"
         fi
     done
     if [ "$LEAK" = "0" ]; then
-        echo "PASS [PoC-live]: unprivileged 'nobody' cannot read /proc/1/maps (ptrace denied)."
+        record_poc ptrace_denied_to_nobody 1 "unprivileged 'nobody' cannot read /proc/1/maps (ptrace denied)"
     else
-        FAIL=1
+        record_poc ptrace_denied_to_nobody 0 \
+            "unprivileged 'nobody' read /proc/1/maps via$LEAK_VIA (cap_sys_ptrace is live)"
     fi
 else
-    echo "FAIL [PoC-live]: no 'nobody' user available to test the privilege drop." >&2
-    FAIL=1
+    record_poc ptrace_denied_to_nobody 0 "no 'nobody' user available to test the privilege drop"
 fi
 
 ###############################################################################
 # Regression: basic tooling still works, and the helper (if kept) still works
 # as an ordinary utility (reading a world-readable file must succeed).
 ###############################################################################
-if ! ls /tmp >/dev/null 2>&1; then
-    echo "FAIL [Regression]: 'ls /tmp' failed — container is broken." >&2
-    FAIL=1
+if ls /tmp >/dev/null 2>&1; then
+    record_reg basic_file_ops 1 "basic file operations work normally"
 else
-    echo "PASS [Regression]: basic file operations work normally."
+    record_reg basic_file_ops 0 "'ls /tmp' failed — container is broken"
 fi
 
 if [ -x /opt/ptrace-helper ]; then
-    if ! /opt/ptrace-helper /etc/hostname >/dev/null 2>&1; then
-        echo "FAIL [Regression]: /opt/ptrace-helper cannot read a normal file — broken." >&2
-        FAIL=1
+    if /opt/ptrace-helper /etc/hostname >/dev/null 2>&1; then
+        record_reg helper_still_usable 1 "helper still functions as a normal utility"
     else
-        echo "PASS [Regression]: helper still functions as a normal utility."
+        record_reg helper_still_usable 0 "/opt/ptrace-helper cannot read a normal file — broken"
     fi
 fi
 
-if [ "$FAIL" = "0" ]; then
-    echo "All checks passed."
-    exit 0
-fi
-exit 1
+verify_finish

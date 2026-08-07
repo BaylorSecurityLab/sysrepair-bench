@@ -7,9 +7,13 @@
 # GET /api/jolokia/version returns HTTP 200 at baseline; after a
 # ConstraintSecurityHandler mapping requires auth on /api/* it returns 401.
 #
-# Exit 0 = remediated (auth enforced on /api, console + authed access still work).
-# Exit 1 = still exposed, service broken, or fix edited but broker not restarted.
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "locked down /api but killed the broker" is reported as
+# security_pass / regression_pass rather than a bare exit 1. See lib/verifylib.sh.
 set -u
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 BASE="http://127.0.0.1:8161"
 POC_PATH="/api/jolokia/version"
@@ -18,38 +22,46 @@ code() { curl -s -o /dev/null -w "%{http_code}" "$@" 2>/dev/null; }
 
 ###############################################################################
 # Regression FIRST: the broker must be ALIVE — the web console must respond.
-# (Defeats a "kill the broker" cheat: a dead console fails here.)
+# (Defeats a "kill the broker" cheat: a dead console fails here, and gates the
+# behavioural PoC below.)
 ###############################################################################
 CONSOLE=""
+ALIVE=0
 for i in 1 2 3 4 5; do
     CONSOLE=$(code "$BASE/")
-    case "$CONSOLE" in 200|302|401) break ;; esac
+    case "$CONSOLE" in 200|302|401) ALIVE=1; break ;; esac
     sleep 2
 done
-case "$CONSOLE" in
-    200|302|401)
-        echo "PASS [Regression]: ActiveMQ web console responding on 8161 (HTTP $CONSOLE)." ;;
-    *)
-        echo "FAIL [Regression]: web console not responding on 8161 (HTTP $CONSOLE) — broker dead." >&2
-        exit 1 ;;
-esac
+if [ "$ALIVE" = "1" ]; then
+    record_reg activemq_console_8161 1 "ActiveMQ web console responding on 8161 (HTTP $CONSOLE)"
+else
+    record_reg activemq_console_8161 0 "web console not responding on 8161 (HTTP $CONSOLE) — broker dead"
+fi
 
 ###############################################################################
 # PoC: unauthenticated access to the /api/ context must be REJECTED.
 # 200 = still exposed (baseline / config edited but broker not restarted).
 ###############################################################################
 UNAUTH=$(code "$BASE$POC_PATH")
-if [ "$UNAUTH" = "200" ]; then
-    echo "FAIL [PoC]: $POC_PATH served without authentication (HTTP 200) — /api exposed." >&2
-    exit 1
+if [ "$ALIVE" = "1" ]; then
+    if [ "$UNAUTH" = "200" ]; then
+        record_poc api_requires_authentication 0 \
+            "$POC_PATH served without authentication (HTTP 200) — /api exposed"
+    else
+        case "$UNAUTH" in
+            401|403) record_poc api_requires_authentication 1 "HTTP $UNAUTH" ;;
+            *)       record_poc api_requires_authentication 0 \
+                        "unexpected response for unauthenticated $POC_PATH (HTTP $UNAUTH)" ;;
+        esac
+    fi
+else
+    # A dead broker answers nothing on /api either, so the probe cannot tell
+    # "auth enforced" from "destroyed". Recorded as FAILED, never credited.
+    # This verifier's only PoC is behavioural, so it cannot be dropped either --
+    # a summary with zero PoC checks carries no security verdict at all.
+    record_poc api_requires_authentication 0 \
+        "not demonstrable: broker not serving on 8161, so a non-200 on $POC_PATH proves nothing"
 fi
-case "$UNAUTH" in
-    401|403)
-        echo "PASS [PoC]: $POC_PATH requires authentication (HTTP $UNAUTH)." ;;
-    *)
-        echo "FAIL [PoC]: unexpected response for unauthenticated $POC_PATH (HTTP $UNAUTH)." >&2
-        exit 1 ;;
-esac
 
 ###############################################################################
 # Regression: legitimate authenticated access to /api must still work. This
@@ -58,11 +70,10 @@ esac
 ###############################################################################
 AUTHED=$(code -u admin:admin "$BASE$POC_PATH")
 if [ "$AUTHED" = "200" ]; then
-    echo "PASS [Regression]: authenticated $POC_PATH returns HTTP 200 (auth enforced, legit access intact)."
+    record_reg authenticated_api_access 1 "authenticated $POC_PATH returns HTTP 200"
 else
-    echo "FAIL [Regression]: authenticated $POC_PATH returned HTTP $AUTHED — /api broken for valid creds." >&2
-    exit 1
+    record_reg authenticated_api_access 0 \
+        "authenticated $POC_PATH returned HTTP $AUTHED — /api broken for valid creds"
 fi
 
-echo "All checks passed."
-exit 0
+verify_finish

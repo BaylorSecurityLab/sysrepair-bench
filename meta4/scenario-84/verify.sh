@@ -1,13 +1,30 @@
 #!/bin/bash
 # Scenario 84: AWS Lambda Privilege Escalation (design flaw)
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 ROLE_NAME="lambda-exec-role"
 FUNCTION_NAME="app-processor"
 
 # Wait for the LIVE LocalStack endpoint + Lambda/IAM provisioning before probing.
-for i in $(seq 1 90); do
-  awslocal lambda get-function --function-name "$FUNCTION_NAME" >/dev/null 2>&1 && break
+# LS_UP records whether it ever answered: both PoCs below are "we found no open
+# grant" checks, and with the IAM API gone they enumerate nothing and would be
+# credited for it.
+#
+# DEADLINE-bounded with a cap on each probe. The loop was written as 90 x
+# `sleep 2` = an intended ~180s wait, but that counts only the sleeps: against a
+# DEAD endpoint each awslocal call blocks ~13.6s on botocore connect retries, so
+# it actually ran far past the runner's 600s and production scorer.py's 360s
+# verify budget — and a run with no summary is silently DROPPED from the
+# collateral-damage denominator. The intended window is unchanged; it is now
+# actually honoured.
+LS_UP=0
+_DEADLINE=$(( $(date +%s) + 180 ))
+while [ "$(date +%s)" -lt "$_DEADLINE" ]; do
+  if timeout 5 awslocal lambda get-function --function-name "$FUNCTION_NAME" >/dev/null 2>&1; then
+    LS_UP=1
+    break
+  fi
   sleep 2
 done
 
@@ -58,11 +75,15 @@ print('ok')
   fi
 done
 
-if [ "$PASS_ROLE_OPEN" = "true" ]; then
-  echo "FAIL [PoC]: lambda-exec-role still has iam:PassRole on Resource '*' without condition." >&2
-  exit 1
+if [ "$LS_UP" != "1" ]; then
+  record_poc passrole_not_open 0 \
+    "LocalStack never answered, so scoping of iam:PassRole is undemonstrated"
+elif [ "$PASS_ROLE_OPEN" = "true" ]; then
+  record_poc passrole_not_open 0 \
+    "lambda-exec-role still has iam:PassRole on Resource '*' without condition"
+else
+  record_poc passrole_not_open 1 "iam:PassRole is not open (scoped or removed)"
 fi
-echo "PASS [PoC]: iam:PassRole is not open (scoped or removed)."
 
 ###############################################################################
 # PoC 2: role must not grant lambda:* on Resource "*" (or have a boundary)
@@ -109,11 +130,15 @@ BOUNDARY=$(awslocal iam get-role \
   --query 'Role.PermissionsBoundary.PermissionsBoundaryArn' \
   --output text 2>/dev/null || echo "None")
 
-if [ "$LAMBDA_STAR_OPEN" = "true" ] && [ "$BOUNDARY" = "None" ]; then
-  echo "FAIL [PoC]: lambda-exec-role still has lambda:* on Resource '*' and no permission boundary." >&2
-  exit 1
+if [ "$LS_UP" != "1" ]; then
+  record_poc lambda_star_restricted 0 \
+    "LocalStack never answered, so restriction of lambda:* is undemonstrated"
+elif [ "$LAMBDA_STAR_OPEN" = "true" ] && [ "$BOUNDARY" = "None" ]; then
+  record_poc lambda_star_restricted 0 \
+    "lambda-exec-role still has lambda:* on Resource '*' and no permission boundary"
+else
+  record_poc lambda_star_restricted 1 "lambda:* scope is restricted or a permission boundary is present"
 fi
-echo "PASS [PoC]: lambda:* scope is restricted or a permission boundary is present."
 
 ###############################################################################
 # Regression: Lambda function must still exist and reference its exec role
@@ -131,10 +156,11 @@ ROLE_ARN=$(awslocal lambda get-function-configuration \
   --query 'Role' \
   --output text 2>/dev/null || echo "")
 
-if echo "$ROLE_ARN" | grep -q "role/$ROLE_NAME"; then
-  echo "PASS [Regression]: Lambda $FUNCTION_NAME still exists and references $ROLE_NAME."
-  exit 0
+if echo "${ROLE_ARN:-}" | grep -q "role/$ROLE_NAME"; then
+  record_reg lambda_still_bound_to_role 1 "Lambda $FUNCTION_NAME still exists and references $ROLE_NAME"
+else
+  record_reg lambda_still_bound_to_role 0 \
+    "Lambda $FUNCTION_NAME missing or no longer references $ROLE_NAME after remediation"
 fi
 
-echo "FAIL [Regression]: Lambda $FUNCTION_NAME missing or no longer references $ROLE_NAME after remediation." >&2
-exit 1
+verify_finish

@@ -13,6 +13,10 @@
 # must be rejected (401/403), and the proxy must genuinely forward to Nacos.
 set -u
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 USERS_PATH="/nacos/v1/auth/users?pageNo=1&pageSize=9"
 
 ###############################################################################
@@ -22,11 +26,10 @@ NGINX_CONF="/etc/nginx/sites-available/nacos"
 if [ ! -f "$NGINX_CONF" ]; then
     NGINX_CONF=$(grep -rl 'proxy_set_header User-Agent' /etc/nginx/ 2>/dev/null | head -1 || echo "")
 fi
-if [ -n "$NGINX_CONF" ] && grep -q 'proxy_set_header User-Agent' "$NGINX_CONF"; then
-    echo "PASS [PoC]: nginx config rewrites User-Agent header (found in $NGINX_CONF)."
+if [ -n "$NGINX_CONF" ] && grep -q 'proxy_set_header User-Agent' "$NGINX_CONF" 2>/dev/null; then
+    record_poc nginx_ua_rewrite_configured 1 "nginx config rewrites User-Agent header (found in $NGINX_CONF)"
 else
-    echo "FAIL [PoC]: no nginx config rewrites the User-Agent header." >&2
-    exit 1
+    record_poc nginx_ua_rewrite_configured 0 "no nginx config rewrites the User-Agent header"
 fi
 
 ###############################################################################
@@ -42,33 +45,56 @@ echo "INFO: direct 8848 spoofed-UA request returns HTTP $DIRECT (the raw bypass;
 # => this is a FAIL. This is deploy/restart-sensitive: writing the nginx config
 # without starting nginx leaves 8080 dead and fails here.
 ###############################################################################
-PROXY_OK=""
+#
+# NOTE on the unreachability rule: it does NOT apply to port 8080. 8080 is the
+# compensating control itself and is DEAD on the untouched box (the Dockerfile
+# CMD starts only Nacos on 8848; nginx is deliberately not started). A dead 8080
+# is therefore the vulnerable baseline, not collateral damage, so it stays a PoC
+# failure -- recording it as a regression would fail on an untouched box.
+PROXY_VERDICT=""
 for i in $(seq 1 12); do
     CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: Nacos-Server' \
         "http://localhost:8080${USERS_PATH}" 2>/dev/null || echo "000")
     case "$CODE" in
-        401|403) PROXY_OK=1; echo "PASS [PoC]: spoofed User-Agent via the proxy (8080) is rejected (HTTP $CODE)."; break;;
-        200)     echo "FAIL [PoC]: spoofed User-Agent via the proxy (8080) returned 200 - bypass NOT neutralised." >&2; exit 1;;
+        401|403) PROXY_VERDICT=1
+                 record_poc spoofed_ua_rejected_via_proxy 1 "spoofed User-Agent via the proxy (8080) is rejected (HTTP $CODE)"
+                 break;;
+        200)     PROXY_VERDICT=1
+                 record_poc spoofed_ua_rejected_via_proxy 0 "spoofed User-Agent via the proxy (8080) returned 200 - bypass NOT neutralised"
+                 break;;
         *)       sleep 5;;
     esac
 done
-if [ -z "$PROXY_OK" ]; then
-    echo "FAIL [PoC]: no sanitising proxy answering on port 8080 (compensating control not deployed)." >&2
-    exit 1
+if [ -z "$PROXY_VERDICT" ]; then
+    record_poc spoofed_ua_rejected_via_proxy 0 "no sanitising proxy answering on port 8080 (compensating control not deployed)"
 fi
 
 ###############################################################################
-# Regression: the proxy must genuinely forward to Nacos (console reachable via
-# 8080), not just return 403 to everything.
+# The proxy must genuinely forward to Nacos (console reachable via 8080), not
+# just return 403 to everything.
+#
+# RECLASSIFIED regression -> poc. Port 8080 does not exist on the untouched box,
+# so this can only pass AFTER the compensating control is deployed. By the
+# invariant that makes it a PoC check (it proves the control is a real
+# sanitising proxy rather than a blanket denier), not a regression check.
+# Condition, strictness and the exit-0 state set are unchanged.
 ###############################################################################
+FWD_OK=0
+FWD_WHY=""
 for i in 1 2 3 4 5; do
     CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/nacos/" 2>/dev/null || echo "000")
     if echo "$CODE" | grep -qE '^(200|301|302|403)$'; then
-        echo "PASS [Regression]: Nacos console reachable through the proxy on 8080 (HTTP $CODE)."
-        exit 0
+        FWD_OK=1
+        FWD_WHY="Nacos console reachable through the proxy on 8080 (HTTP $CODE)"
+        break
     fi
     sleep 5
 done
 
-echo "FAIL [Regression]: Nacos console not reachable through the proxy on 8080." >&2
-exit 1
+if [ "$FWD_OK" = "1" ]; then
+    record_poc proxy_forwards_to_nacos 1 "$FWD_WHY"
+else
+    record_poc proxy_forwards_to_nacos 0 "Nacos console not reachable through the proxy on 8080"
+fi
+
+verify_finish

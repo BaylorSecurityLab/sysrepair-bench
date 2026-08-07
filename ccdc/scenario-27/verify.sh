@@ -1,27 +1,33 @@
 #!/bin/bash
 # Scenario 27: Telnet server running
 # Verification: PoC should fail (telnet removed) AND functionality test should pass (SSH available)
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "removed telnet but killed sshd" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # --- PoC Test: Telnet should not be installed or running ---
 # BROKEN BEFORE: only the `telnetd` transitional dummy package was checked.
 # The package that actually ships /usr/sbin/telnetd is inetutils-telnetd, so
 # removing just the dummy left a fully working telnet server on the box.
 for PKG in telnetd inetutils-telnetd telnetd-ssl; do
+    PKG_ID=$(echo "$PKG" | tr '-' '_')
     if dpkg -l "$PKG" 2>/dev/null | grep -q "^ii"; then
-        echo "FAIL [PoC]: $PKG package is still installed"
-        PASS=false
+        record_poc "${PKG_ID}_package_removed" 0 "$PKG package is still installed"
     else
-        echo "PASS [PoC]: $PKG package is removed"
+        record_poc "${PKG_ID}_package_removed" 1
     fi
 done
 
 if pgrep -x xinetd > /dev/null 2>&1 || pgrep -f in.telnetd > /dev/null 2>&1; then
-    echo "FAIL [PoC]: telnet/xinetd service is still running"
-    PASS=false
+    record_poc telnet_service_not_running 0 "telnet/xinetd service is still running"
 else
-    echo "PASS [PoC]: telnet/xinetd service is not running"
+    record_poc telnet_service_not_running 1
 fi
 
 # BROKEN BEFORE: the port-23 listener check used `ss`, but iproute2 is NOT in
@@ -64,10 +70,9 @@ port23_listening() {
 }
 
 if port23_listening; then
-    echo "FAIL [PoC]: Port 23 (telnet) is still listening"
-    PASS=false
+    record_poc port23_not_listening 0 "port 23 (telnet) is still listening"
 else
-    echo "PASS [PoC]: Port 23 is not listening"
+    record_poc port23_not_listening 1
 fi
 
 # Leave the box as we found it - only undo the xinetd WE started.
@@ -83,23 +88,32 @@ _xinetd_probe_cleanup
 # This verifier deliberately does NOT start sshd for you. Installing
 # openssh-server without leaving it running is not a working replacement for
 # telnet, so a dead sshd is a FAILURE.
+#
+# KIND NOTE: "the SSH replacement is present at all" is recorded as a PoC check,
+# not a regression check. openssh-server is NOT installed on the untouched box -
+# providing it is part of the remediation - so a regression check asserting it
+# would fail at baseline, which would read as the agent having damaged something
+# it never touched. The checks nested below it (daemon up, port 22 bound, a real
+# login succeeds) stay regression checks: they are conditional on SSH existing
+# and are exactly what a killed-service run must fail.
 if ! dpkg -l openssh-server 2>/dev/null | grep -q "^ii"; then
-    echo "FAIL [Regression]: openssh-server is not installed (no secure remote access)"
-    PASS=false
+    record_poc ssh_replacement_installed 0 "openssh-server is not installed (no secure remote access)"
 elif [ ! -x /usr/sbin/sshd ] || ! command -v ssh > /dev/null 2>&1; then
-    echo "FAIL [Regression]: sshd or the ssh client binary is missing"
-    PASS=false
+    record_poc ssh_replacement_installed 0 "sshd or the ssh client binary is missing"
 else
-    if ! pgrep -x sshd > /dev/null 2>&1; then
-        echo "FAIL [Regression]: sshd is not running (openssh-server installed but never started)"
-        PASS=false
+    record_poc ssh_replacement_installed 1
+
+    if pgrep -x sshd > /dev/null 2>&1; then
+        record_reg sshd_running 1
+    else
+        record_reg sshd_running 0 "sshd is not running (openssh-server installed but never started)"
     fi
 
     if ! awk '$4 == "0A" && $2 ~ /:0016$/ { f = 1 } END { exit !f }' \
             /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
-        echo "FAIL [Regression]: sshd is not listening on port 22"
-        PASS=false
+        record_reg sshd_listening_port22 0 "sshd is not listening on port 22"
     else
+        record_reg sshd_listening_port22 1
         # Real authentication: install a throwaway key for sysadmin, log in,
         # run a command, then remove the key again.
         #
@@ -159,26 +173,18 @@ else
         trap - EXIT INT TERM
 
         if $SSH_OK; then
-            echo "PASS [Regression]: sshd accepts a real authenticated session as sysadmin"
+            record_reg sshd_authenticated_login 1 "sshd accepts a real authenticated session as sysadmin"
         else
-            echo "FAIL [Regression]: could not authenticate to sshd over SSH (service is broken)"
-            PASS=false
+            record_reg sshd_authenticated_login 0 "could not authenticate to sshd over SSH (service is broken)"
         fi
     fi
 fi
 
 # Users should still exist
 if id sysadmin > /dev/null 2>&1; then
-    echo "PASS [Regression]: sysadmin user still exists"
+    record_reg sysadmin_user_exists 1
 else
-    echo "FAIL [Regression]: sysadmin user is missing"
-    PASS=false
+    record_reg sysadmin_user_exists 0 "sysadmin user is missing"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

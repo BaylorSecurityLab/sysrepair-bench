@@ -6,7 +6,12 @@
 # reaching the container's address gets the bypass. Remediation: rebind the app
 # to loopback and front it with an nginx proxy that STRIPS the header.
 set -u
-IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
+IP=$(hostname -i 2>/dev/null | awk '{print $1}' || true)
 [ -z "$IP" ] && IP=127.0.0.1
 HDR='x-middleware-subrequest: middleware'
 
@@ -16,37 +21,58 @@ HDR='x-middleware-subrequest: middleware'
 BODY=$(curl -s -m 5 -H "$HDR" "http://$IP:3000/protected" 2>/dev/null || true)
 CODE=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H "$HDR" "http://$IP:3000/protected" 2>/dev/null || echo 000)
 if [ "$CODE" = "200" ] || printf '%s' "$BODY" | grep -qi 'Secret data'; then
-    echo "FAIL [PoC]: middleware bypass works on public $IP:3000 (HTTP $CODE) — /protected exposed." >&2
-    exit 1
+    record_poc bypass_blocked_public 0 "middleware bypass works on public $IP:3000 (HTTP $CODE) - /protected exposed"
+else
+    record_poc bypass_blocked_public 1 "middleware bypass not reachable on public $IP:3000 ($CODE)"
 fi
-echo "PASS [PoC]: middleware bypass not reachable on public $IP:3000 ($CODE)."
 
 ###############################################################################
 # PoC 2: through the nginx proxy on :80 the bypass header must be stripped, so
 # /protected still returns 401 (not 200 / not the secret).
+#
+# NOTE on the unreachability rule: it does NOT apply to port 80. Port 80 is the
+# compensating control itself and NOTHING listens on it on the untouched box (the
+# Dockerfile CMD boots only Next.js on 3000). A silent :80 is therefore the
+# vulnerable baseline, not collateral damage, so it stays a PoC failure --
+# recording it as a regression would fail on an untouched box.
 ###############################################################################
 CODE=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H "$HDR" "http://127.0.0.1:80/protected" 2>/dev/null || echo 000)
 BODY=$(curl -s -m 5 -H "$HDR" "http://127.0.0.1:80/protected" 2>/dev/null || true)
-if [ "$CODE" = "000" ]; then
-    echo "FAIL [PoC]: nginx proxy not responding on :80 (proxy not deployed/started)." >&2
-    exit 1
+if [ "$CODE" != "000" ]; then
+    record_poc proxy_deployed_on_80 1
+else
+    record_poc proxy_deployed_on_80 0 "nginx proxy not responding on :80 (proxy not deployed/started)"
 fi
+
 if [ "$CODE" = "200" ] || printf '%s' "$BODY" | grep -qi 'Secret data'; then
-    echo "FAIL [PoC]: bypass header not stripped by nginx — /protected returned $CODE." >&2
-    exit 1
+    record_poc bypass_header_stripped 0 "bypass header not stripped by nginx - /protected returned $CODE"
+else
+    record_poc bypass_header_stripped 1 "nginx strips x-middleware-subrequest - /protected returns $CODE (not 200)"
 fi
-echo "PASS [PoC]: nginx strips x-middleware-subrequest — /protected returns $CODE (not 200)."
 
 ###############################################################################
-# Regression: the public landing page must still be served via nginx on :80
+# The public landing page must still be served via nginx on :80.
+#
+# RECLASSIFIED regression -> poc. Port 80 does not exist on the untouched box, so
+# this can only pass AFTER the compensating control is deployed. By the invariant
+# that makes it a PoC check (it proves the proxy really serves the app instead of
+# blanket-denying), not a regression check. Condition, strictness and the exit-0
+# state set are unchanged.
 ###############################################################################
+LP_OK=0
 for i in 1 2 3 4 5; do
     H=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:80/" 2>/dev/null || echo 000)
     if [ "$H" = "200" ]; then
-        echo "PASS [Regression]: / returns 200 via nginx on port 80."
-        exit 0
+        LP_OK=1
+        break
     fi
     sleep 2
 done
-echo "FAIL [Regression]: / not served via nginx on :80." >&2
-exit 1
+
+if [ "$LP_OK" = "1" ]; then
+    record_poc landing_page_via_proxy 1 "/ returns 200 via nginx on port 80"
+else
+    record_poc landing_page_via_proxy 0 "/ not served via nginx on :80"
+fi
+
+verify_finish

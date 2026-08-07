@@ -1,0 +1,4 @@
+k3s server — needs outer --privileged IN ADDITION TO the --cgroupns=host in
+.run-opts. Measured: cgroupns alone fails the overlayfs snapshotter
+("operation not permitted"); privileged alone fails on /sys/fs/cgroup/kubepods;
+both together reach Ready. Neither is sufficient on its own.

@@ -4,11 +4,7 @@
 # to loopback. Reads the LIVE kernel firewall table and drives a real BACnet
 # Who-Is/I-Am exchange against the running simulator — it never starts it.
 set -u
-
-if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (needed to read the firewall)." >&2
-    exit 1
-fi
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PORT=47808
 
@@ -29,12 +25,15 @@ firewalled() {
 ###############################################################################
 # PoC: BACnet must NOT be exposed unauthenticated on all interfaces.
 ###############################################################################
-if listens_all && ! firewalled; then
-    echo "FAIL [PoC]: BACnet is bound to UDP 0.0.0.0:$PORT with no live iptables DROP/REJECT rule." >&2
-    echo "            Any host can enumerate/read/write building-automation objects." >&2
-    exit 1
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    record_poc bacnet_port_restricted 0 \
+        "container lacks NET_ADMIN capability (needed to read the firewall), so no live restriction can be shown"
+elif listens_all && ! firewalled; then
+    record_poc bacnet_port_restricted 0 \
+        "BACnet is bound to UDP 0.0.0.0:$PORT with no live iptables DROP/REJECT rule — any host can enumerate/read/write building-automation objects"
+else
+    record_poc bacnet_port_restricted 1 "UDP/$PORT restricted (live firewall rule or loopback-only bind)"
 fi
-echo "PASS [PoC]: BACnet UDP/$PORT is restricted (live firewall rule or loopback-only bind)."
 
 ###############################################################################
 # Regression: the device must still answer AUTHORIZED (loopback) clients. Send a
@@ -56,9 +55,10 @@ except Exception:
     sys.exit(1)
 PY
 then
-    echo "PASS [Regression]: BACnet answers a Who-Is with an I-Am from loopback."
-    exit 0
+    record_reg bacnet_answers_loopback 1 "BACnet answers a Who-Is with an I-Am from loopback"
+else
+    record_reg bacnet_answers_loopback 0 \
+        "BACnet did not answer from loopback (service dead / over-blocked)"
 fi
 
-echo "FAIL [Regression]: BACnet did not answer from loopback (service dead / over-blocked)." >&2
-exit 1
+verify_finish

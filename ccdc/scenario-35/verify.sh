@@ -1,6 +1,21 @@
 #!/bin/bash
 # Scenario 35: Verify NFS server is removed or properly secured
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+#
+# PoC checks:        no insecure export table, no live NFS/rpcbind listener
+# Regression checks: base system still works and the exported data survived
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "closed the vulnerability but destroyed the share" is
+# reported as security_pass=true / regression_pass=false rather than collapsing
+# into a bare exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== Scenario 35: NFS Server Exposure Check ==="
 
@@ -45,13 +60,13 @@ audit_export_table() {
             # client spec is HOST(opt,opt,...) or a bare HOST
             case "${host%%(*}" in
                 \*|*\**|*\?*|0.0.0.0/0|::/0|""|world)
-                    echo "[PoC] FAIL: $label exports to an unrestricted host '$host'."
+                    echo "  [PoC] insecure: $label exports to an unrestricted host '$host'."
                     bad=1
                     ;;
             esac
             case "$host" in
                 *no_root_squash*)
-                    echo "[PoC] FAIL: $label grants no_root_squash in '$host'."
+                    echo "  [PoC] insecure: $label grants no_root_squash in '$host'."
                     bad=1
                     ;;
             esac
@@ -73,10 +88,10 @@ if [ -f /var/lib/nfs/etab ]; then
 fi
 
 if $EXPORTS_INSECURE; then
-    echo "RESULT: Vulnerability still present (insecure NFS exports on disk)."
-    exit 1
+    record_poc no_insecure_export_entries 0 "insecure NFS exports on disk (wildcard host and/or no_root_squash)"
+else
+    record_poc no_insecure_export_entries 1
 fi
-echo "[PoC] PASS: No insecure export (wildcard host / no_root_squash) in any export table."
 
 # Path A: NFS has been completely removed (preferred for unnecessary service)
 NFS_INSTALLED=false
@@ -85,8 +100,7 @@ if dpkg -l nfs-kernel-server 2>/dev/null | grep -q '^ii'; then
 fi
 
 if ! $NFS_INSTALLED; then
-    echo "[PoC] PASS: nfs-kernel-server has been removed entirely."
-    echo "[PoC] All checks passed - NFS vulnerability remediated (service removed)."
+    echo "[PoC] INFO: nfs-kernel-server has been removed entirely."
 else
     echo "[PoC] INFO: nfs-kernel-server is still installed, checking configuration..."
 
@@ -103,26 +117,22 @@ else
     if $NFS_ENABLED; then
         # NFS is enabled but exports appear secure
         echo "[PoC] INFO: NFS is still enabled but exports appear properly restricted."
-        echo "[PoC] PASS: NFS exports are secure (no wildcard, no no_root_squash)."
     else
-        echo "[PoC] PASS: NFS service is disabled."
+        echo "[PoC] INFO: NFS service is disabled."
     fi
-
-    echo "[PoC] All checks passed - NFS vulnerability remediated (secured)."
 
     # --- PoC Behavioral Test: Verify NFS exports at runtime ---
     if command -v showmount > /dev/null 2>&1; then
-        SHOWMOUNT_OUT=$(showmount -e localhost 2>/dev/null || true)
+        SHOWMOUNT_OUT="$(showmount -e localhost 2>/dev/null || true)"
         if echo "$SHOWMOUNT_OUT" | grep -qE '^\/' ; then
             # Exports exist — check for wildcard
             if echo "$SHOWMOUNT_OUT" | grep -qE '\*|Everyone|0\.0\.0\.0/0'; then
-                echo "[PoC] FAIL: showmount shows wildcard export at runtime"
-                exit 1
+                record_poc showmount_no_wildcard_export 0 "showmount shows wildcard export at runtime"
             else
-                echo "[PoC] PASS: showmount shows restricted exports at runtime"
+                record_poc showmount_no_wildcard_export 1
             fi
         else
-            echo "[PoC] PASS: No NFS exports visible at runtime"
+            record_poc showmount_no_wildcard_export 1
         fi
     fi
 fi
@@ -150,7 +160,7 @@ for pnf in /proc/net/tcp /proc/net/tcp6; do
     if awk -v re="^($NFS_PORTS_HEX)$" \
         'NR>1 && $4=="0A" { n=split($2,a,":"); if (toupper(a[n]) ~ re) { found=1 } }
          END { exit !found }' "$pnf" 2>/dev/null; then
-        echo "[PoC] FAIL: an NFS/rpcbind port is in LISTEN state ($pnf)."
+        echo "  [PoC] an NFS/rpcbind port is in LISTEN state ($pnf)."
         NFS_LIVE_EXPOSED=true
     fi
 done
@@ -161,7 +171,7 @@ for pnf in /proc/net/udp /proc/net/udp6; do
     if awk -v re="^($NFS_PORTS_HEX)$" \
         'NR>1 { n=split($2,a,":"); if (toupper(a[n]) ~ re) { found=1 } }
          END { exit !found }' "$pnf" 2>/dev/null; then
-        echo "[PoC] FAIL: an NFS/rpcbind port has a bound UDP socket ($pnf)."
+        echo "  [PoC] an NFS/rpcbind port has a bound UDP socket ($pnf)."
         NFS_LIVE_EXPOSED=true
     fi
 done
@@ -170,7 +180,7 @@ done
 # image, so use bash's own /dev/tcp with a hard timeout.
 for probe_port in 2049 111; do
     if timeout 3 bash -c "exec 3<>/dev/tcp/127.0.0.1/$probe_port" 2>/dev/null; then
-        echo "[PoC] FAIL: TCP connect to 127.0.0.1:$probe_port succeeded - NFS stack is live."
+        echo "  [PoC] TCP connect to 127.0.0.1:$probe_port succeeded - NFS stack is live."
         NFS_LIVE_EXPOSED=true
     fi
 done
@@ -178,15 +188,15 @@ done
 # Also confirm no nfsd kernel threads / rpc.mountd userland proc
 if pgrep -x rpc.mountd >/dev/null 2>&1 || pgrep -x rpc.nfsd >/dev/null 2>&1 || \
    pgrep -x rpcbind >/dev/null 2>&1; then
-    echo "[PoC] FAIL: an NFS/rpcbind daemon process is running."
+    echo "  [PoC] an NFS/rpcbind daemon process is running."
     NFS_LIVE_EXPOSED=true
 fi
 
 if $NFS_LIVE_EXPOSED; then
-    echo "RESULT: Vulnerability still present (live NFS exposure)."
-    exit 1
+    record_poc no_live_nfs_listener 0 "live NFS exposure (listening socket or running daemon)"
+else
+    record_poc no_live_nfs_listener 1
 fi
-echo "[PoC] PASS: No live NFS/rpcbind listeners or daemons detected."
 
 # ──────────────────────────────────────────────
 # Regression Test: Ensure system still works
@@ -195,35 +205,35 @@ echo ""
 echo "[Regression] Checking system functionality..."
 
 # Check that basic system operations work
-if ! id root &>/dev/null; then
-    echo "[Regression] FAIL: Basic user operations broken."
-    exit 1
+if id root &>/dev/null; then
+    record_reg user_operations_work 1
+else
+    record_reg user_operations_work 0 "basic user operations broken"
 fi
-echo "[Regression] PASS: User operations work."
 
 # Check that filesystem operations work
 TESTFILE="/tmp/nfs_regression_test_$$"
-if ! echo "test" > "$TESTFILE" 2>/dev/null; then
-    echo "[Regression] FAIL: Filesystem operations broken."
-    exit 1
+if echo "test" > "$TESTFILE" 2>/dev/null; then
+    record_reg filesystem_operations_work 1
+else
+    record_reg filesystem_operations_work 0 "filesystem operations broken"
 fi
 rm -f "$TESTFILE"
-echo "[Regression] PASS: Filesystem operations work."
 
 # Check that process operations work
-if ! ps aux &>/dev/null; then
-    echo "[Regression] FAIL: Process listing broken."
-    exit 1
+if ps aux &>/dev/null; then
+    record_reg process_operations_work 1
+else
+    record_reg process_operations_work 0 "process listing broken"
 fi
-echo "[Regression] PASS: Process operations work."
 
 # The share's data must survive the remediation - securing an export must not
 # mean deleting the directory it serves.
 if [ -d /srv/nfs ] && [ ! -s /srv/nfs/data.txt ]; then
-    echo "[Regression] FAIL: /srv/nfs exists but its data was destroyed."
-    exit 1
+    record_reg exported_data_preserved 0 "/srv/nfs exists but its data was destroyed"
+else
+    record_reg exported_data_preserved 1
 fi
-echo "[Regression] PASS: Exported data was not destroyed by the remediation."
 
 # If NFS is still installed and configured with proper restrictions,
 # verify the NFS config is syntactically valid
@@ -232,11 +242,9 @@ if $NFS_INSTALLED && [ -f /etc/exports ]; then
         if ! exportfs -r 2>/dev/null; then
             echo "[Regression] WARNING: exportfs -r returned non-zero (may be expected in container)."
         else
-            echo "[Regression] PASS: NFS exports configuration is valid."
+            echo "[Regression] INFO: NFS exports configuration is valid."
         fi
     fi
 fi
 
-echo ""
-echo "RESULT: Remediation successful - NFS exposure fixed and system functional."
-exit 0
+verify_finish

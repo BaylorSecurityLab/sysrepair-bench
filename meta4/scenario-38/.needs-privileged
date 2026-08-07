@@ -1,0 +1,5 @@
+k3s server — needs outer --privileged to mount cgroups and start containerd;
+without it the node never registers and `kubectl get nodes` stays empty.
+--cgroupns=host alone (what sibling k3s scenarios 75-79 use) is NOT enough here:
+measured no-marker and --cgroupns=host both never reach Ready, --privileged
+reaches Ready in ~60-75s.

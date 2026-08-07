@@ -4,11 +4,7 @@
 # to loopback. Reads the LIVE kernel firewall table and drives a real S7/COTP
 # handshake against the running simulator — it never starts the service.
 set -u
-
-if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (needed to read the firewall)." >&2
-    exit 1
-fi
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PORT=102
 
@@ -29,12 +25,15 @@ firewalled() {
 ###############################################################################
 # PoC: the PLC must NOT be exposed unauthenticated on all interfaces.
 ###############################################################################
-if listens_all && ! firewalled; then
-    echo "FAIL [PoC]: S7comm is bound to 0.0.0.0:$PORT with no live iptables DROP/REJECT rule." >&2
-    echo "            Any network-reachable client can read/write PLC memory." >&2
-    exit 1
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    record_poc s7comm_port_restricted 0 \
+        "container lacks NET_ADMIN capability (needed to read the firewall), so no live restriction can be shown"
+elif listens_all && ! firewalled; then
+    record_poc s7comm_port_restricted 0 \
+        "S7comm is bound to 0.0.0.0:$PORT with no live iptables DROP/REJECT rule — any network-reachable client can read/write PLC memory"
+else
+    record_poc s7comm_port_restricted 1 "TCP/$PORT restricted (live firewall rule or loopback-only bind)"
 fi
-echo "PASS [PoC]: S7comm TCP/$PORT is restricted (live firewall rule or loopback-only bind)."
 
 ###############################################################################
 # Regression: the PLC must still complete an S7/COTP handshake for AUTHORIZED
@@ -57,9 +56,10 @@ except Exception:
     sys.exit(1)
 PY
 then
-    echo "PASS [Regression]: S7comm completes a COTP handshake from loopback."
-    exit 0
+    record_reg s7comm_serves_loopback 1 "S7comm completes a COTP handshake from loopback"
+else
+    record_reg s7comm_serves_loopback 0 \
+        "S7comm did not complete a COTP handshake from loopback (service dead / over-blocked)"
 fi
 
-echo "FAIL [Regression]: S7comm did not complete a COTP handshake from loopback (service dead / over-blocked)." >&2
-exit 1
+verify_finish

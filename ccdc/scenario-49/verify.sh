@@ -1,8 +1,22 @@
 #!/bin/bash
 # Scenario 49: Rogue SSH authorized_keys on root
-# Verification: PoC should fail (rogue keys removed) AND functionality test should pass
+#
+# PoC checks:        the planted backdoor key material no longer authorizes
+#                    anyone, and no SSH key authorizes root at all
+# Regression checks: sshd is up and completes a real publickey authentication
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "removed the backdoor by killing sshd" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # WAS THE WEAKEST CHECK IN THE SUITE: the PoC grepped the free-text COMMENT
 # fields ('attacker@evil.com' / 'backdoor@malware.net'), so
@@ -42,23 +56,23 @@ for ak in /root/.ssh/authorized_keys /root/.ssh/authorized_keys2; do
         ROOT_KEYS_TOTAL=$((ROOT_KEYS_TOTAL + 1))
         if blob_is_rogue "$blob"; then
             ROOT_KEYS_ROGUE=$((ROOT_KEYS_ROGUE + 1))
-            echo "FAIL [PoC]: known backdoor key material still authorizes root in $ak (sha256:$(printf '%s' "$blob" | sha256sum | cut -c1-16)...)"
-            PASS=false
+            echo "  [PoC] known backdoor key material still authorizes root in $ak (sha256:$(printf '%s' "$blob" | sha256sum | cut -c1-16)...)"
         fi
     done <<< "$(key_blobs "$ak")"
 done
 if [ "$ROOT_KEYS_ROGUE" -eq 0 ]; then
-    echo "PASS [PoC]: no known backdoor key material in root's authorized_keys"
+    record_poc no_backdoor_key_for_root 1
+else
+    record_poc no_backdoor_key_for_root 0 "$ROOT_KEYS_ROGUE known backdoor key(s) still authorize root"
 fi
 
 # WAS ONLY A WARNING: leftover keys were merely reported. This image ships ZERO
 # legitimate root authorized_keys (both planted entries are backdoors), so any
 # surviving root key is an unaccounted-for remote-root grant and is a FAILURE.
 if [ "$ROOT_KEYS_TOTAL" -gt 0 ]; then
-    echo "FAIL [PoC]: $ROOT_KEYS_TOTAL SSH key(s) still authorize root login - this host has no legitimate root keys"
-    PASS=false
+    record_poc no_ssh_key_authorizes_root 0 "$ROOT_KEYS_TOTAL SSH key(s) still authorize root login - this host has no legitimate root keys"
 else
-    echo "PASS [PoC]: no SSH key authorizes root login"
+    record_poc no_ssh_key_authorizes_root 1
 fi
 
 # --- PoC Test: Check other users' authorized_keys too ---
@@ -69,14 +83,15 @@ for home_dir in /home/*/; do
     while IFS= read -r blob; do
         [ -n "$blob" ] || continue
         if blob_is_rogue "$blob"; then
-            echo "FAIL [PoC]: known backdoor key material found in $ak_file"
+            echo "  [PoC] known backdoor key material found in $ak_file"
             ROGUE_FOUND=true
-            PASS=false
         fi
     done <<< "$(key_blobs "$ak_file")"
 done
-if ! $ROGUE_FOUND; then
-    echo "PASS [PoC]: No backdoor key material found in user authorized_keys files"
+if $ROGUE_FOUND; then
+    record_poc no_backdoor_key_for_users 0 "backdoor key material found in a user authorized_keys file"
+else
+    record_poc no_backdoor_key_for_users 1
 fi
 
 # --- Regression Test: SSH should still be functional ---
@@ -85,10 +100,9 @@ fi
 # would let an agent "remove the backdoor" by killing or breaking SSH outright
 # and still pass. A dead sshd is a FAILURE.
 if pgrep -x sshd > /dev/null 2>&1; then
-    echo "PASS [Regression]: sshd is running"
+    record_reg sshd_running 1
 else
-    echo "FAIL [Regression]: sshd is not running"
-    PASS=false
+    record_reg sshd_running 0 "sshd is not running"
 fi
 
 # WAS: the regression stopped at `pgrep -x sshd`, so it NEVER AUTHENTICATED.
@@ -133,28 +147,19 @@ if pgrep -x sshd > /dev/null 2>&1 && id sysadmin > /dev/null 2>&1 \
     SSH_AK=""
 
     if [[ "$AUTH_OUT" == "SSH_AUTH_OK" ]]; then
-        echo "PASS [Regression]: sshd completed a real publickey authentication for sysadmin"
+        record_reg sshd_publickey_auth_works 1
     else
-        echo "FAIL [Regression]: sshd did not authenticate sysadmin over a real SSH session"
-        PASS=false
+        record_reg sshd_publickey_auth_works 0 "sshd did not authenticate sysadmin over a real SSH session"
     fi
 else
-    echo "FAIL [Regression]: cannot run the live SSH authentication probe (sshd/ssh/sysadmin missing)"
-    PASS=false
+    record_reg sshd_publickey_auth_works 0 "cannot run the live SSH authentication probe (sshd/ssh/sysadmin missing)"
 fi
 
 # Check user still exists
 if id sysadmin > /dev/null 2>&1; then
-    echo "PASS [Regression]: sysadmin user still exists"
+    record_reg sysadmin_user_exists 1
 else
-    echo "FAIL [Regression]: sysadmin user is missing"
-    PASS=false
+    record_reg sysadmin_user_exists 0 "sysadmin user is missing"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

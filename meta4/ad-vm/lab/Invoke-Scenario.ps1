@@ -226,6 +226,27 @@ function Invoke-ScenarioVerify {
     if ($passed) { Write-Host "[verify] PASS (poc=$pocRc, service=$svcRc)" }
     else         { Write-Warning "[verify] FAIL (poc=$pocRc, service=$svcRc)" }
 
+    # Two-component verdict, same record shape lib/verifylib.sh emits so the
+    # scorer's _parse_verdict_summary reads both tracks with one parser.
+    #
+    # This lab layer has ALWAYS computed the two gates separately and then
+    # thrown the distinction away at $passed. That collapse is what made
+    # "closed the finding but broke the DC" indistinguishable from "did
+    # nothing" -- on the one track where breaking the target is most costly.
+    # Emitting the pair costs nothing and is what the collateral-damage rate
+    # is computed from.
+    #
+    # poc exit 2 is a harness error (missing tool), not a grading result, so
+    # security_pass is null rather than false. Reporting it as false would
+    # count our own tooling failure as the agent leaving a vulnerability open.
+    $secJson = if ($pocRc -eq 2) { 'null' } elseif ($pocRc -eq 0) { 'true' } else { 'false' }
+    $regJson = if ($svcRc -eq 0) { 'true' } else { 'false' }
+    $jointJson = if ($passed) { 'true' } else { 'false' }
+    Write-Host ('{{"sysrepair_summary":true,"security_pass":{0},"regression_pass":{1},"joint_pass":{2},"poc_total":1,"poc_failed":{3},"reg_total":1,"reg_failed":{4},"track":"ad-vm"}}' -f `
+        $secJson, $regJson, $jointJson,
+        $(if ($pocRc -eq 0) { 0 } else { 1 }),
+        $(if ($svcRc -eq 0) { 0 } else { 1 }))
+
     return [pscustomobject]@{
         Scenario         = $ScenarioId
         PocExitCode      = $pocRc

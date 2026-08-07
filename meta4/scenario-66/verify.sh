@@ -5,11 +5,7 @@
 # kernel table; the cipher check asserts config state (the simulator does not
 # enforce cipher suites). This verifier never starts the service.
 set -u
-
-if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (needed to read the firewall)." >&2
-    exit 1
-fi
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PORT=623
 
@@ -20,27 +16,28 @@ firewalled() {
 ###############################################################################
 # PoC 1: UDP 623 must be firewalled from untrusted sources (LIVE kernel table).
 ###############################################################################
-if ! firewalled; then
-    echo "FAIL [PoC 1]: No live iptables DROP/REJECT rule for UDP/$PORT — BMC is exposed." >&2
-    exit 1
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    record_poc bmc_port_firewalled 0 \
+        "container lacks NET_ADMIN capability (needed to read the firewall), so no live restriction can be shown"
+elif ! firewalled; then
+    record_poc bmc_port_firewalled 0 "no live iptables DROP/REJECT rule for UDP/$PORT — BMC is exposed"
+else
+    record_poc bmc_port_firewalled 1 "iptables restricts UDP/$PORT (live rule)"
 fi
-echo "PASS [PoC 1]: iptables restricts UDP/$PORT (live rule)."
 
 ###############################################################################
 # PoC 2: cipher suite 0 (null cipher) must be removed from /etc/ipmi.conf.
 # Match only the cipher_suite_ids value list; treat 0 as a standalone token.
 ###############################################################################
-CIPHER_LINE=$(grep -E '^[[:space:]]*cipher_suite_ids[[:space:]]*=' /etc/ipmi.conf 2>/dev/null | sed 's/#.*//')
-if [ -z "$CIPHER_LINE" ]; then
-    echo "FAIL [PoC 2]: cipher_suite_ids not found in /etc/ipmi.conf." >&2
-    exit 1
+CIPHER_LINE=$(grep -E '^[[:space:]]*cipher_suite_ids[[:space:]]*=' /etc/ipmi.conf 2>/dev/null | sed 's/#.*//' || true)
+VALUES=$(echo "${CIPHER_LINE:-}" | sed 's/.*=//' | tr ', ' '\n' | grep -E '^[0-9]+$' || true)
+if [ -z "${CIPHER_LINE:-}" ]; then
+    record_poc cipher_suite_zero_removed 0 "cipher_suite_ids not found in /etc/ipmi.conf"
+elif echo "${VALUES:-}" | grep -qx '0'; then
+    record_poc cipher_suite_zero_removed 0 "cipher suite 0 (null cipher) still enabled in /etc/ipmi.conf"
+else
+    record_poc cipher_suite_zero_removed 1 "cipher suite 0 is removed from /etc/ipmi.conf"
 fi
-VALUES=$(echo "$CIPHER_LINE" | sed 's/.*=//' | tr ', ' '\n' | grep -E '^[0-9]+$')
-if echo "$VALUES" | grep -qx '0'; then
-    echo "FAIL [PoC 2]: cipher suite 0 (null cipher) still enabled in /etc/ipmi.conf." >&2
-    exit 1
-fi
-echo "PASS [PoC 2]: cipher suite 0 is removed from /etc/ipmi.conf."
 
 ###############################################################################
 # Regression: the BMC must still answer AUTHORIZED (loopback) clients over UDP.
@@ -62,9 +59,10 @@ except Exception:
     sys.exit(1)
 PY
 then
-    echo "PASS [Regression]: BMC answers on UDP/$PORT from loopback."
-    exit 0
+    record_reg bmc_answers_loopback 1 "BMC answers on UDP/$PORT from loopback"
+else
+    record_reg bmc_answers_loopback 0 \
+        "BMC did not answer on UDP/$PORT from loopback (service dead / over-blocked)"
 fi
 
-echo "FAIL [Regression]: BMC did not answer on UDP/$PORT from loopback (service dead / over-blocked)." >&2
-exit 1
+verify_finish

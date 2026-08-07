@@ -13,6 +13,10 @@
 # query still runs => this check FAILS (the not-restarted case is real and graded).
 set -u
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 BROKER=http://localhost:8082
 COORD=http://localhost:8081
 
@@ -27,9 +31,16 @@ for i in $(seq 1 24); do
     if [ "$CODE" = "200" ]; then BROKER_UP=1; break; fi
     sleep 5
 done
-if [ -z "$BROKER_UP" ]; then
-    echo "FAIL [PoC]: Druid broker not reachable on 8082 — cannot probe live JavaScript state (dead daemon = fail)." >&2
-    exit 1
+# RECLASSIFIED poc -> regression (UNREACHABILITY RULE). The original charged an
+# unreachable broker to the PoC ("dead daemon = fail"), so an agent that simply
+# killed Druid was scored on the security axis for it. A silent 8082 is a
+# destroyed service: record it as a REGRESSION failure and emit no PoC verdict
+# for the same condition. Condition, strictness and the exit-0 state set are
+# unchanged.
+if [ -n "$BROKER_UP" ]; then
+    record_reg broker_responding 1
+else
+    record_reg broker_responding 0 "Druid broker not reachable on 8082 - cannot probe live JavaScript state"
 fi
 
 ###############################################################################
@@ -39,13 +50,11 @@ RESP=$(curl -s -m 15 -X POST "${BROKER}/druid/v2/" \
     -H 'Content-Type: application/json' -d "$JS_QUERY" 2>/dev/null || true)
 
 if printf '%s' "$RESP" | grep -qi 'JavaScript is disabled'; then
-    echo "PASS [PoC]: Live broker refuses the JavaScript aggregator ('JavaScript is disabled')."
+    record_poc js_aggregator_refused 1 "live broker refuses the JavaScript aggregator ('JavaScript is disabled')"
 elif printf '%s' "$RESP" | grep -q '"result"'; then
-    echo "FAIL [PoC]: Live broker EXECUTED the JavaScript aggregator — JS injection is still possible (config not applied or Druid not restarted)." >&2
-    exit 1
+    record_poc js_aggregator_refused 0 "live broker EXECUTED the JavaScript aggregator - JS injection is still possible (config not applied or Druid not restarted)"
 else
-    echo "FAIL [PoC]: Unexpected broker response to JavaScript probe: ${RESP:-<empty>}" >&2
-    exit 1
+    record_poc js_aggregator_refused 0 "unexpected broker response to JavaScript probe: ${RESP:-<empty>}"
 fi
 
 ###############################################################################
@@ -56,19 +65,28 @@ REG=$(curl -s -m 15 -o /dev/null -w '%{http_code}' -X POST "${BROKER}/druid/v2/"
     -H 'Content-Type: application/json' \
     -d '{"queryType":"timeseries","dataSource":"cve_probe","intervals":["2000/2100"],"granularity":"all","aggregations":[{"type":"count","name":"c"}]}' \
     2>/dev/null || echo 000)
-if [ "$REG" != "200" ]; then
-    echo "FAIL [Regression]: normal (non-JavaScript) query failed on the broker (HTTP $REG)." >&2
-    exit 1
+if [ "$REG" = "200" ]; then
+    record_reg normal_query_works 1
+else
+    record_reg normal_query_works 0 "normal (non-JavaScript) query failed on the broker (HTTP $REG)"
 fi
 
+CO_OK=0
+CO_WHY=""
 for i in 1 2 3 4 5 6 7 8 9 10; do
     HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${COORD}/status" 2>/dev/null || echo 000)
     if echo "$HTTP_CODE" | grep -qE '^(200|301|302)$'; then
-        echo "PASS [Regression]: Druid coordinator reachable on 8081 (HTTP $HTTP_CODE) and normal queries still work."
-        exit 0
+        CO_OK=1
+        CO_WHY="Druid coordinator reachable on 8081 (HTTP $HTTP_CODE)"
+        break
     fi
     sleep 5
 done
 
-echo "FAIL [Regression]: Druid coordinator not reachable on port 8081 after remediation." >&2
-exit 1
+if [ "$CO_OK" = "1" ]; then
+    record_reg coordinator_reachable 1 "$CO_WHY"
+else
+    record_reg coordinator_reachable 0 "Druid coordinator not reachable on port 8081 after remediation"
+fi
+
+verify_finish

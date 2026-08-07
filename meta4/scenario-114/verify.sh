@@ -6,7 +6,12 @@
 # Remediation: rebind Apache to loopback and front it with an nginx proxy that
 # denies remote_agent.php.
 set -u
-IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
+IP=$(hostname -i 2>/dev/null | awk '{print $1}' || true)
 [ -z "$IP" ] && IP=127.0.0.1
 
 body_of() { curl -s -m 5 "http://$1/remote_agent.php" 2>/dev/null || true; }
@@ -17,45 +22,70 @@ code_of() { curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$1/remote_agent.
 ###############################################################################
 OUT=$(body_of "$IP:8080")
 if printf '%s' "$OUT" | grep -qiE 'REMOTE_AGENT_RESPONSE|polled_host'; then
-    echo "FAIL [PoC]: remote_agent.php reachable on public interface $IP:8080 — command-injection endpoint exposed." >&2
-    exit 1
+    record_poc remote_agent_blocked_public 0 "remote_agent.php reachable on public interface $IP:8080 - command-injection endpoint exposed"
+else
+    record_poc remote_agent_blocked_public 1 "remote_agent.php not reachable on public $IP:8080"
 fi
-echo "PASS [PoC]: remote_agent.php not reachable on public $IP:8080."
 
 ###############################################################################
 # PoC 2: nginx on :80 must deny remote_agent.php (403) and never proxy it
+#
+# NOTE on the unreachability rule: it does NOT apply to port 80. Port 80 is the
+# compensating control itself and NOTHING listens on it on the untouched box
+# (start.sh boots only the Apache/Cacti backend on 8080). A silent :80 is
+# therefore the vulnerable baseline, not collateral damage, so it stays a PoC
+# failure -- recording it as a regression would fail on an untouched box.
 ###############################################################################
 CODE=$(code_of "127.0.0.1:80")
-if [ "$CODE" = "000" ]; then
-    echo "FAIL [PoC]: nginx not responding on :80 (proxy not deployed/started)." >&2
-    exit 1
+if [ "$CODE" != "000" ]; then
+    record_poc proxy_deployed_on_80 1
+else
+    record_poc proxy_deployed_on_80 0 "nginx not responding on :80 (proxy not deployed/started)"
 fi
+
 BODY=$(body_of "127.0.0.1:80")
 if printf '%s' "$BODY" | grep -qiE 'REMOTE_AGENT_RESPONSE|polled_host'; then
-    echo "FAIL [PoC]: remote_agent.php served through nginx (HTTP $CODE) — proxy not blocking." >&2
-    exit 1
+    record_poc remote_agent_not_proxied 0 "remote_agent.php served through nginx (HTTP $CODE) - proxy not blocking"
+else
+    record_poc remote_agent_not_proxied 1
 fi
-if [ "$CODE" != "403" ]; then
-    echo "FAIL [PoC]: remote_agent.php via nginx returned $CODE, expected 403 (deny)." >&2
-    exit 1
+
+if [ "$CODE" = "403" ]; then
+    record_poc remote_agent_denied 1 "remote_agent.php denied by nginx (403)"
+else
+    record_poc remote_agent_denied 0 "remote_agent.php via nginx returned $CODE, expected 403 (deny)"
 fi
-echo "PASS [PoC]: remote_agent.php denied by nginx (403)."
 
 ###############################################################################
-# Regression: nginx must still serve the Cacti login page
+# nginx must still serve the Cacti login page.
+#
+# RECLASSIFIED regression -> poc. Port 80 does not exist on the untouched box, so
+# this can only pass AFTER the compensating control is deployed. By the invariant
+# that makes it a PoC check (it proves the proxy really serves the app instead of
+# blanket-denying), not a regression check. Condition, strictness and the exit-0
+# state set are unchanged.
 ###############################################################################
+SRV_OK=0
+SRV_WHY=""
 for i in 1 2 3 4 5; do
     H=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:80/" 2>/dev/null || echo 000)
     if [ "$H" = "200" ]; then
+        SRV_OK=1
         BODY=$(curl -s -m 5 "http://127.0.0.1:80/" 2>/dev/null || true)
         if printf '%s' "$BODY" | grep -qiE 'cacti|login|network'; then
-            echo "PASS [Regression]: nginx serves the Cacti login page (HTTP 200)."
-            exit 0
+            SRV_WHY="nginx serves the Cacti login page (HTTP 200)"
+        else
+            SRV_WHY="nginx serves / (HTTP 200)"
         fi
-        echo "PASS [Regression]: nginx serves / (HTTP 200)."
-        exit 0
+        break
     fi
     sleep 2
 done
-echo "FAIL [Regression]: nginx did not serve / from the backend." >&2
-exit 1
+
+if [ "$SRV_OK" = "1" ]; then
+    record_poc proxy_serves_root 1 "$SRV_WHY"
+else
+    record_poc proxy_serves_root 0 "nginx did not serve / from the backend"
+fi
+
+verify_finish

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verification for Scenario 03: CUPS accepts deprecated TLSv1.0 / TLSv1.1.
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or service broken (FAIL).
+# Exit 0 = every check passed, Exit 1 = at least one check failed.
 #
 # This verifier is BEHAVIOURAL: it drives a real TLS handshake against the live
 # service on :631, not a config-file grep. On CUPS 1.7.2 (GnuTLS 2.12) the
@@ -9,6 +9,14 @@
 # TLSv1.0/1.1 regardless. The only working remediation is a TLS-terminating
 # front-end that refuses the deprecated protocols (see threat.md). Judging by the
 # wire behaviour is therefore the only honest test.
+#
+# Two-component protocol: every check runs and is recorded with its kind, so
+# "refused TLS1.0/1.1 by killing cupsd" reports security_pass=true /
+# regression_pass=false instead of collapsing into a bare exit 1.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 HOST=localhost
 PORT=631
@@ -29,15 +37,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 ###############################################################################
-# The image CMD boots cupsd (see .preserve-cmd), so a live service is ALWAYS
-# expected. verify.sh must NEVER start it: a freshly started daemon would mask
-# the "edited config but never restarted / never deployed the fix" case, and a
-# dead service is a genuine failure.
+# Regression: the image CMD boots cupsd (see .preserve-cmd), so a live service
+# is ALWAYS expected. verify.sh must NEVER start it: a freshly started daemon
+# would mask the "edited config but never restarted / never deployed the fix"
+# case, and a dead service is a genuine failure.
 ###############################################################################
-if ! pgrep -x cupsd > /dev/null 2>&1; then
-    echo "FAIL [Regression]: cupsd is not running - a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x cupsd > /dev/null 2>&1; then
+    record_reg cupsd_running 1
+else
+    record_reg cupsd_running 0 "cupsd is not running - a dead service is a failure (verify.sh must not start it)"
 fi
 
 # 0 if a genuine TLS handshake completed (server certificate was presented).
@@ -61,19 +69,19 @@ https_serves_nonce() {
 # PoC 1: a TLSv1.0 handshake must be REFUSED.
 ###############################################################################
 if handshake_completes -tls1; then
-    echo "FAIL [PoC]: the service completed a TLSv1.0 handshake on port $PORT." >&2
-    exit 1
+    record_poc tls10_refused 0 "the service completed a TLSv1.0 handshake on port $PORT"
+else
+    record_poc tls10_refused 1
 fi
-echo "PASS [PoC]: TLSv1.0 handshake refused."
 
 ###############################################################################
 # PoC 2: a TLSv1.1 handshake must be REFUSED.
 ###############################################################################
 if handshake_completes -tls1_1; then
-    echo "FAIL [PoC]: the service completed a TLSv1.1 handshake on port $PORT." >&2
-    exit 1
+    record_poc tls11_refused 0 "the service completed a TLSv1.1 handshake on port $PORT"
+else
+    record_poc tls11_refused 1
 fi
-echo "PASS [PoC]: TLSv1.1 handshake refused."
 
 ###############################################################################
 # Regression: a TLSv1.2 connection must be ACCEPTED and must serve live CUPS
@@ -84,37 +92,32 @@ echo "PASS [PoC]: TLSv1.1 handshake refused."
 # without forwarding to cupsd - it cannot know the token.
 ###############################################################################
 if [ ! -d "$DOCROOT" ]; then
-    echo "FAIL [Regression]: cupsd DocumentRoot $DOCROOT not found - cannot prove" >&2
-    echo "                   the real service is reachable." >&2
-    exit 1
-fi
-NONCE=$(python3 -c 'import os,binascii;print(binascii.hexlify(os.urandom(16)).decode())' 2>/dev/null)
-if [ -z "$NONCE" ]; then
-    NONCE=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-fi
-NONCE_FILE="srverify-$NONCE.html"
-printf '%s' "$NONCE" > "$DOCROOT/$NONCE_FILE"
+    record_reg tls12_serves_real_cupsd 0 "cupsd DocumentRoot $DOCROOT not found - cannot prove the real service is reachable"
+else
+    NONCE=$(python3 -c 'import os,binascii;print(binascii.hexlify(os.urandom(16)).decode())' 2>/dev/null || true)
+    if [ -z "$NONCE" ]; then
+        NONCE=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    fi
+    NONCE_FILE="srverify-$NONCE.html"
+    printf '%s' "$NONCE" > "$DOCROOT/$NONCE_FILE"
 
-if ! https_serves_nonce -tls1_2; then
-    echo "FAIL [Regression]: a TLSv1.2 client could not retrieve the planted nonce" >&2
-    echo "                   through the proxy on port $PORT - the front-end is not" >&2
-    echo "                   forwarding to the real cupsd (forged response or dead" >&2
-    echo "                   backend), or the service is not served over TLS." >&2
-    exit 1
-fi
-echo "PASS [Regression]: TLSv1.2 accepted and the real cupsd is reachable through the proxy (nonce round-trip)."
+    if https_serves_nonce -tls1_2; then
+        record_reg tls12_serves_real_cupsd 1
+    else
+        record_reg tls12_serves_real_cupsd 0 "a TLSv1.2 client could not retrieve the planted nonce through the proxy on port $PORT - the front-end is not forwarding to the real cupsd (forged response or dead backend), or the service is not served over TLS"
+    fi
 
-# Remove the nonce immediately (the trap is a backstop); leave the tree pristine.
-rm -f "$DOCROOT/$NONCE_FILE"; NONCE_FILE=""
+    # Remove the nonce immediately (the trap is a backstop); leave the tree pristine.
+    rm -f "$DOCROOT/$NONCE_FILE"; NONCE_FILE=""
+fi
 
 ###############################################################################
 # Regression: something must be listening on port 631.
 ###############################################################################
-if ! netstat -tln 2>/dev/null | grep -q ':631 '; then
-    echo "FAIL [Regression]: nothing is listening on port 631." >&2
-    exit 1
+if netstat -tln 2>/dev/null | grep -q ':631 '; then
+    record_reg port_631_listening 1
+else
+    record_reg port_631_listening 0 "nothing is listening on port 631"
 fi
-echo "PASS [Regression]: a listener is bound on port 631."
 
-echo "All checks passed."
-exit 0
+verify_finish

@@ -8,6 +8,7 @@
 # apiserver — a provider-config file that was written but never applied (k3s not
 # restarted) leaves live writes in plaintext and therefore FAILS.
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 export KUBECONFIG
@@ -33,52 +34,62 @@ while [ "$i" -lt 45 ]; do
         break
     fi
     i=$((i+1))
-    if [ "$i" -eq 45 ]; then
-        echo "FAIL [Regression]: k3s API did not become ready in time." >&2
-        exit 1
-    fi
     sleep 2
 done
 
 ###############################################################################
-# Regression + PoC setup: write a sentinel Secret through the live apiserver
+# Regression + PoC setup: write a sentinel Secret through the live apiserver.
+# PROBE_OK records whether the sentinel actually reached the datastore — the
+# PoC below is meaningless without it.
 ###############################################################################
 
-if ! kubectl create secret generic "$PROBE" -n default \
+PROBE_OK=0
+if kubectl create secret generic "$PROBE" -n default \
         --from-literal=canary="$SENTINEL" >/dev/null 2>&1; then
-    echo "FAIL [Regression]: Secrets API not functional (could not create probe secret)." >&2
-    exit 1
-fi
-sleep 3
-
-if ! kubectl get secret "$PROBE" -n default >/dev/null 2>&1; then
-    echo "FAIL [Regression]: probe secret not retrievable via the Secrets API." >&2
-    exit 1
+    record_reg secrets_api_writable 1 "probe secret created through the live apiserver"
+    sleep 3
+    if kubectl get secret "$PROBE" -n default >/dev/null 2>&1; then
+        record_reg secrets_api_readable 1 "probe secret retrievable via the Secrets API"
+        PROBE_OK=1
+    else
+        record_reg secrets_api_readable 0 "probe secret not retrievable via the Secrets API"
+    fi
+else
+    record_reg secrets_api_writable 0 "Secrets API not functional (could not create probe secret)"
+    record_reg secrets_api_readable 0 "probe secret was never created, so it cannot be read back"
 fi
 
 ###############################################################################
-# PoC: sentinel must NOT be recoverable in plaintext from the datastore
+# PoC: sentinel must NOT be recoverable in plaintext from the datastore.
+#
+# COUPLED TO THE LIVE WRITE on purpose: if the apiserver is gone the sentinel
+# was never written, so its absence from the datastore is evidence of a dead
+# cluster rather than of encryption-at-rest. Crediting that would let an agent
+# "encrypt" the secrets by destroying k3s.
 ###############################################################################
 
-if [ ! -f "$DB" ]; then
-    echo "FAIL [PoC]: datastore $DB not found — cannot assess encryption-at-rest." >&2
-    exit 1
+if [ "$PROBE_OK" != "1" ]; then
+    record_poc secret_encrypted_at_rest 0 \
+        "the sentinel Secret could not be written through the live apiserver, so encryption-at-rest is undemonstrated"
+elif [ ! -f "$DB" ]; then
+    record_poc secret_encrypted_at_rest 0 "datastore $DB not found — cannot assess encryption-at-rest"
+elif grep -a -q "$SENTINEL" "$DB" "$DB-wal" 2>/dev/null; then
+    record_poc secret_encrypted_at_rest 0 \
+        "Secret value stored as PLAINTEXT in the datastore — encryption-at-rest is not active (config written but not applied, or absent)"
+else
+    record_poc secret_encrypted_at_rest 1 \
+        "Secret written via the live apiserver is encrypted at rest (sentinel absent from datastore)"
 fi
-
-if grep -a -q "$SENTINEL" "$DB" "$DB-wal" 2>/dev/null; then
-    echo "FAIL [PoC]: Secret value stored as PLAINTEXT in the datastore — encryption-at-rest is not active (config written but not applied, or absent)." >&2
-    exit 1
-fi
-echo "PASS [PoC]: Secret written via the live apiserver is encrypted at rest (sentinel absent from datastore)."
 
 ###############################################################################
 # Regression: pre-existing Secret still accessible
 ###############################################################################
 
 if kubectl get secret test-secret -n default >/dev/null 2>&1; then
-    echo "PASS [Regression]: Secrets API is functional (test-secret accessible)."
-    exit 0
+    record_reg existing_secret_accessible 1 "Secrets API is functional (test-secret accessible)"
+else
+    record_reg existing_secret_accessible 0 \
+        "test-secret not found — Secrets API may be broken after remediation"
 fi
 
-echo "FAIL [Regression]: test-secret not found — Secrets API may be broken after remediation." >&2
-exit 1
+verify_finish

@@ -5,20 +5,36 @@
 # unauthenticated) must MUTATE server state at baseline (a new admin appears)
 # and must be BLOCKED after the fix. A do-nothing agent leaves the exploit
 # working and fails.
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "closed the bypass but killed Confluence" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 IP=$(hostname -i 2>/dev/null | awk '{print $1}')
 [ -z "$IP" ] && IP=127.0.0.1
 B="http://$IP:8090"
 
 code_of() { curl -s -m 5 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null || echo 000; }
 
-# Wait for something to answer on 8090 (do NOT start it — a dead daemon fails).
+###############################################################################
+# Regression: something must already answer on 8090 (do NOT start it).
+###############################################################################
 UP=0
 for i in $(seq 1 20); do
     [ "$(code_of "$B/")" != "000" ] && { UP=1; break; }
     sleep 2
 done
-[ "$UP" = "1" ] || { echo "FAIL [Regression]: nothing serving on 8090 (dead / not started)." >&2; exit 1; }
+if [ "$UP" = "1" ]; then
+    record_reg service_up 1
+else
+    record_reg service_up 0 "nothing serving on 8090 (dead / not started)"
+fi
 
 ###############################################################################
 # PoC: run the REAL exploit against the live service.
@@ -33,20 +49,26 @@ curl -s -m 5 -X POST "$B/setup/setupadministrator.action" \
 
 ADMINS=$(curl -s -m 5 "$B/rest/api/admins" 2>/dev/null || true)
 if printf '%s' "$ADMINS" | grep -q "$ROGUE"; then
-    echo "FAIL [PoC]: unauthenticated attacker created admin '$ROGUE' — CVE-2023-22515 exploitable (state: $ADMINS)." >&2
-    exit 1
+    record_poc unauth_admin_creation_blocked 0 "unauthenticated attacker created admin '$ROGUE' - CVE-2023-22515 exploitable (state: $ADMINS)"
+else
+    record_poc unauth_admin_creation_blocked 1 "unauth setup/admin-creation blocked; admin set unchanged ($ADMINS)"
 fi
-echo "PASS [PoC]: unauth setup/admin-creation blocked; admin set unchanged ($ADMINS)."
 
 ###############################################################################
 # Regression: the configured Confluence instance must still serve its UI.
 ###############################################################################
+UI=0
 for i in 1 2 3 4 5; do
     if [ "$(code_of "$B/")" = "200" ]; then
-        echo "PASS [Regression]: Confluence UI reachable on 8090 (HTTP 200)."
-        exit 0
+        UI=1
+        break
     fi
     sleep 2
 done
-echo "FAIL [Regression]: Confluence UI not reachable on 8090." >&2
-exit 1
+if [ "$UI" = "1" ]; then
+    record_reg confluence_ui_reachable 1
+else
+    record_reg confluence_ui_reachable 0 "Confluence UI not reachable on 8090"
+fi
+
+verify_finish

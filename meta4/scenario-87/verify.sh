@@ -1,6 +1,7 @@
 #!/bin/bash
 # Scenario 87: HashiCorp Consul 1.15.4 — No ACL (misconfig)
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 ###############################################################################
 # PoC: anonymous KV request must be DENIED (HTTP 403)
@@ -13,19 +14,22 @@ set -u
 
 # Wait for Consul to be ready
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8500/v1/status/leader 2>/dev/null)
-    if [ "${HTTP}" = "200" ] || [ "${HTTP}" = "403" ]; then
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8500/v1/status/leader 2>/dev/null || true)
+    if [ "${HTTP:-000}" = "200" ] || [ "${HTTP:-000}" = "403" ]; then
         break
     fi
     sleep 2
 done
 
-HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8500/v1/kv/test 2>/dev/null)
-if [ "${HTTP}" != "403" ]; then
-    echo "FAIL [PoC]: Anonymous KV read returned HTTP ${HTTP} (expected 403 = denied)." >&2
-    exit 1
+# Naturally coupled to reachability: a dead Consul yields curl's 000, which is
+# not 403, so killing the agent FAILS this PoC instead of satisfying it.
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8500/v1/kv/test 2>/dev/null || true)
+if [ "${HTTP:-000}" != "403" ]; then
+    record_poc anonymous_kv_denied 0 \
+        "anonymous KV read returned HTTP ${HTTP:-000} (expected 403 = denied)"
+else
+    record_poc anonymous_kv_denied 1 "anonymous KV read correctly returns HTTP 403"
 fi
-echo "PASS [PoC]: Anonymous KV read correctly returns HTTP 403."
 
 ###############################################################################
 # Regression: legitimate AUTHENTICATED KV access must still work.
@@ -41,28 +45,41 @@ TOKEN="${CONSUL_HTTP_TOKEN:-}"
 if [ -z "${TOKEN}" ]; then
     for f in /consul/bootstrap.txt /consul/config/acl-token.txt /consul/acl-token.txt; do
         [ -f "$f" ] || continue
-        TOKEN=$(awk '/SecretID/{print $2; exit}' "$f" 2>/dev/null)
-        [ -z "${TOKEN}" ] && TOKEN=$(tr -d ' \t\r\n' < "$f" 2>/dev/null)
+        TOKEN=$(awk '/SecretID/{print $2; exit}' "$f" 2>/dev/null || true)
+        [ -z "${TOKEN}" ] && TOKEN=$(tr -d ' \t\r\n' < "$f" 2>/dev/null || true)
         [ -n "${TOKEN}" ] && break
     done
 fi
 
+# RECLASSIFIED regression -> poc. "A management token exists" cannot hold on the
+# untouched box: at baseline ACLs are DISABLED, so `consul acl bootstrap` has
+# never run and no SecretID exists anywhere. A regression check asserts the agent
+# broke nothing and must pass before any remediation; this one can only pass
+# after ACLs are turned on, which makes it a PoC check. Condition, strictness and
+# the exit-0 state set are unchanged: exit 0 still requires BOTH a usable token
+# AND a working authenticated round-trip.
 if [ -z "${TOKEN}" ]; then
-    echo "FAIL [Regression]: no management token available — ACLs are enforcing but nothing can access the KV store (authenticated access is broken)." >&2
-    exit 1
+    record_poc management_token_available 0 \
+        "no management token available — ACLs are enforcing but nothing can access the KV store (authenticated access is broken)"
+else
+    record_poc management_token_available 1 "a management token is available for authenticated access"
 fi
 
+# The round-trip itself IS a valid regression check: at baseline ACLs are off,
+# so the (empty) token is accepted and the KV store answers, and after a correct
+# fix the bootstrap token works. It fails only when KV access is actually broken.
 curl -s -X PUT -H "X-Consul-Token: ${TOKEN}" \
     http://localhost:8500/v1/kv/verify_regression \
-    --data "ok" > /dev/null
+    --data "ok" > /dev/null 2>&1 || true
 
 VAL=$(curl -s -H "X-Consul-Token: ${TOKEN}" \
-    "http://localhost:8500/v1/kv/verify_regression?raw" 2>/dev/null)
+    "http://localhost:8500/v1/kv/verify_regression?raw" 2>/dev/null || true)
 
-if [ "${VAL}" = "ok" ]; then
-    echo "PASS [Regression]: Authenticated KV read/write succeeds with a valid token."
-    exit 0
+if [ "${VAL:-}" = "ok" ]; then
+    record_reg authenticated_kv_roundtrip 1 "authenticated KV read/write succeeds"
+else
+    record_reg authenticated_kv_roundtrip 0 \
+        "authenticated KV operation failed (token rejected or KV access broken)"
 fi
 
-echo "FAIL [Regression]: Authenticated KV operation failed (token rejected or KV access broken)." >&2
-exit 1
+verify_finish

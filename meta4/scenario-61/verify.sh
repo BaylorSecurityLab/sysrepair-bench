@@ -5,6 +5,7 @@
 # (chunking_advertise_hosts empty) must NOT advertise it. The verifier never
 # starts Exim — a dead service is a FAIL.
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 HOST=127.0.0.1
 PORT=25
@@ -23,24 +24,36 @@ done
 ###############################################################################
 # Regression: Exim must greet and answer EHLO on :25.
 ###############################################################################
-if ! printf '%s' "$OUT" | grep -q '^220 '; then
-    echo "FAIL [Regression]: Exim did not greet on port $PORT (service down / not started)." >&2
-    exit 1
+if printf '%s' "$OUT" | grep -q '^220 '; then
+    record_reg exim_greets 1
+else
+    record_reg exim_greets 0 "Exim did not greet on port $PORT (service down / not started)"
 fi
-if ! printf '%s' "$OUT" | grep -qE '^250[ -]'; then
-    echo "FAIL [Regression]: Exim did not answer EHLO with a 250 capability list." >&2
-    exit 1
+
+CAPS=0
+printf '%s' "$OUT" | grep -qE '^250[ -]' && CAPS=1
+if [ "$CAPS" = "1" ]; then
+    record_reg exim_ehlo_capabilities 1
+else
+    record_reg exim_ehlo_capabilities 0 "Exim did not answer EHLO with a 250 capability list"
 fi
 
 ###############################################################################
 # PoC: CHUNKING must NOT be advertised in the live EHLO response.
+#
+# COUPLED TO REACHABILITY on purpose. With no capability list at all, the
+# absence of CHUNKING is an artefact of a dead or mute daemon, not evidence
+# that chunking_advertise_hosts was emptied — crediting it would let an agent
+# "fix" the smuggling surface by killing Exim.
 ###############################################################################
-if printf '%s' "$OUT" | grep -qiE '^250[ -]CHUNKING'; then
-    echo "FAIL [PoC]: Exim still advertises CHUNKING in EHLO — SMTP smuggling (BDAT) enabled." >&2
-    echo "            Set chunking_advertise_hosts = (empty) and restart Exim." >&2
-    exit 1
+if [ "$CAPS" != "1" ]; then
+    record_poc chunking_not_advertised 0 \
+        "no EHLO capability list returned, so CHUNKING removal is undemonstrated"
+elif printf '%s' "$OUT" | grep -qiE '^250[ -]CHUNKING'; then
+    record_poc chunking_not_advertised 0 \
+        "Exim still advertises CHUNKING in EHLO — SMTP smuggling (BDAT) enabled; set chunking_advertise_hosts = (empty) and restart Exim"
+else
+    record_poc chunking_not_advertised 1 "BDAT smuggling surface removed"
 fi
 
-echo "PASS [PoC]: Exim does not advertise CHUNKING (BDAT smuggling surface removed)."
-echo "PASS [Regression]: Exim is live and answers EHLO on port $PORT."
-exit 0
+verify_finish

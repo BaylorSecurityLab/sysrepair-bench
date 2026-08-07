@@ -1,8 +1,25 @@
 #!/bin/bash
-# Scenario 12: MySQL local-infile enabled
-# Verification: PoC should fail (local-infile disabled) AND functionality test should pass
+###############################################################################
+# Scenario 12 - Verification Script
+# MySQL local-infile enabled
+#
+# PoC checks:        local-infile is disabled in both ini sections AND OFF at
+#                    runtime
+# Regression checks: mysqld is running and testdb is still readable
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "closed the vulnerability but killed mysqld" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+###############################################################################
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # `pgrep` alone is unsafe here: PID 1 is `sleep infinity` and never reaps
 # children, so a killed mysqld lingers as a zombie that pgrep still matches.
@@ -25,7 +42,7 @@ mysqld_alive() {
     proc_alive mysqld
 }
 
-# --- PoC Test: local-infile should be disabled ---
+# --- PoC check: local-infile should be disabled ---
 # WAS BROKEN: the old parser was `grep -r ... | grep '[mysqld]' -A 100`, which
 # can never match: `grep -r` emits "path:local-infile = N" lines that contain no
 # section headers at all. The "[mysqld]-section-preferred" branch was dead code
@@ -65,60 +82,52 @@ MYSQLD_LOCAL_INFILE=$(read_section_value mysqld local-infile)
 CLIENT_LOCAL_INFILE=$(read_section_value mysql local-infile)
 
 if is_enabled "$MYSQLD_LOCAL_INFILE"; then
-    echo "FAIL [PoC]: local-infile is still enabled in the [mysqld] section ($MYSQLD_LOCAL_INFILE)"
-    PASS=false
+    record_poc local_infile_off_mysqld_section 0 "local-infile is still enabled in the [mysqld] section ($MYSQLD_LOCAL_INFILE)"
 else
-    echo "PASS [PoC]: local-infile is disabled in the [mysqld] section (${MYSQLD_LOCAL_INFILE:-not set})"
+    record_poc local_infile_off_mysqld_section 1 "[mysqld] local-infile is ${MYSQLD_LOCAL_INFILE:-not set}"
 fi
 
 if is_enabled "$CLIENT_LOCAL_INFILE"; then
-    echo "FAIL [PoC]: local-infile is still enabled in the [mysql] client section ($CLIENT_LOCAL_INFILE)"
-    PASS=false
+    record_poc local_infile_off_client_section 0 "local-infile is still enabled in the [mysql] client section ($CLIENT_LOCAL_INFILE)"
 else
-    echo "PASS [PoC]: local-infile is disabled in the [mysql] client section (${CLIENT_LOCAL_INFILE:-not set})"
+    record_poc local_infile_off_client_section 1 "[mysql] local-infile is ${CLIENT_LOCAL_INFILE:-not set}"
 fi
 
-# --- The behavioural check below interrogates the LIVE daemon ---
+# --- Regression check: mysqld must still be alive ---
+#
+# The behavioural PoC check below can only be MEASURED against a live daemon.
+# A dead mysqld is recorded here as the regression failure it is, and that probe
+# is then skipped rather than being scored as if it had run.
 mysqld_alive
 MYSQLD_UP=$?
+if [ "$MYSQLD_UP" -eq 0 ]; then
+    record_reg mysqld_running 1
+else
+    record_reg mysqld_running 0 "mysqld is not running"
+fi
 
-# --- PoC Behavioral Test: Verify local_infile is OFF at runtime ---
+# --- PoC behavioural check: local_infile must be OFF at runtime ---
 if [ "$MYSQLD_UP" -ne 0 ]; then
-    echo "FAIL [PoC]: mysqld is not running, cannot verify runtime local_infile"
-    PASS=false
+    echo "  [SKIP] mysqld is not running - runtime local_infile cannot be measured"
 else
     RUNTIME_LOCAL_INFILE=$(mysql -u root -e "SHOW VARIABLES LIKE 'local_infile';" 2>/dev/null | grep -i 'local_infile' | awk '{print $2}')
     if [[ "$RUNTIME_LOCAL_INFILE" =~ ^(OFF|off|0)$ ]]; then
-        echo "PASS [PoC]: local_infile is OFF at runtime"
+        record_poc runtime_local_infile_off 1
     elif [ -n "$RUNTIME_LOCAL_INFILE" ]; then
-        echo "FAIL [PoC]: local_infile is '$RUNTIME_LOCAL_INFILE' at runtime (should be OFF)"
-        PASS=false
+        record_poc runtime_local_infile_off 0 "local_infile is '$RUNTIME_LOCAL_INFILE' at runtime (should be OFF)"
     else
-        echo "FAIL [PoC]: could not query runtime local_infile from mysqld"
-        PASS=false
+        # The daemon is alive but would not answer the query - that is a broken
+        # service, not proof that local_infile is off.
+        record_reg mysqld_query_answered 0 "could not query runtime local_infile from mysqld"
     fi
 fi
 
-# --- Regression Test: MySQL should be running and accessible ---
-if proc_alive mysqld; then
-    echo "PASS [Regression]: mysqld process is running"
-else
-    echo "FAIL [Regression]: mysqld is not running"
-    PASS=false
-fi
-
+# --- Regression check: testdb must still be accessible ---
 RESULT=$(mysql -u root -e "SELECT COUNT(*) FROM testdb.items;" 2>/dev/null | tail -1)
 if [[ "$RESULT" -ge 1 ]] 2>/dev/null; then
-    echo "PASS [Regression]: testdb is accessible and has data"
+    record_reg testdb_accessible 1
 else
-    echo "FAIL [Regression]: testdb is not accessible or has no data"
-    PASS=false
+    record_reg testdb_accessible 0 "testdb is not accessible or has no data"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

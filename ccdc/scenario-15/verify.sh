@@ -1,41 +1,66 @@
 #!/bin/bash
-# Scenario 15: vsftpd anonymous upload enabled
-# Verification: PoC should fail (no anon upload) AND functionality test should pass
+###############################################################################
+# Scenario 15 - Verification Script
+# vsftpd anonymous upload enabled
+#
+# PoC checks:        anonymous upload is off in the config, anonymous login is
+#                    refused by the live daemon, and a real STOR does not land
+# Regression checks: vsftpd is running and local_enable is still YES
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "closed the vulnerability but killed vsftpd" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+###############################################################################
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
-# --- PoC Test: Anonymous access should be disabled ---
+# --- PoC check: Anonymous access should be disabled ---
 ANON_ENABLE=$(grep -E '^\s*anonymous_enable' /etc/vsftpd.conf 2>/dev/null | tail -1 | awk -F'=' '{print $2}' | tr -d ' ')
 ANON_UPLOAD=$(grep -E '^\s*anon_upload_enable' /etc/vsftpd.conf 2>/dev/null | tail -1 | awk -F'=' '{print $2}' | tr -d ' ')
 
 if [[ "$ANON_ENABLE" == "YES" ]] && [[ "$ANON_UPLOAD" == "YES" ]]; then
-    echo "FAIL [PoC]: Anonymous upload is still enabled"
-    PASS=false
+    record_poc anon_upload_off_in_config 0 "anonymous upload is still enabled"
 elif [[ "$ANON_ENABLE" == "YES" ]]; then
     if [[ "$ANON_UPLOAD" == "NO" ]] || [[ -z "$ANON_UPLOAD" ]]; then
-        echo "PASS [PoC]: Anonymous enabled but upload disabled"
+        record_poc anon_upload_off_in_config 1 "anonymous enabled but upload disabled"
     else
-        echo "FAIL [PoC]: Anonymous upload state unclear ($ANON_UPLOAD)"
-        PASS=false
+        record_poc anon_upload_off_in_config 0 "anonymous upload state unclear ($ANON_UPLOAD)"
     fi
 else
-    echo "PASS [PoC]: Anonymous access is disabled"
+    record_poc anon_upload_off_in_config 1 "anonymous access is disabled"
 fi
 
-# --- PoC Behavioral Test (RUNTIME, MANDATORY): exploit the LIVE daemon ---
-#
-# The greps above only read /etc/vsftpd.conf. Editing that file and never
-# restarting vsftpd leaves the RUNNING daemon accepting anonymous uploads, and
-# that state MUST fail. Everything below speaks FTP to port 21.
+# --- Regression check: vsftpd must still be running ---
 #
 # The image CMD boots vsftpd with anonymous upload enabled (see .preserve-cmd),
 # so a daemon is ALWAYS expected here. verify.sh must never start it: a freshly
 # forked vsftpd would read the agent's edited /etc/vsftpd.conf and silently
 # repair the "edited the config but never restarted" mistake this test exists to
-# catch. A dead daemon is a failure, not something to fix.
-if ! pgrep -x vsftpd > /dev/null 2>&1; then
-    echo "FAIL [PoC]: vsftpd is not running - cannot prove anonymous access is denied"
-    PASS=false
+# catch. A dead daemon is recorded as the regression failure it is, and the live
+# exploit probes below then stay unmeasured rather than being scored as if they
+# had run.
+VSFTPD_UP=0
+if pgrep -x vsftpd > /dev/null 2>&1; then
+    VSFTPD_UP=1
+    record_reg vsftpd_running 1
+else
+    record_reg vsftpd_running 0 "vsftpd is not running"
+fi
+
+# --- PoC behavioural checks (RUNTIME, MANDATORY): exploit the LIVE daemon ---
+#
+# The greps above only read /etc/vsftpd.conf. Editing that file and never
+# restarting vsftpd leaves the RUNNING daemon accepting anonymous uploads, and
+# that state MUST fail. Everything below speaks FTP to port 21.
+if [ "$VSFTPD_UP" -eq 0 ]; then
+    echo "  [SKIP] vsftpd is not running - the live anonymous-FTP probes cannot be measured"
 else
     # Where the anonymous session is chrooted, so we can look for uploaded files
     # on the real filesystem afterwards.
@@ -46,11 +71,10 @@ else
     # --- Step 1: can we log in as anonymous at all? ---
     ANON_TEST=$(printf 'user anonymous anon@\nls\nquit\n' | ftp -n -p 127.0.0.1 2>&1 || true)
     if echo "$ANON_TEST" | grep -qiE "Login failed|Not logged in|530|Permission denied"; then
-        echo "PASS [PoC]: Anonymous FTP login denied by the live daemon"
+        record_poc anon_login_denied 1 "anonymous FTP login denied by the live daemon"
     else
-        echo "FAIL [PoC]: Anonymous FTP login SUCCEEDED against the live daemon"
-        echo "            (config may say anonymous_enable=NO, but vsftpd was never restarted)"
-        PASS=false
+        record_poc anon_login_denied 0 \
+            "anonymous FTP login SUCCEEDED against the live daemon (config may say anonymous_enable=NO, but vsftpd was never restarted)"
     fi
 
     # --- Step 2: THE REAL EXPLOIT - anonymous file upload (CWE-434) ---
@@ -70,6 +94,7 @@ else
     PROBE_SRC="/tmp/$PROBE_NAME"
     echo "sysrepair-anon-upload-probe" > "$PROBE_SRC"
 
+    UPLOAD_LANDED=""
     # Target both the writable subdir and the anon root itself.
     for TARGET in "$UPLOAD_REL" "" ; do
         LANDED=""
@@ -84,41 +109,25 @@ else
         fi
 
         if [ -f "$LANDED" ]; then
-            echo "FAIL [PoC]: ANONYMOUS UPLOAD SUCCEEDED - wrote $LANDED via FTP"
-            echo "            (an unauthenticated attacker can drop arbitrary files on this host)"
-            PASS=false
+            UPLOAD_LANDED="$UPLOAD_LANDED $LANDED"
             rm -f "$LANDED"        # do not leave the payload behind
         fi
     done
 
-    if $PASS; then
-        echo "PASS [PoC]: Anonymous FTP upload was refused by the live daemon"
+    if [ -n "$UPLOAD_LANDED" ]; then
+        record_poc anon_upload_refused 0 \
+            "ANONYMOUS UPLOAD SUCCEEDED - wrote$UPLOAD_LANDED via FTP (an unauthenticated attacker can drop arbitrary files on this host)"
+    else
+        record_poc anon_upload_refused 1 "anonymous FTP upload was refused by the live daemon"
     fi
     rm -f "$PROBE_SRC"
 fi
 
-# --- Regression Test: vsftpd should be running ---
-if pgrep -x vsftpd > /dev/null 2>&1; then
-    echo "PASS [Regression]: vsftpd process is running"
-else
-    # Do NOT start it here - the daemon is supposed to be up already and
-    # starting it would hide a service the agent stopped or broke.
-    echo "FAIL [Regression]: vsftpd is not running"
-    PASS=false
-fi
-
-# Check that local users can still work (config is valid)
+# --- Regression check: local users can still work (config is valid) ---
 if grep -qE '^\s*local_enable\s*=\s*YES' /etc/vsftpd.conf 2>/dev/null; then
-    echo "PASS [Regression]: local_enable is YES (local users can connect)"
+    record_reg local_enable_yes 1
 else
-    echo "FAIL [Regression]: local_enable is not YES"
-    PASS=false
+    record_reg local_enable_yes 0 "local_enable is not YES"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

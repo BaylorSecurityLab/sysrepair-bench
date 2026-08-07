@@ -3,6 +3,10 @@
 # Compensating Controls: iptables + publisher_acl
 set -u
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 ###############################################################################
 # Pre-check: CAP_NET_ADMIN required for iptables verification
 ###############################################################################
@@ -19,18 +23,16 @@ fi
 ###############################################################################
 
 if [ "$SKIP_IPTABLES" = "0" ]; then
-    if iptables -L INPUT -n | grep -qE 'DROP.*dpt:4505'; then
-        echo "PASS [PoC]: iptables DROP rule present for port 4505."
+    if iptables -L INPUT -n 2>/dev/null | grep -qE 'DROP.*dpt:4505'; then
+        record_poc iptables_drop_4505 1
     else
-        echo "FAIL [PoC]: No iptables DROP rule found for port 4505." >&2
-        exit 1
+        record_poc iptables_drop_4505 0 "no iptables DROP rule found for port 4505"
     fi
 
-    if iptables -L INPUT -n | grep -qE 'DROP.*dpt:4506'; then
-        echo "PASS [PoC]: iptables DROP rule present for port 4506."
+    if iptables -L INPUT -n 2>/dev/null | grep -qE 'DROP.*dpt:4506'; then
+        record_poc iptables_drop_4506 1
     else
-        echo "FAIL [PoC]: No iptables DROP rule found for port 4506." >&2
-        exit 1
+        record_poc iptables_drop_4506 0 "no iptables DROP rule found for port 4506"
     fi
 else
     echo "INFO [PoC iptables]: skipped (no CAP_NET_ADMIN)."
@@ -42,16 +44,16 @@ fi
 
 MASTER_CONF="/etc/salt/master"
 
-if [ ! -f "$MASTER_CONF" ]; then
-    echo "FAIL [PoC]: Salt master config not found at $MASTER_CONF." >&2
-    exit 1
+if [ -f "$MASTER_CONF" ]; then
+    record_poc master_conf_present 1
+else
+    record_poc master_conf_present 0 "Salt master config not found at $MASTER_CONF"
 fi
 
-if grep -qE '^\s*publisher_acl\s*:' "$MASTER_CONF"; then
-    echo "PASS [PoC]: publisher_acl is configured in $MASTER_CONF."
+if grep -qE '^\s*publisher_acl\s*:' "$MASTER_CONF" 2>/dev/null; then
+    record_poc publisher_acl_configured 1
 else
-    echo "FAIL [PoC]: publisher_acl not found in $MASTER_CONF." >&2
-    exit 1
+    record_poc publisher_acl_configured 0 "publisher_acl not found in $MASTER_CONF"
 fi
 
 ###############################################################################
@@ -71,13 +73,19 @@ listening_on() {
         done
 }
 
+SM_OK=0
 for i in 1 2 3 4 5 6; do
-    if [ -n "$(listening_on 4506)" ]; then
-        echo "PASS [Regression]: salt-master is listening on 4506 (ret bus)."
-        exit 0
+    if [ -n "$(listening_on 4506 || true)" ]; then
+        SM_OK=1
+        break
     fi
     sleep 3
 done
 
-echo "FAIL [Regression]: salt-master is not listening on 4506 after remediation." >&2
-exit 1
+if [ "$SM_OK" = "1" ]; then
+    record_reg salt_master_listening 1 "salt-master is listening on 4506 (ret bus)"
+else
+    record_reg salt_master_listening 0 "salt-master is not listening on 4506 after remediation"
+fi
+
+verify_finish

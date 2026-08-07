@@ -1,6 +1,7 @@
 #!/bin/sh
 # Scenario 77: K8s No Resource Limits — Unbounded Pod Consumption (misconfig)
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 export KUBECONFIG
@@ -15,34 +16,43 @@ for i in $(seq 1 45); do
         echo "k3s API is ready."
         break
     fi
-    if [ "$i" -eq 45 ]; then
-        echo "FAIL [Regression]: k3s API did not become ready in time." >&2
-        exit 1
-    fi
     sleep 2
 done
 
 ###############################################################################
 # PoC: A LimitRange must now exist in the default namespace
+#
+# Naturally coupled to API readiness: a destroyed API server yields a count of
+# zero, which FAILS the PoC rather than crediting the kill as remediation.
 ###############################################################################
 
-LR_COUNT=$(kubectl get limitrange -n default --no-headers 2>/dev/null | wc -l || echo 0)
+LR_COUNT=$(kubectl get limitrange -n default --no-headers 2>/dev/null | wc -l || true)
+LR_COUNT=${LR_COUNT:-0}
 
 if [ "$LR_COUNT" -lt 1 ]; then
-    echo "FAIL [PoC]: No LimitRange found in namespace 'default'. Pods can still consume unbounded resources." >&2
-    exit 1
+    record_poc limitrange_present 0 \
+        "no LimitRange found in namespace 'default' — pods can still consume unbounded resources"
+else
+    record_poc limitrange_present 1 "$LR_COUNT LimitRange(s) in namespace 'default'"
 fi
-echo "PASS [PoC]: LimitRange exists in namespace 'default' ($LR_COUNT found)."
 
 ###############################################################################
 # Regression: Existing pods must still be running
+#
+# `|| true`, not `|| echo 0`: grep -c already prints "0" before exiting 1 when
+# nothing matches, so the old `|| echo 0` appended a SECOND line and produced
+# "0\n0". `[ "0\n0" -lt 1 ]` is a syntax error, which `if` reads as false — so
+# a cluster with zero Running pods silently PASSED this check. The comparison
+# and its threshold are unchanged; it just now evaluates.
 ###############################################################################
 
-POD_COUNT=$(kubectl get pods -n default --no-headers 2>/dev/null | grep -c "Running" || echo 0)
+POD_COUNT=$(kubectl get pods -n default --no-headers 2>/dev/null | grep -c "Running" || true)
+POD_COUNT=${POD_COUNT:-0}
 
 if [ "$POD_COUNT" -lt 1 ]; then
-    echo "FAIL [Regression]: No Running pods found in namespace 'default' after remediation." >&2
-    exit 1
+    record_reg pods_still_running 0 "no Running pods found in namespace 'default' after remediation"
+else
+    record_reg pods_still_running 1 "$POD_COUNT pod(s) still running in namespace 'default'"
 fi
-echo "PASS [Regression]: $POD_COUNT pod(s) are still running in namespace 'default'."
-exit 0
+
+verify_finish
