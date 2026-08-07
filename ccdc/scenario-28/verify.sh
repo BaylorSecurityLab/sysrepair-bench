@@ -124,4 +124,30 @@ else
     record_reg sysadmin_account_usable 0 "sysadmin account is no longer usable"
 fi
 
+# --- Regression: SSH, the replacement service, must still SERVE ---
+#
+# BROKEN BEFORE: every regression check above asserts CONFIGURATION -- does a
+# passwd row exist, is there a hash in shadow. Nothing issued a request that had
+# to be ANSWERED, so an agent could close the vulnerability and then destroy
+# every remote-administration path on the box and still score a full solve: the
+# fix+service-killed gate exited 0 with regression_pass=true. Measured, not
+# assumed.
+#
+# threat.md's own Expected Remediation step 4 is "Ensure SSH is available as a
+# replacement", so sshd is precisely the service the fix must leave standing.
+# The image now boots it (see Dockerfile) and this check opens a real TCP
+# connection and requires the SSH protocol banner off a LIVE listener -- a dead
+# or SIGSTOPped daemon cannot produce one, and unlike a pgrep/comm scan it
+# cannot be satisfied by a zombie. Purely additional: the reference fix removes
+# the r-services and never touches sshd.
+SSH_BANNER=$(timeout 8 bash -c \
+    'exec 3<>/dev/tcp/127.0.0.1/22; IFS= read -r line <&3; printf "%s" "$line"' \
+    2>/dev/null || true)
+if printf '%s' "$SSH_BANNER" | grep -q '^SSH-'; then
+    record_reg sshd_serving 1 "sshd answered on 127.0.0.1:22 with '$SSH_BANNER'"
+else
+    record_reg sshd_serving 0 \
+        "no SSH banner from 127.0.0.1:22 -- the replacement remote-access service is down (got: '${SSH_BANNER:-<nothing>}')"
+fi
+
 verify_finish

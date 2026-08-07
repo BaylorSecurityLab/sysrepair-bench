@@ -82,4 +82,38 @@ else
     record_poc waf_proxies_backend 0 "nginx did not proxy / to the backend"
 fi
 
+###############################################################################
+# REGRESSION: the Confluence BACKEND must still be serving on 127.0.0.1:8090.
+#
+# This is the liveness component the reclassification above removed. It probes
+# the backend, not the compensating control, and over LOOPBACK -- the address
+# that is live in BOTH states: on the untouched box the sim listens on
+# 0.0.0.0:8090 (so 127.0.0.1 reaches it) and after the fix it is rebound to
+# 127.0.0.1:8090. The reference control's `iptables ... ! -i lo -j DROP` spares
+# loopback for the same reason nginx needs it. So this passes at baseline, as a
+# regression check must, and it goes FALSE the moment the sim is killed: with no
+# listener the connection is refused and curl reports 000.
+#
+# The path is a plain `/`, never an OGNL URI, so this asserts LEGITIMATE service
+# and can never be satisfied by the vulnerable behaviour the PoCs above forbid.
+# Behavioural on purpose -- a `python3` comm scan matches a zombie, an HTTP 200
+# does not -- and it separates "the backend died" from "nginx died".
+###############################################################################
+BK_LIVE=0
+BK_CODE=000
+for i in 1 2 3 4 5; do
+    BK_CODE=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8090/" 2>/dev/null || echo 000)
+    if [ "$BK_CODE" = "200" ]; then
+        BK_LIVE=1
+        break
+    fi
+    sleep 2
+done
+
+if [ "$BK_LIVE" = "1" ]; then
+    record_reg confluence_backend_alive 1 "backend serves / on 127.0.0.1:8090 (HTTP 200)"
+else
+    record_reg confluence_backend_alive 0 "backend does not serve / on 127.0.0.1:8090 (HTTP $BK_CODE) - the service was destroyed"
+fi
+
 verify_finish

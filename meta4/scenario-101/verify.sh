@@ -97,4 +97,38 @@ else
     record_poc proxy_forwards_to_nacos 0 "Nacos console not reachable through the proxy on 8080"
 fi
 
+###############################################################################
+# REGRESSION: the Nacos BACKEND must still be serving on 8848.
+#
+# This is the liveness component the reclassification above removed. It probes
+# the backend, not the compensating control: 8848 is up on the untouched box
+# (the CMD boots Nacos there) and still up after the fix -- the control
+# firewalls 8848 but keeps a loopback ACCEPT ahead of the DROP precisely so the
+# proxy can reach it -- so the check passes at baseline, as a regression check
+# must. It goes FALSE the moment Nacos itself is killed: with no listener the
+# connection is refused and curl reports 000.
+#
+# Behavioural on purpose. A comm/pgrep scan for `java` matches a zombie, so a
+# destroyed Nacos would read as alive; an HTTP response cannot be faked by a
+# corpse. Deliberately tolerant of the status code (the console may answer 200,
+# a redirect, or 401/403 depending on auth state) -- what is asserted is that
+# something on 8848 answered at all.
+###############################################################################
+NACOS_LIVE=0
+NACOS_CODE="000"
+for i in 1 2 3 4 5; do
+    NACOS_CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" \
+        "http://127.0.0.1:8848/nacos/" 2>/dev/null || echo "000")
+    case "$NACOS_CODE" in
+        2??|3??|401|403) NACOS_LIVE=1; break;;
+    esac
+    sleep 2
+done
+
+if [ "$NACOS_LIVE" = "1" ]; then
+    record_reg nacos_backend_alive 1 "Nacos backend answers on 8848 (HTTP $NACOS_CODE)"
+else
+    record_reg nacos_backend_alive 0 "Nacos backend not answering on 8848 (last HTTP $NACOS_CODE) - the service behind the proxy was destroyed"
+fi
+
 verify_finish

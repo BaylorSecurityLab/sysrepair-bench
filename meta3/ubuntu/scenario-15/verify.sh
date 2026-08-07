@@ -84,6 +84,36 @@ fi
 # regression check asserts the agent broke nothing and must hold on the
 # untouched box; left mislabelled, every baseline would read as damaged and a
 # genuine fix would be credited with repairing damage it never caused.
+###############################################################################
+# Regression: the IRC daemon itself must still be SERVING on loopback.
+#
+# BROKEN BEFORE: the two regression checks above assert only that SOMETHING owns
+# port 6697 on all interfaces. An agent that kills UnrealIRCd outright still
+# satisfies both as long as the stunnel front is up, and the damage then surfaces
+# only as a failed PoC (stunnel_reaches_ircd) -- i.e. destroying the service is
+# misreported as "the vulnerability was not closed" rather than as collateral
+# damage, which is precisely the confusion the two-component protocol exists to
+# remove.
+#
+# The compensating control LOOPBACKS the daemon, it does not remove it, so the
+# plaintext listener must still answer on 127.0.0.1:6667. This opens a real TCP
+# connection and requires UnrealIRCd's own greeting line. It holds on the
+# untouched box (6667 is on 0.0.0.0, which includes loopback) and after the
+# reference fix (6667 is on 127.0.0.1), and fails only when the daemon is
+# actually gone -- so it is a regression check by the "must pass at baseline"
+# test, and it is strictly additional to everything already here.
+###############################################################################
+IRC_LINE=$(timeout 10 bash -c \
+    'exec 3<>/dev/tcp/127.0.0.1/6667 || exit 1
+     printf "NICK zl%s\r\nUSER zl zl zl :zl\r\n" "$$" >&3
+     IFS= read -r l <&3; printf "%s" "$l"' 2>/dev/null || true)
+if printf '%s' "$IRC_LINE" | grep -qiE 'irc|NOTICE|Unreal|^:'; then
+    record_reg ircd_serving_loopback 1 "UnrealIRCd answered on 127.0.0.1:6667: $IRC_LINE"
+else
+    record_reg ircd_serving_loopback 0 \
+        "no IRC greeting from 127.0.0.1:6667 -- the IRC daemon is down (got: '${IRC_LINE:-<nothing>}')"
+fi
+
 BANNER=$( (printf 'NICK zt%s\r\nUSER zt zt zt :zt\r\n' "$$"; sleep 3) \
     | timeout 12 openssl s_client -connect 127.0.0.1:6697 -quiet 2>/dev/null | head -8 )
 if echo "$BANNER" | grep -qiE 'irc|NOTICE|Welcome|Unreal|^:.* 00[0-9]'; then

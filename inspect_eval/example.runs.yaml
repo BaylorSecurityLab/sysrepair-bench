@@ -236,8 +236,12 @@ presets:
   # Check in the log: security_only_accuracy, collateral_damage_rate and
   # two_component_coverage are PRESENT and non-degenerate; coverage should be
   # ~1.0 here since every scenario listed is migrated.
+  # Deliberately the KNOWN-WORKING endpoint (M2.7), not M3. This run tests the
+  # harness, not the model: if M3 is not yet served on that base_url the run
+  # fails for a reason that teaches nothing about the instrumentation. Switch to
+  # *srv_minimax_m3 only after a one-scenario connectivity check passes.
   iclr_smoke:
-    <<: *srv_minimax_m3
+    <<: *srv_minimax
     solvers: *solvers_react
     seeds: 1
     epochs: 1

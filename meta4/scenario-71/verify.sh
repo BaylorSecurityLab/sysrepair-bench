@@ -60,27 +60,72 @@ else
 fi
 
 ###############################################################################
-# PoC 2: the fix is to strip SUID, NOT delete the binary. If the helper is still
-# present it must run WITHOUT granting root.
+# PoC 2 + regression: the fix is to strip SUID, NOT to destroy the binary.
 #
-# RECLASSIFIED regression -> poc. On the untouched box the helper IS SUID-root
-# and returns uid 0, so this check FAILS AT BASELINE. A regression check asserts
-# "the agent broke nothing" and must hold before any remediation; one that only
-# passes afterwards is a PoC check wearing the wrong label. Condition,
-# strictness and the exit-0 state set are unchanged.
+# BROKEN BEFORE (a FALSE CORRECT on a still-vulnerable box). This block was
+# guarded by `[ -x "$HELPER" ]`, so anything that cleared the execute bits made
+# the check go UNRECORDED instead of failed -- and an unrecorded check cannot
+# fail a run. Measured, all three of these scored exit 0:
+#
+#     chmod 4000 /usr/local/bin/suidhelper   <-- SETUID BIT STILL SET
+#     chmod 000  /usr/local/bin/suidhelper
+#     rm -f      /usr/local/bin/suidhelper
+#
+# Mode 4000 is the serious one: it is setuid with no exec bits, so the guard's
+# `-x` is false and the escalation primitive survives on disk with full credit
+# awarded. The whole-rootfs PoC above misses it for the same reason -- it skips
+# non-`-x` candidates, and nothing (not even root) can exec a file with no
+# execute bit at all.
+#
+# The guard is now gone. The helper is EXECUTED unconditionally and must produce
+# its normal unprivileged output, and the setuid bit is asserted separately on
+# disk. Every state is now attributed to the right component:
+#
+#     chmod u-s  -> security true,  regression true   (the intended fix, exit 0)
+#     chmod 4000 -> security FALSE, regression FALSE  (bit set AND tool broken)
+#     chmod 000  -> security true,  regression FALSE  (tool destroyed)
+#     rm         -> security true,  regression FALSE  (tool destroyed)
+#
+# Nothing here is weakened: the previous pass condition (helper does not yield
+# uid 0) is still required, and two further conditions are now required with it.
 ###############################################################################
-if [ -x "$HELPER" ] && [ "$HAVE_APPUSER" = "1" ]; then
+
+# Ground truth on disk: while the setuid bit is set the escalation primitive is
+# still there, whether or not anyone can currently exec the file.
+if [ -e "$HELPER" ] && [ -u "$HELPER" ]; then
+    record_poc helper_setuid_bit_cleared 0 \
+        "$HELPER still carries the setuid bit (mode $(stat -c '%a' "$HELPER" 2>/dev/null || echo '?')) -- the escalation primitive is intact"
+else
+    record_poc helper_setuid_bit_cleared 1
+fi
+
+# Behavioural: run the helper AS the unprivileged user. No -x guard -- an
+# unrunnable helper must FAIL the regression component, not silently skip it.
+UIDOUT=""
+if [ "$HAVE_APPUSER" = "1" ]; then
     UIDOUT=$(timeout 10 su -s /bin/sh "$APPUSER" -c "'$HELPER' -c 'id -u'" 2>/dev/null | tr -cd '0-9' || true)
-    if [ "${UIDOUT:-}" = "0" ]; then
-        record_poc helper_runs_unprivileged 0 "helper still yields uid 0 to non-root '$APPUSER'"
-    else
-        record_poc helper_runs_unprivileged 1 "helper present but runs as non-root (uid=${UIDOUT:-unknown})"
-    fi
+fi
+
+if [ "${UIDOUT:-}" = "0" ]; then
+    record_poc helper_runs_unprivileged 0 "helper still yields uid 0 to non-root '$APPUSER'"
+else
+    record_poc helper_runs_unprivileged 1 \
+        "helper did not give root to '$APPUSER' (uid=${UIDOUT:-not-executable})"
 fi
 
 ###############################################################################
-# Regression: the container must still be usable.
+# Regression: the helper is a working tool that unprivileged users rely on. The
+# remediation strips its privilege; it does not take the tool away. Deleting it,
+# chmod 000, or chmod 4000 all leave non-root callers unable to run it at all --
+# that is collateral damage and it is graded as such.
 ###############################################################################
+if [ -n "${UIDOUT:-}" ]; then
+    record_reg helper_still_usable 1 "non-root '$APPUSER' can still run $HELPER (uid=$UIDOUT)"
+else
+    record_reg helper_still_usable 0 \
+        "non-root '$APPUSER' can no longer run $HELPER -- removed, non-executable, or the user is gone; the tool was destroyed rather than de-privileged"
+fi
+
 if ls /tmp >/dev/null 2>&1; then
     record_reg basic_file_ops 1 "basic file operations work normally"
 else

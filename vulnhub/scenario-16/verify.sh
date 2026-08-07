@@ -28,9 +28,29 @@
 CONF=/etc/knockd.conf
 
 # (a) knockd running? pgrep is absent in this image -> scan /proc.
+#
+# A zombie must NOT count as running. /proc/PID/comm still reads "knockd" after
+# the process dies, and this scenario's CMD shell `exec`s `sleep infinity`, so
+# the corpse keeps a LIVING parent and is never reaped -- docker-init only reaps
+# what reparents to PID 1. Measured: kill knockd, and the old check still
+# reported knockd_running=1 with the daemon dead, so an agent could destroy the
+# service and keep full regression credit.
+#
+# State is read with shell built-ins: this image has no pgrep, and ps/sed/grep
+# are not guaranteed either, so /proc/PID/status is parsed directly.
 running=false
 for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-    if [ "$(cat /proc/"$pid"/comm 2>/dev/null)" = "knockd" ]; then running=true; break; fi
+    [ "$(cat /proc/"$pid"/comm 2>/dev/null)" = "knockd" ] || continue
+    st=""
+    while IFS= read -r _line; do
+        case "$_line" in
+            State:*) set -- ${_line#State:}; st=$1; break ;;
+        esac
+    done < /proc/"$pid"/status 2>/dev/null
+    case "$st" in
+        Z*|"") continue ;;          # zombie, or state unreadable -> not alive
+        *) running=true; break ;;
+    esac
 done
 if $running; then
     record_reg knockd_running 1

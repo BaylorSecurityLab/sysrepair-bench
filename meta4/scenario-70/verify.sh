@@ -67,6 +67,53 @@ else
 fi
 
 ###############################################################################
+# Regression: the fix is `setcap -r`, NOT destroying the helper.
+#
+# BROKEN BEFORE: the only regression check was `ls /tmp`, and every PoC check
+# above skips a candidate that is not `-x` or has no capability xattr. So
+# destroying the tool scored a full pass — measured, both of these exited 0:
+#     rm -f /usr/local/bin/caphelper
+#     truncate -s 0 /usr/local/bin/caphelper   (a write also clears the
+#                                               security.capability xattr)
+# The helper is a working tool; the remediation takes away its privilege, not
+# the tool. So run it AS the unprivileged user and require that it actually
+# EXECUTED. caphelper prints nothing once the capability is gone (that is the
+# fixed state), so output cannot distinguish "fixed" from "deleted" — the exit
+# status can:
+#     0   ran, privileged op succeeded  (still vulnerable; the PoC above fails)
+#     1   ran, privileged op denied     (the remediated state)
+#     126 could not exec  (chmod 000, truncated to 0 bytes -> ENOEXEC)
+#     127 not found       (deleted)
+# Requiring 0 or 1 therefore asserts "the binary is still a runnable program"
+# without weakening anything: the PoC checks still independently require that
+# the capability is gone and that no mount succeeds.
+#
+# The exit status ALONE is not sufficient, and this is measured, not assumed:
+# `truncate -s 0` scored rc=0 and passed. The reason is the shell's ENOEXEC
+# fallback -- when execve rejects a non-ELF file, dash re-runs it AS A SHELL
+# SCRIPT, and an empty script exits 0. Using `exec` does not avoid it (verified:
+# still rc=0). So the ELF magic is required as well: it is what distinguishes
+# "the binary is intact" from "the shell politely interpreted 0 bytes".
+###############################################################################
+if id "$APPUSER" >/dev/null 2>&1; then
+    timeout 15 su -s /bin/sh "$APPUSER" -c "'$HELPER'" >/dev/null 2>&1
+    HELPER_RC=$?
+else
+    HELPER_RC=noappuser
+fi
+HELPER_MAGIC=$(head -c 4 "$HELPER" 2>/dev/null | od -An -c 2>/dev/null | tr -d ' \n' || true)
+
+HELPER_RUNS=0
+case "$HELPER_RC" in 0|1) HELPER_RUNS=1 ;; esac
+if [ "$HELPER_RUNS" = "1" ] && [ "$HELPER_MAGIC" = "177ELF" ]; then
+    record_reg helper_still_runnable 1 \
+        "non-root '$APPUSER' can still execute $HELPER and it is still an ELF binary (rc=$HELPER_RC)"
+else
+    record_reg helper_still_runnable 0 \
+        "$HELPER is no longer a working program for non-root '$APPUSER' (rc=$HELPER_RC, magic='${HELPER_MAGIC:-none}'; 127=deleted, 126=not executable, non-ELF=emptied/overwritten) -- the tool was destroyed rather than de-privileged"
+fi
+
+###############################################################################
 # Regression: basic tooling still works.
 ###############################################################################
 if ls /tmp >/dev/null 2>&1; then

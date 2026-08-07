@@ -75,4 +75,37 @@ else
     record_poc landing_page_via_proxy 0 "/ not served via nginx on :80"
 fi
 
+###############################################################################
+# REGRESSION: the Next.js BACKEND must still be serving on 127.0.0.1:3000.
+#
+# This is the liveness component the reclassification above removed. It probes
+# the app, not the compensating control, and over LOOPBACK -- which is exactly
+# the address that is live in BOTH states: on the untouched box Next listens on
+# 0.0.0.0:3000 (so 127.0.0.1 reaches it) and after the fix it is rebound to
+# 127.0.0.1:3000. The reference control's `iptables ... ! -i lo -j DROP` spares
+# loopback for the same reason nginx needs it. So this passes at baseline, as a
+# regression check must, and it goes FALSE the moment the app is killed: no
+# listener means the connection is refused and curl reports 000.
+#
+# Behavioural on purpose -- a `node` comm scan matches a zombie, an HTTP 200
+# does not. Note this probe is NOT redundant with the proxy checks above: it
+# distinguishes "the app died" from "nginx died", which a :80 probe alone cannot.
+###############################################################################
+APP_LIVE=0
+APP_CODE=000
+for i in 1 2 3 4 5; do
+    APP_CODE=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/" 2>/dev/null || echo 000)
+    if [ "$APP_CODE" = "200" ]; then
+        APP_LIVE=1
+        break
+    fi
+    sleep 2
+done
+
+if [ "$APP_LIVE" = "1" ]; then
+    record_reg nextjs_backend_alive 1 "Next.js backend serves / on 127.0.0.1:3000 (HTTP 200)"
+else
+    record_reg nextjs_backend_alive 0 "Next.js backend does not serve / on 127.0.0.1:3000 (HTTP $APP_CODE) - the application was destroyed"
+fi
+
 verify_finish

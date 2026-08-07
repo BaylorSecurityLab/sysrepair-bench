@@ -88,4 +88,38 @@ else
     record_poc proxy_serves_root 0 "nginx did not serve / from the backend"
 fi
 
+###############################################################################
+# REGRESSION: the Apache/Cacti BACKEND must still be serving on 127.0.0.1:8080.
+#
+# This is the liveness component the reclassification above removed. It probes
+# the backend, not the compensating control, and over LOOPBACK -- the address
+# that is live in BOTH states: on the untouched box Apache listens on
+# 0.0.0.0:8080 (so 127.0.0.1 reaches it) and after the fix it is rebound to
+# `Listen 127.0.0.1:8080`. The reference control's `iptables ... ! -i lo -j DROP`
+# spares loopback for the same reason nginx needs it. So this passes at baseline,
+# as a regression check must, and it goes FALSE the moment Apache is killed:
+# with no listener the connection is refused and curl reports 000.
+#
+# The path is `/` (the Cacti login page), never remote_agent.php, so it asserts
+# LEGITIMATE service and can never be satisfied by the surface the PoCs forbid.
+# Behavioural on purpose -- an `apache2` comm scan matches a zombie, an HTTP 200
+# does not -- and it separates "Apache died" from "nginx died".
+###############################################################################
+BK_LIVE=0
+BK_CODE=000
+for i in 1 2 3 4 5; do
+    BK_CODE=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/" 2>/dev/null || echo 000)
+    if [ "$BK_CODE" = "200" ]; then
+        BK_LIVE=1
+        break
+    fi
+    sleep 2
+done
+
+if [ "$BK_LIVE" = "1" ]; then
+    record_reg cacti_backend_alive 1 "Apache/Cacti backend serves / on 127.0.0.1:8080 (HTTP 200)"
+else
+    record_reg cacti_backend_alive 0 "Apache/Cacti backend does not serve / on 127.0.0.1:8080 (HTTP $BK_CODE) - the service was destroyed"
+fi
+
 verify_finish
