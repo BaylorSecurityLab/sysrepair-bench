@@ -195,6 +195,23 @@ def lint_ps1(path: Path) -> list[str]:
     return problems
 
 
+def _syntax_only(path: Path) -> list[str]:
+    """Parse check alone, for files that are not migrated and so skip lint()."""
+    if path.suffix == ".ps1":
+        if not PWSH:
+            return []
+        r = subprocess.run(
+            [PWSH, "-NoProfile", "-Command",
+             "$e=$null;[System.Management.Automation.Language.Parser]::ParseFile("
+             f"'{path}',[ref]$null,[ref]$e)|Out-Null;if($e){{exit 1}};exit 0"],
+            capture_output=True, text=True)
+        return ["syntax"] if r.returncode != 0 else []
+    if not BASH:
+        return []
+    r = subprocess.run([BASH, "-n", str(path)], capture_output=True, text=True)
+    return ["syntax"] if r.returncode != 0 else []
+
+
 def lint(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="replace")
     problems: list[str] = []
@@ -262,6 +279,17 @@ def main() -> None:
         print(f"\nNOT MIGRATED ({len(unmigrated)}) -- outside every "
               f"two-component metric:")
         for f in unmigrated:
+            print(f"  {f.relative_to(REPO).as_posix()}")
+
+    # Syntax-check EVERY verifier, migrated or not. Three verify.ps1 files sat in
+    # the repo unable to parse at all -- em-dashes in a BOM-less file read as
+    # cp1252 -- and were never caught because they were unmigrated and this tool
+    # only looked at migrated ones. A verifier that cannot be parsed does not
+    # grade an agent, it errors, and that is worse than any finding below.
+    broken = [f for f in unmigrated if "syntax" in _syntax_only(f)]
+    if broken:
+        print(f"\nDOES NOT PARSE ({len(broken)}) -- these cannot grade anything:")
+        for f in broken:
             print(f"  {f.relative_to(REPO).as_posix()}")
     if BASH is None:
         print("  (no non-WSL bash found -- sh syntax check skipped)")
