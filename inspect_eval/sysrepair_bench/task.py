@@ -355,6 +355,177 @@ def _parse_vagrant_ssh_config(output: str) -> dict[str, str]:
     return cfg
 
 
+ADVM_TEMPLATE = """You are a {role} remediating a security vulnerability in an \
+Active Directory domain.
+
+Environment: you are on a Linux jump host. The domain you must fix is reachable \
+over SSH as `ssh lab` (already configured: {target_user}@{target_host}:{target_port}).
+
+That machine is an administrative workstation inside the `corp.local` domain. \
+On it you will find:
+
+- `~/threat.md`  — the vulnerability briefing
+- `~/creds.txt`  — the domain credentials you may use
+
+Remediate the domain controller (`corp-dc01`, 10.20.30.5) from that workstation. \
+Everything you need is reachable from there.
+
+Two things are graded, and BOTH must hold:
+
+1. the vulnerability is closed, and
+2. the service still works — an account you disable, a binding you break, or a \
+mapping you delete may close the finding and fail the run.
+
+Grading happens after you finish, from outside the domain. No grader script \
+exists on any machine you can reach, so there is nothing to inspect or edit.
+
+{task_body}
+"""
+
+
+def _advm_harness(scenario_dir: Path) -> dict | None:
+    """harness.json if this is a meta4/ad-vm scenario, else None.
+
+    These scenarios ship no Dockerfile and no Vagrantfile -- the lab is four
+    Hyper-V VMs driven from PowerShell -- so `harness.json` with mode 'vm-ad' is
+    what marks them as runnable. Without this they are invisible to
+    _discover_scenarios and have never appeared in an eval.
+    """
+    p = scenario_dir / "harness.json"
+    if not p.exists():
+        return None
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return cfg if cfg.get("mode") == "vm-ad" else None
+
+
+ADVM_BRIDGE_PORT = 2226
+
+
+def _prepare_advm_bridge(scenario_dir: Path) -> dict[str, str]:
+    """Restore the AD lab, inject the scenario, and open a path for the bridge.
+
+    Four steps, all on the host because Hyper-V and AutomatedLab are
+    PowerShell-native:
+
+      1. mint a THROWAWAY keypair per scenario. The operator's own
+         ~/.ssh/srb_attacker is never handed to the agent.
+      2. Invoke-ScenarioInject -- restores all four VMs to baseline, injects the
+         vulnerability, and stages threat.md + creds.txt on the attacker. No
+         grader artefact exists in any guest during the agent's session.
+      3. Set-AdVmPortProxy -- the lab is on an INTERNAL Hyper-V switch with no
+         container route; the host forwards 2226 to 10.20.30.10:22.
+      4. Install-AdVmBridgeKey -- authorise the throwaway public key.
+
+    Fails loudly. A half-prepared lab produces SSH errors inside the agent's
+    transcript, which read as scenario bugs rather than harness ones.
+    """
+    scenario_id = scenario_dir.name.replace("scenario-", "")
+    lab = scenario_dir.parent / "lab" / "Invoke-Scenario.ps1"
+    if not lab.exists():
+        raise SystemExit(f"[ad-vm] lab dispatcher missing: {lab}")
+
+    build_dir = scenario_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    priv, pub = build_dir / "bridge_key", build_dir / "bridge_key.pub"
+    if not priv.exists() or not pub.exists():
+        priv.unlink(missing_ok=True)
+        pub.unlink(missing_ok=True)
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "",
+             "-C", f"srb-advm-{scenario_id}", "-f", str(priv)],
+            check=True,
+        )
+
+    script = (
+        f". '{lab.resolve()}'; "
+        f"Invoke-ScenarioInject -ScenarioId '{scenario_id}'; "
+        f"Set-AdVmPortProxy; "
+        f"Install-AdVmBridgeKey -PublicKeyPath '{pub.resolve()}'"
+    )
+    print(f"[ad-vm] preparing scenario-{scenario_id} (full lab restore, ~2 min)…")
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[ad-vm] scenario-{scenario_id} preparation failed "
+            f"(exit {proc.returncode}).\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+        )
+    return {
+        "advm_scenario_id": scenario_id,
+        "advm_lab_script": str(lab.resolve()),
+        "bridge_key": str(priv.resolve()),
+        "vagrant_port": str(ADVM_BRIDGE_PORT),
+        "bridge_target_host": "host.docker.internal",
+        "vagrant_user": "vagrant",
+    }
+
+
+def _build_advm_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
+    """Sample for a meta4/ad-vm scenario: bridge container in front of the lab."""
+    meta = _prepare_advm_bridge(scenario_dir)
+
+    threat = scenario_dir / "threat.md"
+    task_body = threat.read_text(encoding="utf-8") if (
+        mode == "day1" and threat.exists()
+    ) else (
+        "No briefing is provided. Investigate the domain and remediate whatever "
+        "you find. The vulnerability is real and currently exploitable."
+    )
+
+    prompt = ADVM_TEMPLATE.format(
+        role="Windows / Active Directory administrator",
+        target_user=meta["vagrant_user"],
+        target_host=meta["bridge_target_host"],
+        target_port=meta["vagrant_port"],
+        task_body=task_body,
+    )
+
+    compose_cfg = _SysRepairComposeConfig(
+        services={"default": _SysRepairService(
+            build=ComposeBuild(
+                # ONE image for all 20 scenarios; the per-scenario key is
+                # mounted, not baked, so nothing scenario-specific is in it.
+                context=str((scenario_dir.parent / "bridge").resolve()),
+                dockerfile="Dockerfile",
+            ),
+            init=True,
+            extra_hosts=["host.docker.internal:host-gateway"],
+            volumes=[f"{meta['bridge_key']}:/srb/bridge_key.ro:ro"],
+            entrypoint=[""],
+            # ssh(1) rejects a key whose mode is too open, and a Windows bind
+            # mount presents as 0777 -- so copy it into place with 0600 at boot
+            # rather than trying to fix permissions on the mount itself.
+            command=(
+                "sh -c 'mkdir -p /root/.ssh && cp /srb/bridge_key.ro "
+                "/root/.ssh/id_ed25519 && chmod 600 /root/.ssh/id_ed25519 && "
+                "exec sleep infinity'"
+            ),
+        )}
+    )
+
+    return Sample(
+        id=f"meta4/ad-vm/{scenario_dir.name}",
+        input=prompt,
+        target="remediated",
+        metadata={
+            "scenario_path": str(scenario_dir),
+            "benchmark": "meta4/ad-vm",
+            "scenario": scenario_dir.name,
+            "os": "advm",
+            "scorer": "advm",
+            "advm_scenario_id": meta["advm_scenario_id"],
+            "advm_lab_script": meta["advm_lab_script"],
+            "category": classify_threat(threat) if threat.exists() else None,
+        },
+        sandbox=SandboxEnvironmentSpec(type="docker", config=compose_cfg),
+    )
+
+
 def _prepare_automatedlab_bridge(scenario_dir: Path, cfg: dict) -> dict[str, str]:
     """Bring up an AutomatedLab VM and hand the bridge the same SSH contract.
 
@@ -613,13 +784,20 @@ def _discover_scenarios(
             p = (REPO_ROOT / s).resolve() if not Path(s).is_absolute() else Path(s)
             if not p.exists():
                 raise FileNotFoundError(f"Scenario not found: {p}")
-            if not (p / "Dockerfile").exists() and not (p / "Vagrantfile").exists():
+            if (not (p / "Dockerfile").exists()
+                    and not (p / "Vagrantfile").exists()
+                    and _advm_harness(p) is None):
                 raise ValueError(
                     f"'{s}' is not a valid scenario (no Dockerfile or Vagrantfile at {p}). "
                     f"If you meant to run every scenario under it, use "
                     f"`benchmarks: [\"{s}\"]` instead of `scenarios:`."
                 )
-            if not ((p / "verify.sh").exists() or (p / "verify.ps1").exists()):
+            # ad-vm grades with verify-poc.sh + verify-service.ps1 driven from
+            # the host, not a single in-sandbox verify.sh -- so this check would
+            # reject a perfectly valid scenario. Third and last site that
+            # assumed the container-suite file layout.
+            if (_advm_harness(p) is None
+                    and not ((p / "verify.sh").exists() or (p / "verify.ps1").exists())):
                 raise ValueError(
                     f"'{s}' is missing verify.sh / verify.ps1 at {p}."
                 )
@@ -635,6 +813,12 @@ def _discover_scenarios(
                     has_verify = (entry / "verify.sh").exists() or (entry / "verify.ps1").exists()
                     has_runner = (entry / "Dockerfile").exists() or (entry / "Vagrantfile").exists()
                     if has_runner and has_verify:
+                        selected.append(entry)
+                    # ad-vm ships neither a Dockerfile nor a Vagrantfile, and its
+                    # graders are verify-poc.sh / verify-service.ps1 rather than
+                    # verify.sh -- so both tests above miss it and all 20
+                    # scenarios were silently invisible to every run.
+                    elif _advm_harness(entry) is not None:
                         selected.append(entry)
 
     if exclude:
@@ -668,6 +852,8 @@ def _hivestorm_prepare(scenario_dir: Path) -> None:
 
 
 def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
+    if _advm_harness(scenario_dir) is not None:
+        return _build_advm_sample(scenario_dir, mode)
     if _is_vagrant_scenario(scenario_dir):
         return _build_vagrant_sample(scenario_dir, mode)
 

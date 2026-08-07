@@ -216,9 +216,35 @@ function Invoke-ScenarioVerify {
     Write-Host "[verify] verify-poc on attacker (inside srb-attacker:1)"
     $pocRun = "sudo docker run --rm --network host -v ${pocGuest}:/srb-poc.sh:ro " +
               "srb-attacker:1 /bin/bash /srb-poc.sh; rc=`$?; rm -f $pocGuest; exit `$rc"
-    ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
-        "$($script:AttackerUser)@$($script:AttackerIP)" $pocRun
-    $pocRc = $LASTEXITCODE
+
+    # Retry the SSH, because grading runs immediately after the agent session
+    # and the attacker is at its busiest: a real run issued 260 commands, each
+    # spawning a container, and left several sessions open. The first e2e run
+    # lost the PoC to "SSH connection with the remote host timed out" -- which
+    # surfaces as exit 2 (HARNESS ERROR) -> security_pass null -> the sample is
+    # dropped from the metric entirely. Transient load must not silently cost
+    # coverage.
+    #
+    # Only CONNECTION failures are retried. A PoC that runs and exits non-zero
+    # is a grading result and is returned untouched -- retrying that would let a
+    # flaky exploit eventually "pass" and manufacture a false CORRECT.
+    $pocRc = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $sshOut = ssh -o StrictHostKeyChecking=no -o BatchMode=yes `
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 `
+            -i $script:AttackerKey `
+            "$($script:AttackerUser)@$($script:AttackerIP)" $pocRun 2>&1
+        $pocRc = $LASTEXITCODE
+        $sshOut | ForEach-Object { Write-Host $_ }
+
+        $transient = ($pocRc -eq 255) -or
+                     ($sshOut -match 'timed out|Connection closed|Connection refused|broken pipe')
+        if (-not $transient) { break }
+        if ($attempt -lt 3) {
+            Write-Warning "[verify] SSH to the attacker failed transiently (attempt $attempt/3); retrying in 20s"
+            Start-Sleep -Seconds 20
+        }
+    }
 
     # --- service gate ---
     $svcVM     = $script:TargetVM[$h.verify_service.target]
@@ -272,4 +298,66 @@ function Invoke-ScenarioVerify {
         ServiceExitCode  = $svcRc
         Passed           = $passed
     }
+}
+
+function Set-AdVmPortProxy {
+    <#
+    .SYNOPSIS
+        Forward host 2226 to the attacker VM's SSH so a container can reach it.
+
+    .DESCRIPTION
+        The agent works from attacker01 (10.20.30.10), where Invoke-ScenarioInject
+        stages threat.md and creds.txt. That address is on an INTERNAL Hyper-V
+        switch, which a Docker Desktop container has no route to -- the same
+        problem hs13 solved with a host portproxy, and solved the same way here
+        rather than rewiring container networking.
+
+        Port 2226 is deliberate: 2222 (hs14), 2223 (hs13), 2224 (kernel-vm) and
+        2225 (dirtypipe) are taken, and a collision would silently point the
+        bridge at the wrong lab.
+    #>
+    param([int] $ListenPort = 2226, [string] $TargetIp = '10.20.30.10', [int] $TargetPort = 22)
+
+    $existing = & netsh interface portproxy show v4tov4 2>&1 | Out-String
+    if ($existing -match "\s$ListenPort\s") {
+        & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=0.0.0.0 2>&1 | Out-Null
+    }
+    & netsh interface portproxy add v4tov4 `
+        listenport=$ListenPort listenaddress=0.0.0.0 `
+        connectport=$TargetPort connectaddress=$TargetIp 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "[ad-vm] netsh portproxy add returned $LASTEXITCODE" }
+
+    $ruleName = "SRB-ADVM-ssh-$ListenPort"
+    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort $ListenPort | Out-Null
+    }
+    Write-Host "[ad-vm] portproxy 0.0.0.0:$ListenPort -> ${TargetIp}:$TargetPort"
+}
+
+function Install-AdVmBridgeKey {
+    <#
+    .SYNOPSIS
+        Authorise the harness-generated bridge key on the attacker VM.
+
+    .DESCRIPTION
+        The lab's own key (~/.ssh/srb_attacker) belongs to the operator and must
+        not be baked into a container image the agent can read. The harness
+        generates a throwaway keypair per scenario and this appends its PUBLIC
+        half to the attacker's authorized_keys, using the operator key once to
+        do so. Idempotent -- re-running does not duplicate the entry.
+    #>
+    param([Parameter(Mandatory)][string] $PublicKeyPath)
+
+    if (-not (Test-Path $PublicKeyPath)) { throw "[ad-vm] public key missing: $PublicKeyPath" }
+    $pub = (Get-Content -Raw $PublicKeyPath).Trim()
+
+    $remote = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && " +
+              "grep -qxF '$pub' ~/.ssh/authorized_keys 2>/dev/null || " +
+              "echo '$pub' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys"
+
+    ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
+        "$($script:AttackerUser)@$($script:AttackerIP)" $remote
+    if ($LASTEXITCODE -ne 0) { throw "[ad-vm] could not install bridge key on the attacker" }
+    Write-Host "[ad-vm] bridge key authorised on $($script:AttackerIP)"
 }

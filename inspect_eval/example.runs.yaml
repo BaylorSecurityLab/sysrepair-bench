@@ -392,3 +392,16 @@ presets:
     solvers: *solvers_react
     mode: zero_day
     scenarios: ["hivestorm/scenario-13-ad-dc-win2019"]
+
+  # ── ad-vm end-to-end (Hyper-V AD lab; host must have the 4 VMs) ──────────
+  # Each sample does a FULL lab restore + inject (~2 min) before the agent
+  # starts, so keep max_connections at 1: the lab is a single shared resource
+  # and two concurrent samples would fight over the same four VMs.
+  advm_smoke:
+    <<: *srv_minimax
+    solvers: *solvers_react
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01"]

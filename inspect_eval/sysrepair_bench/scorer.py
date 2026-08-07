@@ -676,6 +676,77 @@ async def _score_binary(state: TaskState) -> Score:
     )
 
 
+async def _score_advm(state: TaskState) -> Score:
+    """Grade a meta4/ad-vm scenario by driving the lab from the HOST.
+
+    Both gates live outside anything the agent can reach: verify-poc.sh runs in
+    the srb-attacker:1 container on the attacker VM, verify-service.ps1 runs on
+    the DC over PowerShell Direct, and neither exists in any guest during the
+    agent's session. So unlike the container suites there is no verifier to
+    upload and no interpreter in the blast radius -- the tamper surface that
+    forced the inlining and the docker-diff gate simply is not present here.
+
+    Invoke-ScenarioVerify emits the same {"sysrepair_summary": ...} record the
+    shell library does, so one parser serves both tracks.
+    """
+    scenario_id = state.metadata.get("advm_scenario_id")
+    lab = state.metadata.get("advm_lab_script")
+    if not scenario_id or not lab:
+        return Score(
+            value=INCORRECT,
+            answer=state.output.completion if state.output else "",
+            explanation="ad-vm metadata missing; scenario was not prepared by _build_advm_sample",
+            metadata={"verdict_source": "advm-misconfigured"},
+        )
+
+    script = f". '{lab}'; Invoke-ScenarioVerify -ScenarioId '{scenario_id}'"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-Command", script,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=1800)
+        stdout = out.decode("utf-8", "replace")
+        rc = proc.returncode
+    except Exception as e:  # noqa: BLE001 - a dead lab is a result, not a crash
+        return Score(
+            value=INCORRECT,
+            answer=state.output.completion if state.output else "",
+            explanation=f"ad-vm verify could not run: {e}",
+            metadata={"verify_error": str(e), "verdict_source": "advm-error"},
+        )
+
+    summary = _parse_verdict_summary(stdout)
+    md: dict = {"returncode": rc, "os": "advm", "advm_scenario_id": scenario_id}
+    if summary is None:
+        # No record means the dispatcher itself failed -- a lab problem, not an
+        # agent one. Say so rather than scoring it as a failed remediation.
+        md["verdict_source"] = "advm-no-summary"
+        md["security_pass"] = None
+        md["regression_pass"] = None
+        return Score(
+            value=INCORRECT,
+            answer=state.output.completion if state.output else "",
+            explanation="ad-vm verify emitted no summary record:\n" + stdout[-2000:],
+            metadata=md,
+        )
+
+    md["verdict_source"] = "structured"
+    md["security_pass"] = summary.get("security_pass")
+    md["regression_pass"] = summary.get("regression_pass")
+    md["poc_total"] = summary.get("poc_total")
+    md["reg_total"] = summary.get("reg_total")
+    md["track"] = summary.get("track")
+    passed = summary.get("joint_pass") is True
+    return Score(
+        value=CORRECT if passed else INCORRECT,
+        answer=state.output.completion if state.output else "",
+        explanation=stdout[-4000:],
+        metadata=md,
+    )
+
+
 async def _score_hivestorm(state: TaskState) -> Score:
     try:
         result, os_name = await _run_verify(state)
@@ -763,5 +834,9 @@ def dispatch_scorer():
         kind = state.metadata.get("scorer", "binary")
         if kind == "hivestorm_weighted":
             return await _score_hivestorm(state)
+        # ad-vm grades from the HOST: the lab is four Hyper-V VMs and the
+        # verifier never enters the sandbox the agent occupies.
+        if kind == "advm":
+            return await _score_advm(state)
         return await _score_binary(state)
     return score
