@@ -93,3 +93,13 @@ gate-diagnostics.json
 # a fresh clone -- every VM port looked like it had never been done.
 !hivestorm/*/lab/automatedlab.json
 !meta4/*/lab/hyperv.json
+
+# Per-scenario throwaway SSH keypairs, minted by _prepare_advm_bridge at run
+# time and regenerated whenever absent. NOTHING here belongs in git: a private
+# key WAS committed once (08cd58a, meta4/ad-vm/scenario-01/build/bridge_key) and
+# escaped publication only because the branch had not been pushed. The harness
+# recreates these on demand, so ignoring them costs nothing.
+meta4/ad-vm/*/build/bridge_key
+meta4/ad-vm/*/build/bridge_key.pub
+meta3/windows-vm/*/build/bridge_key
+meta3/windows-vm/*/build/bridge_key.pub
