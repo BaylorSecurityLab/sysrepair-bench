@@ -629,6 +629,11 @@ def _build_advm_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
             "scorer": "advm",
             "advm_scenario_id": meta["advm_scenario_id"],
             "advm_lab_script": meta["advm_lab_script"],
+            # advm_lab_setup() injects from these at solve time, so the pubkey
+            # has to travel with the SAMPLE -- it is not enough for
+            # _prepare_advm_bridge to return it. A 20-scenario sweep died with
+            # KeyError('advm_bridge_pubkey') on exactly this.
+            "advm_bridge_pubkey": meta["advm_bridge_pubkey"],
             "category": classify_threat(threat) if threat.exists() else None,
         },
         sandbox=SandboxEnvironmentSpec(type="docker", config=compose_cfg),

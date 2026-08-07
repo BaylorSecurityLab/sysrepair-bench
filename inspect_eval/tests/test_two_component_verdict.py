@@ -705,3 +705,46 @@ class TestByteInspectionToolsAreWatched:
         assert parse_docker_diff(
             "A /tmp/od\nA /root/head\nC /etc/nginx/nginx.conf\n"
         ) == []
+
+
+class TestAdvmSampleCarriesWhatSetupNeeds:
+    """advm_lab_setup() injects at SOLVE time, so everything it reads must be
+    on the sample. _prepare_advm_bridge returning a key is not enough --
+    _build_advm_sample copies fields explicitly, and a field left out of that
+    copy fails only once a real lab run reaches the solver. It did: a
+    20-scenario sweep died with KeyError('advm_bridge_pubkey').
+    """
+
+    def test_setup_reads_only_fields_the_sample_provides(self):
+        import ast
+        from pathlib import Path as P
+
+        src = P(__file__).resolve().parents[1] / "sysrepair_bench" / "task.py"
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+
+        needed = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "advm_lab_setup":
+                for sub in ast.walk(node):
+                    # Load context only: the solver also WRITES
+                    # metadata["advm_injected"], which the sample must not
+                    # be required to provide.
+                    if (isinstance(sub, ast.Subscript)
+                            and isinstance(sub.ctx, ast.Load)
+                            and isinstance(sub.slice, ast.Constant)
+                            and isinstance(sub.slice.value, str)
+                            and sub.slice.value.startswith("advm_")):
+                        needed.add(sub.slice.value)
+        assert needed, "advm_lab_setup no longer reads advm_* metadata; update this test"
+
+        provided = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_build_advm_sample":
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Dict):
+                        for k in sub.keys:
+                            if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                                provided.add(k.value)
+
+        missing = needed - provided
+        assert not missing, f"advm_lab_setup reads {missing} but the sample never sets it"
