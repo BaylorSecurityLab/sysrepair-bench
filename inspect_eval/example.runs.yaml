@@ -443,3 +443,14 @@ presets:
     max_connections: 1
     mode: day1
     scenarios: ["meta4/ad-vm/scenario-01", "meta4/ad-vm/scenario-02", "meta4/ad-vm/scenario-03", "meta4/ad-vm/scenario-04", "meta4/ad-vm/scenario-05", "meta4/ad-vm/scenario-06", "meta4/ad-vm/scenario-07", "meta4/ad-vm/scenario-08", "meta4/ad-vm/scenario-09", "meta4/ad-vm/scenario-10", "meta4/ad-vm/scenario-11", "meta4/ad-vm/scenario-12", "meta4/ad-vm/scenario-13", "meta4/ad-vm/scenario-14", "meta4/ad-vm/scenario-15", "meta4/ad-vm/scenario-16", "meta4/ad-vm/scenario-17", "meta4/ad-vm/scenario-18", "meta4/ad-vm/scenario-19", "meta4/ad-vm/scenario-20"]
+
+  # The two scenarios the first valid sweep could not pass, re-run after the
+  # verify-poc traceback fix (16) and the ADWS restart fix (12).
+  advm_oracle_fixed:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-12", "meta4/ad-vm/scenario-16"]

@@ -33,15 +33,41 @@ foreach ($svc in $dependents) {
     }
 }
 
-# Do not hand back a half-started DC: the caller re-gates readiness, but a
-# failure there is reported as "the lab is broken" rather than "this inject
-# left ADWS down", which is the confusion that cost a sweep.
-$stillDown = foreach ($svc in @('NTDS') + $dependents) {
-    $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
-    if ($s -and $s.Status -ne 'Running') { $svc }
+# ORDERING, and this is the part that actually mattered.
+#
+# Every service above reports Running almost immediately, so "all services up"
+# is NOT the same as "the directory is serving". ADWS restarted at that moment
+# binds to a still-initialising NTDS, wedges, and answers every subsequent
+# query with
+#     Get-ADDomain : The operation failed because of a bad parameter.
+# permanently -- it never recovers on its own. The readiness probe calls
+# Get-ADDomain, so the DC stayed "not ready" for the full 300s timeout and the
+# harness failed this scenario three times running.
+#
+# Diagnosed on the live DC: all five services Running, LDAPServerIntegrity=1,
+# AD module importing fine, Get-ADDomain failing -- and a single ADWS restart
+# once NTDS had settled fixed it immediately. So the cure is to wait for the
+# directory to actually answer, and to bounce ADWS if it is the thing stuck.
+$deadline = (Get-Date).AddMinutes(5)
+$ready = $false
+$attempt = 0
+while (-not $ready -and (Get-Date) -lt $deadline) {
+    $attempt++
+    try {
+        Import-Module ActiveDirectory -ErrorAction Stop
+        if ((Get-ADDomain -ErrorAction Stop).DNSRoot -eq 'corp.local') { $ready = $true; break }
+    } catch {
+        # First failure is expected while NTDS finishes; from the second on,
+        # assume ADWS is wedged against the half-initialised directory and
+        # bounce it. Restarting it repeatedly is harmless and idempotent.
+        if ($attempt -ge 2) { Restart-Service ADWS -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 10
+    }
 }
-if ($stillDown) {
-    Write-Warning "[inject-12] services still stopped after restart: $($stillDown -join ', ')"
+
+if (-not $ready) {
+    throw "[inject-12] directory did not return to service after the NTDS restart; Get-ADDomain still failing"
 }
+Write-Host "[inject-12] directory serving again after $attempt attempt(s)"
 
 Write-Host "[inject-12] LDAPServerIntegrity=1 -- LDAP signing NOT required"
