@@ -397,8 +397,30 @@ def _advm_harness(scenario_dir: Path) -> dict | None:
     try:
         cfg = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        _warn_unrunnable(scenario_dir, "harness.json is not valid JSON")
         return None
-    return cfg if cfg.get("mode") == "vm-ad" else None
+    mode = cfg.get("mode")
+    if mode == "vm-ad":
+        return cfg
+    # A manifest we can PARSE but not RUN is reported, never silently dropped.
+    # Returning None without a word is exactly how meta4/ad-vm's 20 scenarios
+    # sat invisible to _discover_scenarios: the files were all present and
+    # correct, nothing errored, and the corpus was quietly 20 short. A mode this
+    # build does not implement yet is a known gap, not an absence.
+    _warn_unrunnable(scenario_dir, f"harness mode {mode!r} is not implemented yet")
+    return None
+
+
+_UNRUNNABLE_SEEN: set[str] = set()
+
+
+def _warn_unrunnable(scenario_dir: Path, why: str) -> None:
+    """Say once, per scenario, why a declared scenario will not appear in a run."""
+    key = scenario_dir.as_posix()
+    if key in _UNRUNNABLE_SEEN:
+        return
+    _UNRUNNABLE_SEEN.add(key)
+    print(f"[sysrepair] skipping {key}: {why}", file=sys.stderr)
 
 
 ADVM_BRIDGE_PORT = 2226
