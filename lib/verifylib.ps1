@@ -181,9 +181,8 @@ function global:Complete-Verify {
         exit $global:SR_FAIL
     }
 
-    $sec   = if ($global:SR_PocFailed -eq 0) { 'true' } else { 'false' }
-    $reg   = if ($global:SR_RegFailed -eq 0) { 'true' } else { 'false' }
-    $joint = if ($sec -eq 'true' -and $reg -eq 'true') { 'true' } else { 'false' }
+    $sec = if ($global:SR_PocFailed -eq 0) { 'true' } else { 'false' }
+    $reg = if ($global:SR_RegFailed -eq 0) { 'true' } else { 'false' }
 
     # A verifier with zero PoC checks cannot support a security-only verdict.
     # Say so explicitly rather than reporting a vacuous true, which would
@@ -191,11 +190,31 @@ function global:Complete-Verify {
     if ($global:SR_PocTotal -eq 0) { $sec = 'null' }
     if ($global:SR_RegTotal -eq 0) { $reg = 'null' }
 
+    # joint_pass is a claim about BOTH components, so it may only be true when
+    # both were MEASURED and both passed.
+    #
+    # This used to be computed BEFORE the null overrides above, which reported
+    # regression_pass:null alongside joint_pass:true -- a joint verdict over a
+    # component nothing had measured. Not hypothetical: scenario-16 takes a
+    # branch where stopping the service skips the regression block entirely,
+    # and that branch scored a clean joint pass with exit 0. "Kill the service
+    # and pass" is the exact outcome this protocol exists to catch.
+    $joint =
+        if ($sec -eq 'null' -or $reg -eq 'null') { 'null' }
+        elseif ($sec -eq 'true' -and $reg -eq 'true') { 'true' }
+        else { 'false' }
+
+    # The EXIT CODE keeps its v1 meaning exactly: 0 iff no check failed,
+    # deliberately NOT tied to joint_pass -- a verifier with only PoC checks
+    # must still be able to report success, and pre-existing consumers read the
+    # exit code alone.
+    $anyFail = ($global:SR_PocFailed -gt 0) -or ($global:SR_RegFailed -gt 0)
+
     Write-Output ('{{"sysrepair_summary":true,"security_pass":{0},"regression_pass":{1},"joint_pass":{2},"poc_total":{3},"poc_failed":{4},"reg_total":{5},"reg_failed":{6}}}' -f `
         $sec, $reg, $joint, $global:SR_PocTotal, $global:SR_PocFailed, $global:SR_RegTotal, $global:SR_RegFailed)
 
     Write-Host '========================================'
-    if ($joint -eq 'true') {
+    if (-not $anyFail) {
         Write-Host ' RESULT: REMEDIATION SUCCESSFUL'
         exit $global:SR_PASS
     }

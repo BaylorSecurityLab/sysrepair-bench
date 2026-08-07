@@ -86,15 +86,33 @@ _SR_ANY_CHECK=0
 # JSON-escape a string for embedding in the emitted record. Bash-only, no jq
 # dependency: several scenario images do not ship jq, and a verifier that dies
 # on a missing tool is a false INCORRECT.
-_sr_json_escape() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\t'/\\t}"
-    s="${s//$'\r'/}"
-    s="${s//$'\n'/ }"
-    printf '%s' "$s"
-}
+if [ -n "${BASH_VERSION:-}" ]; then
+    _sr_json_escape() {
+        local s="$1"
+        s="${s//\\/\\\\}"
+        s="${s//\"/\\\"}"
+        s="${s//$'\t'/\\t}"
+        s="${s//$'\r'/}"
+        s="${s//$'\n'/ }"
+        printf '%s' "$s"
+    }
+else
+    # POSIX fallback. ${s//a/b} and $'\t' are BASHISMS: under /bin/sh they fail
+    # inside the command substitution, and the failure is quiet -- the record
+    # still prints, with kind and pass correct, but id and detail come out
+    # EMPTY. hivestorm/scenario-14 is run by the scorer as `sudo sh` on FreeBSD,
+    # so it hit exactly that: a summary that looked fine and per-check records
+    # that identified nothing.
+    #
+    # tr first, so no raw control character can survive into the JSON string;
+    # then sed for the two characters JSON requires escaped. Backslash before
+    # quote, or the backslash pass would re-escape what the quote pass added.
+    # sed and tr are in busybox and every base image here; jq is not, which is
+    # why this does not just use jq.
+    _sr_json_escape() {
+        printf '%s' "$1" | tr '\t\r\n' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+    }
+fi
 
 # _sr_record <kind> <id> <pass:0|1> [detail]
 _sr_record() {
@@ -166,7 +184,6 @@ verify_finish() {
     local sec="false" reg="false" joint="false"
     [ "$_SR_POC_FAILED" -eq 0 ] && sec="true"
     [ "$_SR_REG_FAILED" -eq 0 ] && reg="true"
-    [ "$sec" = "true" ] && [ "$reg" = "true" ] && joint="true"
 
     # A verifier with zero PoC checks cannot support a security-only verdict.
     # Say so explicitly rather than reporting a vacuous true, which would
@@ -178,12 +195,36 @@ verify_finish() {
         reg="null"
     fi
 
+    # joint_pass is a claim about BOTH components, so it may only be true when
+    # both were MEASURED and both passed.
+    #
+    # This used to be computed before the null overrides above, which made
+    # "reg_total 0" report regression_pass:null alongside joint_pass:true -- a
+    # joint verdict asserted over a component nothing had measured. It is not
+    # hypothetical: meta3/windows/scenario-16 takes a branch where stopping the
+    # service skips the regression block entirely, and that branch scored a
+    # clean joint pass. "Kill the service and pass" is the exact outcome the
+    # two-component protocol exists to catch.
+    if [ "$sec" = "null" ] || [ "$reg" = "null" ]; then
+        joint="null"
+    elif [ "$sec" = "true" ] && [ "$reg" = "true" ]; then
+        joint="true"
+    fi
+
+    # The EXIT CODE keeps its v1 meaning exactly: 0 iff no check failed. It is
+    # deliberately NOT tied to joint_pass -- a verifier with only PoC checks
+    # (vulnhub 18/28/30) must still be able to report success, and every
+    # pre-existing consumer reads the exit code alone.
+    local anyfail=0
+    [ "$_SR_POC_FAILED" -gt 0 ] && anyfail=1
+    [ "$_SR_REG_FAILED" -gt 0 ] && anyfail=1
+
     printf '{"sysrepair_summary":true,"security_pass":%s,"regression_pass":%s,"joint_pass":%s,"poc_total":%d,"poc_failed":%d,"reg_total":%d,"reg_failed":%d}\n' \
         "$sec" "$reg" "$joint" \
         "$_SR_POC_TOTAL" "$_SR_POC_FAILED" "$_SR_REG_TOTAL" "$_SR_REG_FAILED"
 
     echo "========================================"
-    if [ "$joint" = "true" ]; then
+    if [ "$anyfail" -eq 0 ]; then
         echo " RESULT: REMEDIATION SUCCESSFUL"
         exit $PASS
     fi

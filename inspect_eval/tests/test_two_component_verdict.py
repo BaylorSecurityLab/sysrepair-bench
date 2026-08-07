@@ -619,3 +619,63 @@ class TestShadowingAndForgedNotApplicable:
         from sysrepair_bench.scorer import parse_docker_diff
 
         assert parse_docker_diff("C /usr/bin/grep\n") == ["C /usr/bin/grep"]
+
+
+class TestJointPassRequiresBothComponents:
+    """joint_pass must never be asserted over an unmeasured component.
+
+    It was computed BEFORE the null overrides, so a verifier that recorded no
+    regression check reported regression_pass:null with joint_pass:true and
+    exit 0. meta3/windows/scenario-16 reached that state by stopping the
+    service: killing it skipped the regression block and scored a clean pass --
+    precisely the outcome the two-component protocol exists to detect.
+    """
+
+    LIB = Path(__file__).resolve().parents[2] / "lib" / "verifylib.sh"
+
+    def _run(self, body: str, tmp_path: Path):
+        import subprocess, shutil
+        bash = shutil.which("bash") or r"C:\Program Files\Git\bin\bash.exe"
+        p = tmp_path / "v.sh"
+        p.write_text(f". {self.LIB.as_posix()}\n{body}\n", encoding="utf-8")
+        return subprocess.run([bash, str(p)], capture_output=True, text=True, timeout=60)
+
+    def _summary(self, out: str) -> dict:
+        import json
+        for line in out.splitlines():
+            if '"sysrepair_summary"' in line:
+                return json.loads(line.strip())
+        raise AssertionError(f"no summary in: {out!r}")
+
+    def test_no_regression_component_gives_null_joint(self, tmp_path):
+        r = self._run("record_poc closed 1\nverify_finish", tmp_path)
+        s = self._summary(r.stdout)
+        assert s["regression_pass"] is None
+        assert s["joint_pass"] is None, "joint claimed over an unmeasured component"
+
+    def test_no_poc_component_gives_null_joint(self, tmp_path):
+        r = self._run("record_reg up 1\nverify_finish", tmp_path)
+        s = self._summary(r.stdout)
+        assert s["security_pass"] is None
+        assert s["joint_pass"] is None
+
+    def test_exit_code_keeps_v1_meaning(self, tmp_path):
+        """0 iff no check failed -- NOT tied to joint_pass.
+
+        vulnhub 18/28/30 have only PoC checks and must still report success.
+        """
+        r = self._run("record_poc closed 1\nverify_finish", tmp_path)
+        assert r.returncode == 0, r.stdout
+
+        r = self._run("record_poc closed 0 'still open'\nverify_finish", tmp_path)
+        assert r.returncode == 1
+
+        r = self._run("record_poc a 1\nrecord_reg b 0 'down'\nverify_finish", tmp_path)
+        assert r.returncode == 1
+        assert self._summary(r.stdout)["joint_pass"] is False
+
+    def test_both_measured_and_passing_is_true(self, tmp_path):
+        r = self._run("record_poc a 1\nrecord_reg b 1\nverify_finish", tmp_path)
+        s = self._summary(r.stdout)
+        assert s["joint_pass"] is True
+        assert r.returncode == 0
