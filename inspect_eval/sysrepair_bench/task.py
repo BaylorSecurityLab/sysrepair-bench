@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
-from inspect_ai.solver import Solver
+from inspect_ai.solver import Solver, TaskState, solver
 from inspect_ai.util import SandboxEnvironmentSpec
 from inspect_ai.util._sandbox.compose import ComposeBuild
 
@@ -427,22 +428,25 @@ ADVM_BRIDGE_PORT = 2226
 
 
 def _prepare_advm_bridge(scenario_dir: Path) -> dict[str, str]:
-    """Restore the AD lab, inject the scenario, and open a path for the bridge.
+    """Bridge metadata for an ad-vm sample. Mints a key; MUTATES NOTHING.
 
-    Four steps, all on the host because Hyper-V and AutomatedLab are
-    PowerShell-native:
+    THE LAB IS NOT TOUCHED HERE, and that separation is load-bearing.
 
-      1. mint a THROWAWAY keypair per scenario. The operator's own
-         ~/.ssh/srb_attacker is never handed to the agent.
-      2. Invoke-ScenarioInject -- restores all four VMs to baseline, injects the
-         vulnerability, and stages threat.md + creds.txt on the attacker. No
-         grader artefact exists in any guest during the agent's session.
-      3. Set-AdVmPortProxy -- the lab is on an INTERNAL Hyper-V switch with no
-         container route; the host forwards 2226 to 10.20.30.10:22.
-      4. Install-AdVmBridgeKey -- authorise the throwaway public key.
+    This used to run Invoke-ScenarioInject -- a full four-VM restore plus the
+    vulnerability injection -- and it is called from _build_advm_sample, which
+    inspect runs for EVERY sample before solving ANY of them. With one scenario
+    that is invisible. With twenty, scenario-02's restore wipes scenario-01's
+    inject, and by the time the first agent starts only the LAST scenario's
+    state exists: nineteen of twenty samples then get graded against a lab
+    holding someone else's vulnerability. The eval completes and reports
+    numbers, which is what makes it dangerous.
 
-    Fails loudly. A half-prepared lab produces SSH errors inside the agent's
-    transcript, which read as scenario bugs rather than harness ones.
+    Injection now happens in advm_lab_setup(), per sample, immediately before
+    the agent runs.
+
+    The keypair is minted here on purpose: it is a throwaway per scenario, the
+    operator's own ~/.ssh/srb_attacker is never handed to the agent, and
+    generating it early costs nothing and touches no VM.
     """
     scenario_id = scenario_dir.name.replace("scenario-", "")
     lab = scenario_dir.parent / "lab" / "Invoke-Scenario.ps1"
@@ -461,30 +465,113 @@ def _prepare_advm_bridge(scenario_dir: Path) -> dict[str, str]:
             check=True,
         )
 
-    script = (
-        f". '{lab.resolve()}'; "
-        f"Invoke-ScenarioInject -ScenarioId '{scenario_id}'; "
-        f"Set-AdVmPortProxy; "
-        f"Install-AdVmBridgeKey -PublicKeyPath '{pub.resolve()}'"
-    )
-    print(f"[ad-vm] preparing scenario-{scenario_id} (full lab restore, ~2 min)…")
-    proc = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        capture_output=True, text=True, timeout=1800,
-    )
-    if proc.returncode != 0:
-        raise SystemExit(
-            f"[ad-vm] scenario-{scenario_id} preparation failed "
-            f"(exit {proc.returncode}).\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
-        )
     return {
         "advm_scenario_id": scenario_id,
         "advm_lab_script": str(lab.resolve()),
+        "advm_bridge_pubkey": str(pub.resolve()),
         "bridge_key": str(priv.resolve()),
         "vagrant_port": str(ADVM_BRIDGE_PORT),
         "bridge_target_host": "host.docker.internal",
         "vagrant_user": "vagrant",
     }
+
+
+def advm_inject(scenario_id: str, lab: str, pubkey: str) -> None:
+    """Restore the AD lab and inject one scenario. Blocking, ~2-5 minutes.
+
+      1. Invoke-ScenarioInject -- restores all four VMs to baseline, injects the
+         vulnerability, and stages threat.md + creds.txt on the attacker. No
+         grader artefact exists in any guest during the agent's session.
+      2. Set-AdVmPortProxy -- the lab is on an INTERNAL Hyper-V switch with no
+         container route; the host forwards 2226 to 10.20.30.10:22.
+      3. Install-AdVmBridgeKey -- authorise the throwaway public key.
+
+    Fails loudly. A half-prepared lab produces SSH errors inside the agent's
+    transcript, which read as scenario bugs rather than harness ones.
+    """
+    script = (
+        f". '{lab}'; "
+        f"Invoke-ScenarioInject -ScenarioId '{scenario_id}'; "
+        f"Set-AdVmPortProxy; "
+        f"Install-AdVmBridgeKey -PublicKeyPath '{pubkey}'"
+    )
+    print(f"[ad-vm] preparing scenario-{scenario_id} (full lab restore, ~2 min)...")
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"[ad-vm] scenario-{scenario_id} preparation failed "
+            f"(exit {proc.returncode}).\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+        )
+
+
+def _advm_serial_guard(samples: list[Sample]) -> None:
+    """Refuse to start an ad-vm run that could interleave samples.
+
+    There is one physical AD lab. inspect's per-sample concurrency comes from
+    --max-samples, which defaults to max_connections, so an ad-vm run left on
+    the default would restore the lab out from under a live agent. The failure
+    is silent: every sample completes and the eval reports a number.
+
+    Checked here rather than trusted to a preset, because the cost of getting it
+    wrong is a plausible-looking result table built on samples that were graded
+    against another scenario's lab.
+    """
+    if not any(s.metadata and s.metadata.get("scorer") == "advm" for s in samples):
+        return
+
+    val = os.environ.get("INSPECT_MAX_SAMPLES") or os.environ.get("INSPECT_EVAL_MAX_SAMPLES")
+    if val is None:
+        # Nothing set it; make it explicit rather than inheriting the default.
+        os.environ["INSPECT_MAX_SAMPLES"] = "1"
+        print("[ad-vm] forcing max_samples=1 (single physical lab)", file=sys.stderr)
+        return
+    try:
+        if int(val) != 1:
+            raise SystemExit(
+                f"[ad-vm] refusing to run: max_samples={val}. There is one AD lab, "
+                f"so concurrent samples restore it under each other and the results "
+                f"are silently wrong. Re-run with max_samples=1."
+            )
+    except ValueError:
+        raise SystemExit(f"[ad-vm] could not parse max_samples={val!r}")
+
+
+_ADVM_LAB_LOCK = asyncio.Lock()
+
+
+@solver
+def advm_lab_setup() -> Solver:
+    """Restore + inject the AD lab for THIS sample, immediately before it runs.
+
+    A no-op for every non-ad-vm sample, so it can sit unconditionally at the
+    head of the chain.
+
+    The lock is not belt-and-braces: there is exactly ONE physical lab, four
+    Hyper-V VMs. Two ad-vm samples in flight at once means the second one's
+    restore tears the first agent's box out from under it mid-session. Holding
+    the lock only across the inject would not be enough either -- the agent then
+    works on the lab, and a second sample injecting during that window is the
+    same bug with a smaller race. So the caller must ALSO keep ad-vm runs to one
+    sample at a time; see _advm_serial_guard, which refuses to start otherwise.
+    """
+    async def solve(state: TaskState, generate):
+        if state.metadata.get("scorer") != "advm":
+            return state
+        scenario_id = state.metadata["advm_scenario_id"]
+        async with _ADVM_LAB_LOCK:
+            await asyncio.to_thread(
+                advm_inject,
+                scenario_id,
+                state.metadata["advm_lab_script"],
+                state.metadata["advm_bridge_pubkey"],
+            )
+        state.metadata["advm_injected"] = True
+        return state
+
+    return solve
 
 
 def _build_advm_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
@@ -1087,17 +1174,23 @@ def sysrepair_bench(
     if not scenario_dirs:
         raise ValueError("No scenarios matched the given filters.")
     samples = [_build_sample(d, mode=mode) for d in scenario_dirs]
+    _advm_serial_guard(samples)
 
     solver_msg_limit = message_limit if message_limit > 0 else 1_000_000
     return Task(
         dataset=MemoryDataset(samples=samples, name="sysrepair-bench"),
-        solver=get_solver(
-            solver,
-            message_limit=solver_msg_limit,
-            max_attempts=max_attempts,
-            bash_timeout=bash_timeout,
-            verify_timeout=verify_timeout,
-        ),
+        solver=[
+            # Injects the AD lab for this sample; no-op for everything else.
+            # Must precede the agent -- see advm_lab_setup.
+            advm_lab_setup(),
+            get_solver(
+                solver,
+                message_limit=solver_msg_limit,
+                max_attempts=max_attempts,
+                bash_timeout=bash_timeout,
+                verify_timeout=verify_timeout,
+            ),
+        ],
         scorer=dispatch_scorer(),
         message_limit=message_limit or None,  # 0 = unlimited
         time_limit=time_limit or None,        # 0 = unlimited

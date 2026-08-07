@@ -679,3 +679,29 @@ class TestJointPassRequiresBothComponents:
         s = self._summary(r.stdout)
         assert s["joint_pass"] is True
         assert r.returncode == 0
+
+
+class TestByteInspectionToolsAreWatched:
+    """Shadowing od/head defeated the in-verifier ELF integrity probe.
+
+    A review of the kernel verifiers showed the probe reads a binary's magic
+    with od/head -- both freely PATH-shadowable and neither previously watched.
+    Blank the magic and every tool is judged 'not ELF, not judged' = clean. The
+    in-container arms race is unwinnable against root, so the host-side check
+    has to cover the tools the in-container check depends on.
+    """
+
+    def test_shadowed_byte_tools_detected(self):
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        for p in ("/usr/local/bin/od", "/usr/local/bin/head",
+                  "/usr/local/bin/tr", "/usr/local/bin/touch",
+                  "/usr/local/bin/dd", "/usr/local/bin/base64"):
+            assert parse_docker_diff(f"A {p}\n") == [f"A {p}"], p
+
+    def test_still_quiet_on_ordinary_work(self):
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        assert parse_docker_diff(
+            "A /tmp/od\nA /root/head\nC /etc/nginx/nginx.conf\n"
+        ) == []

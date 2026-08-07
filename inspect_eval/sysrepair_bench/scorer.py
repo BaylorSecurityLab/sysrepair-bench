@@ -549,6 +549,16 @@ _GRADING_CRITICAL_NAMES = frozenset({
     "find", "id", "getent", "systemctl", "service", "ps", "uname", "python",
     "python3", "perl", "setpriv", "unshare", "nsenter", "lsmod", "modprobe",
     "rmmod", "modinfo", "sysctl", "openssl", "readlink", "test", "[",
+    # The byte-inspection and metadata tools. A review of the kernel verifiers
+    # showed why these belong here: the in-verifier integrity probe reads a
+    # binary's ELF magic with `od`/`head`, so shadowing `od` blanks the magic
+    # and every subsequent tool is judged clean -- and `touch` alone defeats an
+    # mtime tripwire. Any check that reads bytes or timestamps is only as
+    # trustworthy as the tool it reads them with.
+    "od", "tr", "xxd", "hexdump", "dd", "base64", "touch", "mount", "umount",
+    "cmp", "diff", "sha256sum", "md5sum", "sort", "uniq", "wc", "tee", "env",
+    "expr", "dirname", "basename", "realpath", "file", "strings", "chattr",
+    "lsattr",
 })
 
 # Directories whose contents can win a PATH lookup. /usr/local/* first: that is
