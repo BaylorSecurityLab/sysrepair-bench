@@ -405,3 +405,28 @@ presets:
     max_connections: 1
     mode: day1
     scenarios: ["meta4/ad-vm/scenario-01"]
+
+  # Oracle ceiling for the AD track. Applies reference-fix.ps1 to corp-dc01 over
+  # PowerShell Direct, then grades -- so the security=true path is proven THROUGH
+  # the harness, not only at the lab layer. mockllm because the oracle agent is
+  # scripted and makes no model calls.
+  advm_oracle:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01"]
+
+  # Negative control for the AD track. An oracle pass only means something if
+  # doing NOTHING fails -- otherwise the scenario grades itself. Expect
+  # security_only_accuracy 0.0 here against 1.0 from advm_oracle.
+  advm_noop:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01"]

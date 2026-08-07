@@ -302,6 +302,46 @@ def oracle_agent(solutions_root: str = "") -> Solver:
 
         state.metadata["adversarial_agent"] = "oracle"
         repo = Path(__file__).resolve().parents[2]
+
+        # ad-vm keeps its reference fix IN TREE as reference-fix.ps1 and applies
+        # it to the domain controller over PowerShell Direct -- there is no
+        # in-sandbox script to run, and docs/.../solutions has no meta4/ad-vm
+        # directory. Handled before the shell path so the oracle ceiling can be
+        # measured for those 20 scenarios at all.
+        if state.metadata.get("scorer") == "advm":
+            # ad-vm keeps its reference fix IN TREE and applies it over
+            # PowerShell Direct, so there is no in-sandbox script to run and
+            # docs/.../solutions has no meta4/ad-vm directory. Delegating to the
+            # lab script rather than driving Invoke-Command from here reuses its
+            # credential, its harness-target resolution (the fix belongs on
+            # inject.target -- CA for 5 scenarios, workstation for 2, not always
+            # the DC) and its post-fix readiness gate.
+            import asyncio as _asyncio
+
+            scenario_id = state.metadata.get("advm_scenario_id")
+            lab = state.metadata.get("advm_lab_script")
+            if not scenario_id or not lab:
+                state.metadata["oracle_status"] = "advm-misconfigured"
+                state.completed = True
+                return state
+
+            script = f". '{lab}'; Invoke-ScenarioFix -ScenarioId '{scenario_id}'"
+            proc = await _asyncio.create_subprocess_exec(
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-Command", script,
+                stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.STDOUT,
+            )
+            out, _ = await _asyncio.wait_for(proc.communicate(), timeout=1800)
+            state.metadata["oracle_status"] = (
+                "applied" if proc.returncode == 0 else f"failed rc={proc.returncode}"
+            )
+            state.metadata["adversarial_log"] = [{
+                "step": f"Invoke-ScenarioFix -ScenarioId {scenario_id}",
+                "output": out.decode("utf-8", "replace")[-4000:],
+            }]
+            state.completed = True
+            return state
+
         root = Path(solutions_root) if solutions_root else (
             repo / "docs" / "scenario-validation" / "solutions"
         )

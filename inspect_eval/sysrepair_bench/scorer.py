@@ -47,9 +47,10 @@ NOT_APPLICABLE_EXIT = 42
 # Repo-root lib/verifylib.sh — the two-component check library, uploaded next to
 # verify.sh on every Linux verify run. See that file's header for the protocol.
 _VERIFYLIB = Path(__file__).resolve().parents[2] / "lib" / "verifylib.sh"
+_VERIFYLIB_PS1 = Path(__file__).resolve().parents[2] / "lib" / "verifylib.ps1"
 
 
-def _inline_verifylib(verify_src: str) -> str:
+def _inline_verifylib(verify_src: str, lang: str = "sh") -> str:
     """Prepend the check library into the verifier itself, for verifiers that use it.
 
     SECURITY, not convenience. The earlier design uploaded the library to
@@ -65,27 +66,41 @@ def _inline_verifylib(verify_src: str) -> str:
     there is no separate artifact to poison, because the library and the
     verifier arrive as a single blob at a single path.
 
-    Migrated verifiers guard their source line on _SYSREPAIR_VERIFYLIB_LOADED,
-    which this text sets, so the guarded line becomes a no-op here and the
-    agent-writable /tmp/verifylib.sh is never opened. Run standalone -- under
-    validate.py, or `docker run ... bash /verify.sh` -- the guard is unset and
-    the verifier sources the real library from disk as before.
+    Migrated verifiers guard their source line on _SYSREPAIR_VERIFYLIB_LOADED
+    (shell) or $global:SysRepairVerifyLibLoaded (PowerShell), which this text
+    sets, so the guarded line becomes a no-op here and the agent-writable
+    /tmp/verifylib.sh -- or C:\\verifylib.ps1 -- is never opened. Run standalone
+    -- under validate.py, or `docker run ... bash /verify.sh` -- the guard is
+    unset and the verifier loads the real library from disk as before.
 
-    Only verifiers that actually reference the library are touched; the 253
-    unmigrated ones are returned byte-identical.
+    ``lang`` selects which library to inline and is driven by the verifier's
+    extension at the call site, not by os_name: a Windows VM scenario whose
+    grader is a shell script would otherwise be handed the wrong library.
+
+    Verifiers that do not reference the library are returned byte-identical.
     """
     if "verifylib" not in verify_src:
         return verify_src
-    if not _VERIFYLIB.exists():
+
+    # PowerShell verifiers get the PowerShell library. Picking by content rather
+    # than by an os_name argument keeps every caller unchanged and means a .ps1
+    # can never be handed the shell library (which would define nothing and make
+    # every check a NameError the agent gets blamed for).
+    if lang == "powershell":
+        lib_path, src_name = _VERIFYLIB_PS1, "lib/verifylib.ps1"
+    else:
+        lib_path, src_name = _VERIFYLIB, "lib/verifylib.sh"
+
+    if not lib_path.exists():
         # Fail closed and loudly. Silently returning the un-inlined source would
         # send a verifier to a container where record_poc is undefined, and the
         # resulting errors would read as the agent's failure, not ours.
         raise RuntimeError(
-            f"verifier requires the check library but {_VERIFYLIB} is missing"
+            f"verifier requires the check library but {lib_path} is missing"
         )
-    lib = _VERIFYLIB.read_text(encoding="utf-8")
+    lib = lib_path.read_text(encoding="utf-8")
     return (
-        "# --- inlined by scorer.py from lib/verifylib.sh (do not edit here) ---\n"
+        f"# --- inlined by scorer.py from {src_name} (do not edit here) ---\n"
         f"{lib}\n"
         "# --- end inlined library ---\n"
         f"{verify_src}"
@@ -348,7 +363,9 @@ async def _run_verify(state: TaskState):
     )
     verify_src = (scenario_path / verify_name).read_text(encoding="utf-8")
     if verify_name.endswith(".sh"):
-        verify_src = _inline_verifylib(verify_src)
+        verify_src = _inline_verifylib(verify_src, "sh")
+    elif verify_name.endswith(".ps1"):
+        verify_src = _inline_verifylib(verify_src, "powershell")
 
     sb = sandbox()
     if os_name == "freebsd":

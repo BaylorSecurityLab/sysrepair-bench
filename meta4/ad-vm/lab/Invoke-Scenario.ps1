@@ -166,6 +166,58 @@ function Invoke-ScenarioInject {
     Write-Host '========================================================================'
 }
 
+function Invoke-ScenarioFix {
+    <#
+    .SYNOPSIS
+    Applies the scenario's reference remediation. Oracle ceiling only.
+
+    .DESCRIPTION
+        Stands in for a perfect agent: run this between Invoke-ScenarioInject
+        and Invoke-ScenarioVerify and the scenario must grade security=true,
+        service=true. Anything less is a bug in the scenario, not in the model
+        under test, so this is what establishes that each ad-vm scenario is
+        solvable at all.
+
+        The fix lands on inject.target, NOT on the domain controller. Five
+        scenarios inject on the CA and two on the workstation; sending every
+        remediation to corp-dc01 would silently no-op on eight of twenty and
+        report a false ceiling.
+
+        Deliberately does NOT call Restore-LabBaseline -- that would roll back
+        the inject and leave a clean box that trivially "passes".
+
+        reference-fix-norestart.ps1 is a separate gate-4 fixture (write config,
+        skip the reload) and is never what the oracle runs.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $ScenarioId)
+
+    $h   = Test-ScenarioHarness -ScenarioId $ScenarioId
+    $dir = Join-Path $script:ScenarioRoot "scenario-$ScenarioId"
+
+    $fixScript = Join-Path $dir 'reference-fix.ps1'
+    if (-not (Test-Path $fixScript)) {
+        throw "Invoke-ScenarioFix: scenario-$ScenarioId has no reference-fix.ps1"
+    }
+
+    $fixVM = $script:TargetVM[$h.inject.target]
+    Write-Host "[scenario] applying reference fix for $ScenarioId on $fixVM"
+    $result = Invoke-Command -VMName $fixVM -Credential $script:LabCred `
+        -FilePath $fixScript -ErrorAction Stop
+    $result | ForEach-Object { Write-Host "  $_" }
+
+    # Some remediations restart the service they harden. Re-gate for the same
+    # reason inject does: a PoC that fails against a half-started service grades
+    # as remediated, which would inflate the ceiling rather than expose it.
+    Write-Host '[scenario] re-checking readiness after fix'
+    $post = Wait-LabMachineReady -Machine $h.inject.target -TimeoutSeconds 300
+    if (-not $post.Ready) {
+        throw "Invoke-ScenarioFix: $fixVM did not return to ready after the fix (failed probe: $($post.FailedProbe))"
+    }
+
+    Write-Host "[scenario] reference fix applied for $ScenarioId"
+}
+
 function Invoke-ScenarioVerify {
     <#
     .SYNOPSIS
