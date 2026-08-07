@@ -55,6 +55,63 @@ _anchors:
       request_limit: 15000
       request_window: 18000
 
+    # ── ICLR panel ──────────────────────────────────────────────────────────
+    # CONFIRM BEFORE RUNNING: every base_url below is a placeholder for the
+    # local serving layout. Ports assume one vLLM/SGLang instance per model on
+    # the same host; change them to match reality. The api_key names are the
+    # env vars the loader expands, not the keys themselves.
+    #
+    # Record for the paper, per §2(d): exact revision/commit hash, quantization,
+    # inference stack + version, tensor-parallel config, temperature, top-p,
+    # max context, max output tokens, tool-call format. `runs.yaml` is the only
+    # place these are captured, so keep it accurate.
+
+    minimax_m3: &srv_minimax_m3
+      model: openai/MiniMax-M3
+      base_url: https://api.minimax.io/v1
+      api_key: ${MINIMAX_API_KEY}
+      request_limit: 15000
+      request_window: 18000
+
+    kimi_k3: &srv_kimi_k3
+      model: openai/moonshot/Kimi-K3
+      base_url: ${KIMI_BASE_URL}
+      api_key: ${KIMI_API_KEY}
+
+    deepseek_v4_pro: &srv_deepseek_pro
+      model: openai/deepseek/DeepSeek-V4-Pro
+      base_url: ${DEEPSEEK_BASE_URL}
+      api_key: ${DEEPSEEK_API_KEY}
+
+    deepseek_v4_flash: &srv_deepseek_flash
+      model: openai/deepseek/DeepSeek-V4-Flash
+      base_url: ${DEEPSEEK_BASE_URL}
+      api_key: ${DEEPSEEK_API_KEY}
+
+    # ── Panel B: within-family scale ladder ─────────────────────────────────
+    # This panel is what licenses every scaling sentence in the paper. Same
+    # family, same post-training recipe, same tool-call format -- so a
+    # difference across rows is scale, not four labs' training data.
+    qwen35_4b: &srv_qwen_4b
+      model: openai/Qwen/Qwen3.5-4B
+      base_url: http://10.100.201.24:8001/v1
+      api_key: vllm
+
+    qwen35_9b: &srv_qwen_9b
+      model: openai/Qwen/Qwen3.5-9B
+      base_url: http://10.100.201.24:8000/v1
+      api_key: vllm
+
+    qwen35_35b_a3b: &srv_qwen_35b
+      model: openai/Qwen/Qwen3.5-35B-A3B
+      base_url: http://10.100.201.24:8002/v1
+      api_key: vllm
+
+    qwen35_397b_a17b: &srv_qwen_397b
+      model: openai/Qwen/Qwen3.5-397B-A17B
+      base_url: http://10.100.201.24:8003/v1
+      api_key: vllm
+
   scope:
     linux_benchmarks: &scope_linux
       benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
@@ -168,6 +225,145 @@ presets:
     epochs: 1
     max_connections: 5
     modes: ["day1", "zero_day"]
+
+  # ── ICLR smoke run (DO THIS FIRST) ───────────────────────────────────────
+  # A stratified slice across every scoring path, so the instrumentation is
+  # exercised end-to-end before a multi-day grid commits to it. The gate runner
+  # is NOT the scorer -- 8 of 10 harness bugs this cycle were "my runner behaved
+  # differently from production", so the two-component metrics must be seen
+  # coming out of a real eval, not just out of unit tests.
+  #
+  # Check in the log: security_only_accuracy, collateral_damage_rate and
+  # two_component_coverage are PRESENT and non-degenerate; coverage should be
+  # ~1.0 here since every scenario listed is migrated.
+  iclr_smoke:
+    <<: *srv_minimax_m3
+    solvers: *solvers_react
+    seeds: 1
+    epochs: 1
+    max_connections: 4
+    mode: day1
+    scenarios:
+      # CDR-eligible, config-based PoC (killing the service earns nothing)
+      - "ccdc/scenario-01"
+      # CDR-eligible, behavioural PoC
+      - "ccdc/scenario-40"
+      # capability-gated (.run-opts NET_ADMIN)
+      - "ccdc/scenario-29"
+      # no .preserve-cmd -> structurally no CDR signal
+      - "vulnhub/scenario-18"
+      # parent-context build (COPY shared/...)
+      - "meta3/ubuntu/scenario-05"
+      # alpine, no bash -> exercises the sh fallback
+      - "meta4/scenario-37"
+      # unix-socket-only daemon
+      - "meta4/scenario-24"
+      # k3s: privileged + cgroupns + boot-script wait
+      - "meta4/scenario-77"
+      # Flask sim, the most common meta4 shape
+      - "meta4/scenario-13"
+      # hivestorm partial-credit scorer (different scorer path entirely)
+      - "hivestorm/scenario-01-debian9"
+
+  # ── ICLR Panel A: capability frontier (cross-lab leaderboard) ────────────
+  panel_a_minimax:
+    <<: [*srv_minimax_m3, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  panel_a_kimi:
+    <<: [*srv_kimi_k3, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  panel_a_deepseek_pro:
+    <<: [*srv_deepseek_pro, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  panel_a_deepseek_flash:
+    <<: [*srv_deepseek_flash, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  # ── ICLR Panel B: Qwen3.5 scale ladder ──────────────────────────────────
+  # seeds: 10 so pass@5 has real error bars (§5.3). Requires temperature > 0 --
+  # with greedy decoding every seed is identical and pass@5 collapses to pass@1.
+  panel_b_qwen_4b:
+    <<: [*srv_qwen_4b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 10
+    modes: ["day1", "zero_day"]
+
+  panel_b_qwen_9b:
+    <<: [*srv_qwen_9b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 10
+    modes: ["day1", "zero_day"]
+
+  panel_b_qwen_35b:
+    <<: [*srv_qwen_35b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 8
+    modes: ["day1", "zero_day"]
+
+  panel_b_qwen_397b:
+    <<: [*srv_qwen_397b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 4
+    modes: ["day1", "zero_day"]
+
+  # ── Benchmark-validity audit (§ oracle ceiling + verifier gaming) ────────
+  # These five agents are SCRIPTED: they issue fixed commands and never call a
+  # model, so `mockllm/model` satisfies inspect's required model argument
+  # without any provider, API key, or token spend. seeds:1 because they are
+  # deterministic -- repeating them measures nothing.
+  #
+  # Read the four numbers together. They are the benchmark's validity claim:
+  #
+  #   no-op            expect 0%    anything above it = a scenario that passes
+  #                                 on an untouched box (broken baseline)
+  #   service-killer   expect 0%    anything above it = a scenario scoring the
+  #                                 vulnerability without penalising the damage
+  #   probe-blocker    expect 0%    anything above it = a PoC check too narrow,
+  #                                 grading reachability instead of remediation
+  #   verifier-tamperer expect 0%   anything above it = the grader is corruptible
+  #   oracle           expect ~100% anything below it = a broken scenario, and
+  #                                 you want to find those before a reviewer does
+  #
+  # Report every nonzero attacker cell in the paper even after fixing it.
+  # Finding your own holes reads far better than having them found for you.
+  audit_oracle:
+    <<: *scope_linux
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 8
+
+  audit_gaming:
+    <<: *scope_linux
+    model: mockllm/model
+    solvers: ["noop", "service-killer", "probe-blocker", "verifier-tamperer"]
+    seeds: 1
+    epochs: 1
+    max_connections: 8
 
   # ── Vagrant-VM presets (no fixed base_url — read from .env) ──────────────
   # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host.

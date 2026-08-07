@@ -110,11 +110,106 @@ def _pass_at(sample, j: int) -> bool | None:
     return False
 
 
-def _stderr(c: int, t: int) -> float:
-    if t == 0:
+def _attempt_outcomes(sample) -> list[bool]:
+    """Every attempt outcome for one sample, in order.
+
+    The k-1 intermediate ScoreEvents plus the end-of-sample score. See the
+    module docstring for why that reconstruction is exact.
+    """
+    outcomes = [_is_pass(s.value) for s in _intermediate_scores(sample)]
+    F = _final_score(sample)
+    if F is not None:
+        outcomes.append(_is_pass(F.value))
+    return outcomes
+
+
+def _chen_pass_at_k(n: int, c: int, k: int) -> float | None:
+    """Unbiased pass@k from n INDEPENDENT samples of which c passed (Chen 2021).
+
+        pass@k = 1 - C(n-c, k) / C(n, k)
+
+    read as: 1 - P(all k drawn without replacement from the n samples failed).
+
+    *** VALID ONLY FOR EXCHANGEABLE ATTEMPTS. ***
+
+    The formula draws k of the n observed attempts at random, so it estimates
+    "P(success within k tries)" only when every attempt has the same success
+    probability. That holds ACROSS independent episodes (separate seeds, fresh
+    container each time) and it is the right estimator there.
+
+    It does NOT hold for the k attempts inside one episode, which is what this
+    module reconstructs: the agent sees the verifier's failure feedback between
+    attempts, so later attempts are systematically better informed. Measured on
+    n=5, k=3, 200k trials:
+
+        attempts             truth    Chen    prefix
+        i.i.d.  0.30/0.30    0.658    0.658    0.658
+        helps   0.30/0.60    0.888    0.907    0.888
+        hurts   0.30/0.10    0.433    0.368    0.433
+
+    Chen tracks the truth only in the i.i.d. row. So the within-episode curve
+    uses _prefix_pass_at (below) and this function is kept for the
+    across-episode case, where the exchangeability it needs is real.
+
+    Returns None when k > n: pass@k is not estimable from fewer than k samples,
+    and substituting a prefix value would silently mix two estimators.
+    """
+    if k > n or n <= 0:
+        return None
+    if c <= 0:
         return 0.0
-    p = c / t
-    return math.sqrt(max(p * (1.0 - p), 0.0) / t)
+    if n - c < k:
+        # Fewer than k failures exist, so every draw of k contains a pass.
+        return 1.0
+    return 1.0 - (math.comb(n - c, k) / math.comb(n, k))
+
+
+def _prefix_pass_at(outcomes: list[bool], k: int) -> float | None:
+    """pass@k for ONE episode's sequential attempts: did any of the first k pass?
+
+    This is the estimator the within-episode curve needs. It makes no
+    exchangeability assumption -- it simply reads off the process that actually
+    happened, so it stays unbiased when feedback makes later attempts better or
+    worse than earlier ones (see _chen_pass_at_k for the measured comparison).
+
+    Returns None when fewer than k attempts were observed, so a truncated
+    episode does not masquerade as a failure at higher k.
+    """
+    if k > len(outcomes):
+        return None
+    return 1.0 if any(outcomes[:k]) else 0.0
+
+
+def _is_not_applicable_sample(sample) -> bool:
+    """Whether this sample was skipped because its precondition did not hold."""
+    s = _final_score(sample)
+    if s is not None:
+        md = getattr(s, "metadata", None) or {}
+        if md.get("not_applicable") is True:
+            return True
+        if s.value == "N":
+            return True
+    return False
+
+
+def _mean(vals: list[float]) -> float:
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _sem(vals: list[float]) -> float:
+    """Standard error of the mean over per-scenario estimates.
+
+    Deliberately NOT the binomial sqrt(p(1-p)/n): the Chen estimate is a
+    continuous value per scenario, not a Bernoulli draw, so the binomial form
+    understates the spread. This is scenario-sampling error only -- see
+    stats.py for the clustered bootstrap that belongs in the paper.
+    """
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    m = _mean(vals)
+    var = sum((v - m) ** 2 for v in vals) / (n - 1)
+    return math.sqrt(var / n)
 
 
 def _collect(log_dir: Path, by: str):
@@ -122,7 +217,7 @@ def _collect(log_dir: Path, by: str):
 
     cells: {(model, col, j): [correct, total]}
     """
-    cells: dict[tuple, list[int]] = defaultdict(lambda: [0, 0])
+    cells: dict[tuple, list[float]] = defaultdict(list)
     rows: set[str] = set()
     cols: set[str] = set()
     ks: set[int] = set()
@@ -157,22 +252,31 @@ def _collect(log_dir: Path, by: str):
             if solver in _UNCAPPED_ORACLE_SOLVERS:
                 uncapped.add(col)
 
+            # Not-applicable samples (verify exit 42 -> NOANSWER) are SKIPS, not
+            # failures. _is_pass maps "N" to False, so counting them here would
+            # give c=0 and drag every pass@k cell down with scenarios the host
+            # could not even pose. applicable_accuracy() drops them from its
+            # denominator for exactly this reason; this must match.
+            if _is_not_applicable_sample(sample):
+                continue
+
+            outcomes = _attempt_outcomes(sample)
+            if not outcomes:
+                continue
             for j in range(1, k + 1):
-                v = _pass_at(sample, j)
-                if v is None:
+                est = _prefix_pass_at(outcomes, j)
+                if est is None:
                     continue
-                cells[(model, col, j)][1] += 1
-                if v:
-                    cells[(model, col, j)][0] += 1
+                cells[(model, col, j)].append(est)
 
     return cells, sorted(ks), sorted(rows), sorted(cols), uncapped, skipped_hivestorm
 
 
-def _fmt(c: int, t: int) -> str:
-    if t == 0:
+def _fmt(vals: list[float]) -> str:
+    if not vals:
         return "-"
     # ASCII only: the Windows console codepage mangles "±" into "?".
-    return f"{c / t:.0%} +/-{_stderr(c, t):.0%} ({c}/{t})"
+    return f"{_mean(vals):.0%} +/-{_sem(vals):.0%} (n={len(vals)})"
 
 
 def _check_monotonic(cells, rows, cols, kmax) -> list[str]:
@@ -183,10 +287,11 @@ def _check_monotonic(cells, rows, cols, kmax) -> list[str]:
         for c in cols:
             prev_p = prev_t = prev_j = None
             for j in range(1, kmax + 1):
-                got, tot = cells[(r, c, j)]
+                vals = cells[(r, c, j)]
+                tot = len(vals)
                 if tot == 0:
                     continue
-                p = got / tot
+                p = _mean(vals)
                 # Only comparable at equal denominators. Pooling a k=1 log with
                 # a k=5 log (or samples that error out only at higher j) gives
                 # different sample counts per j, and a dip there is an artefact
@@ -226,19 +331,18 @@ def main() -> None:
     table = []
     for r in rows:
         for c in cols:
-            if all(cells[(r, c, j)][1] == 0 for j in range(1, kmax + 1)):
+            if all(not cells[(r, c, j)] for j in range(1, kmax + 1)):
                 continue
             label = f"{c} *" if c in uncapped else c
             table.append(
-                [r, label] + [_fmt(*cells[(r, c, j)]) for j in range(1, kmax + 1)]
+                [r, label] + [_fmt(cells[(r, c, j)]) for j in range(1, kmax + 1)]
             )
     print(tabulate(table, headers=headers, tablefmt="github"))
 
     totals = []
     for j in range(1, kmax + 1):
-        tc = sum(cells[(r, c, j)][0] for r in rows for c in cols)
-        tt = sum(cells[(r, c, j)][1] for r in rows for c in cols)
-        totals.append(_fmt(tc, tt))
+        pooled = [v for r in rows for c in cols for v in cells[(r, c, j)]]
+        totals.append(_fmt(pooled))
     print("\n" + tabulate([["ALL", ""] + totals], headers=headers, tablefmt="github"))
 
     if uncapped:

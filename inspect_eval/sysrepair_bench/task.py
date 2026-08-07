@@ -33,6 +33,16 @@ def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
     Supported tokens:
       --cap-add <CAP>                  → cap_add
       --security-opt <key=value>       → security_opt
+      --cgroupns=<mode> | --cgroupns <mode>  → cgroup
+
+    UNKNOWN TOKENS RAISE. They used to be skipped silently, and that hid a real
+    failure for five scenarios: 75-79 declared `--cgroupns=host`, the parser
+    dropped it, and k3s booted with the kubelet dead
+    ('cannot enter cgroupv2 "/sys/fs/cgroup/kubepods" with domain controllers').
+    Both validators pass .run-opts straight to `docker run`, so they honoured the
+    flag and never reproduced it -- the bug existed ONLY in production, which is
+    the worst place for it. A scenario that asks for something the harness cannot
+    provide must fail loudly at load time, not boot subtly wrong.
 
     Returns a dict suitable for spreading into _SysRepairService kwargs.
     """
@@ -44,6 +54,7 @@ def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
 
     cap_add: list[str] = []
     security_opt: list[str] = []
+    cgroup: str | None = None
 
     tokens = shlex.split(opts_file.read_text(encoding="utf-8"))
     i = 0
@@ -55,14 +66,26 @@ def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
         elif tok == "--security-opt" and i + 1 < len(tokens):
             security_opt.append(tokens[i + 1])
             i += 2
-        else:
+        elif tok.startswith("--cgroupns="):
+            cgroup = tok.split("=", 1)[1]
             i += 1
+        elif tok == "--cgroupns" and i + 1 < len(tokens):
+            cgroup = tokens[i + 1]
+            i += 2
+        else:
+            raise ValueError(
+                f"{opts_file}: unsupported .run-opts token {tok!r}. Add explicit "
+                f"handling in _load_run_opts -- silently ignoring it would boot "
+                f"the scenario with provisioning it asked for and did not get."
+            )
 
-    result: dict[str, list[str]] = {}
+    result: dict = {}
     if cap_add:
         result["cap_add"] = cap_add
     if security_opt:
         result["security_opt"] = security_opt
+    if cgroup:
+        result["cgroup"] = cgroup
     return result
 
 SYSTEM_TEMPLATE = """You are a {role} remediating a security vulnerability inside a sandboxed container.
