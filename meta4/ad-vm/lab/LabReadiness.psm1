@@ -32,7 +32,13 @@ function Test-DcReady {
     param([string] $VMName)
 
     Invoke-Command -VMName $VMName -Credential $script:LabCred -ErrorAction Stop -ScriptBlock {
-        foreach ($svc in 'NTDS', 'Netlogon', 'DNS', 'KDC') {
+        # ADWS is in this list because Get-ADDomain below TALKS TO IT. Without
+        # it, an inject that leaves ADWS stopped -- which any
+        # `Restart-Service NTDS -Force` does, since -Force stops dependents and
+        # restarts only NTDS -- failed the probe as the opaque 'ad-ws' after the
+        # full timeout. Naming the service turns a five-minute mystery into one
+        # line of output. scenario-12 lost a whole sweep sample to exactly this.
+        foreach ($svc in 'NTDS', 'ADWS', 'Netlogon', 'DNS', 'KDC') {
             $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
             if (-not $s -or $s.Status -ne 'Running') { return "service:$svc" }
         }

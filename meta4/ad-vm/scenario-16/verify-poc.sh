@@ -41,7 +41,21 @@ echo "$OUT"
 echo "--- /spoolsample ---"
 
 # --- the tool did not run: HARNESS ERROR, never a verdict ---
-if echo "$OUT" | grep -qiE '^usage:|error: (ambiguous option|unrecognized arguments|argument|the following arguments)|Traceback \(most recent'; then
+#
+# `Traceback` USED TO BE IN THIS PATTERN and it made the scenario unsolvable.
+# When the Spooler really is stopped, the SMB tree connect to \PIPE\spoolss
+# fails and impacket does not print a tidy message -- it propagates
+#     impacket.smb3.SessionError: STATUS_OBJECT_NAME_NOT_FOUND
+# as an uncaught exception, i.e. a Python traceback. That string is listed
+# below as a bind-refused signal meaning "Spooler mitigated", but this guard ran
+# FIRST and short-circuited to exit 2 (harness error, security_pass=null), so
+# the correct remediation graded as unmeasurable. The oracle sweep caught it:
+# scenario-16 was the one sample of twenty that its own reference fix could not
+# make pass.
+#
+# A traceback is therefore NOT by itself evidence of misuse. Argument and usage
+# errors still are, and an unrecognised traceback is still caught at the end.
+if echo "$OUT" | grep -qiE '^usage:|error: (ambiguous option|unrecognized arguments|argument|the following arguments)'; then
     echo "[verify-poc-16] HARNESS ERROR: spoolsample was invoked incorrectly" >&2
     echo "[verify-poc-16] printerbug.py takes two positionals: target attackerhost" >&2
     exit 2
@@ -96,6 +110,17 @@ fi
 if echo "$OUT" | grep -qiE 'error.*access_denied|rpc_s_access_denied|status_access_denied'; then
     echo "[verify-poc-16] Spooler returned STATUS_ACCESS_DENIED -- patch behavior confirmed"
     exit 0
+fi
+
+# --- a traceback we could not classify: HARNESS ERROR, not a verdict ---
+# Reached only after every recognised mitigation and coercion signature has
+# been tested, so a known outcome that happens to arrive as an exception (the
+# stopped-Spooler case above) is already handled. What remains here is a tool
+# that genuinely fell over, and guessing either way about it would be a
+# statement about the harness, not about the host.
+if echo "$OUT" | grep -qE 'Traceback \(most recent'; then
+    echo "[verify-poc-16] HARNESS ERROR: spoolsample raised an unclassified exception" >&2
+    exit 2
 fi
 
 echo "[verify-poc-16] no recognised coercion or denial signature -- treating as FAIL" >&2
