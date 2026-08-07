@@ -35,7 +35,7 @@ from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-SUITES = ["ccdc", "meta2", "meta3", "meta4", "vulnhub"]
+SUITES = ["ccdc", "meta2", "meta3", "meta4", "vulnhub", "hivestorm"]
 
 GUARD = re.compile(
     r'\[\s*-n\s*"\$\{_SYSREPAIR_VERIFYLIB_LOADED:-\}"\s*\]\s*\|\|\s*\.\s'
@@ -70,6 +70,7 @@ def find_bash() -> str | None:
 
 
 BASH = find_bash()
+PWSH = shutil.which("powershell.exe")
 
 
 def shell_level_only(text: str) -> str:
@@ -114,6 +115,84 @@ def shell_level_only(text: str) -> str:
             continue
         result.append(line)
     return "".join(result)
+
+
+PS_GUARD = re.compile(r"if\s*\(\s*-not\s+\$global:SysRepairVerifyLibLoaded\s*\)\s*\{\s*\.")
+PS_RECORD = re.compile(r"(?<![\w-])Record-(Poc|Reg)(Cmd)?\b", re.I)
+# PowerShell's only sanctioned exits are inside the library (Complete-Verify,
+# Skip-NotApplicable). A literal `exit` in a verifier body is fail-fast.
+PS_BARE_EXIT = re.compile(r"^\s*exit\b", re.M | re.I)
+# $ErrorActionPreference='Stop' turns any failing cmdlet into a terminating
+# error. That is fail-fast with no `exit` in sight: the script dies, no summary
+# is emitted, and both components are lost. It has no shell-library analogue and
+# is the most likely way a migrated Windows verifier silently regresses to v1.
+PS_EAP_STOP = re.compile(r"\$ErrorActionPreference\s*=\s*['\"]Stop['\"]", re.I)
+# Cmdlets that throw under Stop unless given -ErrorAction SilentlyContinue.
+PS_THROWERS = re.compile(
+    r"(?<![\w-])(Get-Item|Get-ItemProperty|Get-Content|Get-Service|Get-Process|"
+    r"Get-ChildItem|Get-LocalUser|Get-LocalGroupMember|Get-ScheduledTask|"
+    r"Get-WmiObject|Get-CimInstance|Invoke-WebRequest|Test-NetConnection|"
+    r"Get-SmbServerConfiguration|Get-WindowsFeature|Resolve-DnsName)\b", re.I)
+
+
+def ps_quoted_blank(text: str) -> str:
+    """Blank single- and double-quoted spans, preserving line numbering."""
+    out = []
+    for line in text.splitlines(keepends=True):
+        line = re.sub(r"'[^']*'", "''", line)
+        line = re.sub(r'"[^"]*"', '""', line)
+        out.append(line)
+    return "".join(out)
+
+
+def lint_ps1(path: Path) -> list[str]:
+    """PowerShell counterpart of lint(). Same findings, PowerShell spellings."""
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    problems: list[str] = []
+
+    if not PS_GUARD.search(text):
+        problems.append("no-guard")
+
+    body = text
+    if "Complete-Verify" not in text:
+        problems.append("no-finish")
+    else:
+        last = text.rfind("Complete-Verify")
+        tail = text[last + len("Complete-Verify"):]
+        if re.search(r"^\s*[^\s#]", tail, re.M):
+            problems.append("after-finish")
+        body = text[:last]
+
+    scrubbed = ps_quoted_blank(body)
+    if PS_BARE_EXIT.search(scrubbed):
+        problems.append("bare-exit")
+
+    # Advisory, not a defect: a scenario may legitimately use Stop and guard
+    # every risky call. Flagged so a human looks, because static analysis cannot
+    # prove a given cmdlet is reachable in a failing state.
+    if PS_EAP_STOP.search(text):
+        risky = [m.group(1) for m in PS_THROWERS.finditer(scrubbed)]
+        guarded = len(re.findall(r"-ErrorAction\s+SilentlyContinue", scrubbed, re.I))
+        guarded += len(re.findall(r"(?<![\w-])(try|Record-\w+Cmd)\b", scrubbed, re.I))
+        if risky and guarded < len(risky):
+            problems.append(f"eap-stop-unguarded({len(risky)-guarded})")
+
+    kinds = Counter(m.group(1).lower() for m in PS_RECORD.finditer(text))
+    if not kinds.get("poc"):
+        problems.append("no-poc")
+    if not kinds.get("reg"):
+        problems.append("no-reg")
+
+    if PWSH:
+        r = subprocess.run(
+            [PWSH, "-NoProfile", "-Command",
+             "$e=$null;[System.Management.Automation.Language.Parser]::ParseFile("
+             f"'{path}',[ref]$null,[ref]$e)|Out-Null;if($e){{exit 1}};exit 0"],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            problems.append("syntax")
+
+    return problems
 
 
 def lint(path: Path) -> list[str]:
@@ -165,16 +244,21 @@ def main() -> None:
     files = []
     for s in wanted:
         files.extend(p for p in (REPO / s).rglob("verify.sh"))
+        files.extend(p for p in (REPO / s).rglob("verify.ps1"))
     migrated = [f for f in sorted(files)
                 if "verifylib" in f.read_text(encoding="utf-8", errors="replace")]
 
-    print(f"migrated verifiers checked: {len(migrated)}")
+    n_ps = sum(1 for f in migrated if f.suffix == ".ps1")
+    print(f"migrated verifiers checked: {len(migrated)} "
+          f"({len(migrated) - n_ps} sh, {n_ps} ps1)")
     if BASH is None:
-        print("  (no non-WSL bash found -- syntax check skipped)")
+        print("  (no non-WSL bash found -- sh syntax check skipped)")
+    if PWSH is None:
+        print("  (no powershell.exe found -- ps1 syntax check skipped)")
 
     bad, tally = {}, Counter()
     for f in migrated:
-        probs = lint(f)
+        probs = lint_ps1(f) if f.suffix == ".ps1" else lint(f)
         if probs:
             bad[f.relative_to(REPO).as_posix()] = probs
             tally.update(probs)

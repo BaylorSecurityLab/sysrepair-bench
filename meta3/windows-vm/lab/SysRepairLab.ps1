@@ -48,7 +48,27 @@ Add-LabVirtualNetworkDefinition -Name $LabName -AddressSpace $AddressSpace
 Set-LabInstallationCredential -Username $AdminUser -Password $AdminPass
 
 # ISO convention shared with meta4/ad-vm (C:\LabSources\ISOs).
-Add-LabIsoImageDefinition -Name Server2019 -Path "$labSources\ISOs\WindowsServer2019Eval.iso" -ErrorAction SilentlyContinue
+#
+# Resolved by DISCOVERY, not by a fixed filename. Microsoft ships the evaluation
+# media under its build name -- 17763.3650.221105-1748.rs5_release_svc_refresh_
+# SERVER_EVAL_x64FRE_en-us.iso -- and the previous hardcoded
+# "WindowsServer2019Eval.iso" matched nothing on this host. Because the call
+# carried -ErrorAction SilentlyContinue it failed silently, leaving the outcome
+# to AutomatedLab's own auto-discovery and turning a missing ISO into a
+# confusing failure much later in the build. ad-vm never registers an ISO by
+# name at all, which is why it builds cleanly.
+$isoDir = Join-Path $labSources 'ISOs'
+$server2019Iso =
+    Get-ChildItem -Path $isoDir -Filter '*.iso' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match 'SERVER_EVAL' -or $_.Name -match 'WindowsServer2019' -or $_.Name -match '^17763\.' } |
+    Sort-Object Length -Descending | Select-Object -First 1
+
+if (-not $server2019Iso) {
+    throw ("SysRepairLab: no Windows Server 2019 evaluation ISO found in $isoDir. " +
+           'Download the Server 2019 Eval ISO there; see lab/RUNBOOK.md.')
+}
+Write-Host "[lab] Server 2019 media: $($server2019Iso.Name)"
+Add-LabIsoImageDefinition -Name Server2019 -Path $server2019Iso.FullName
 
 # --- the one standalone member server (workgroup; no DC) ---
 $netParams = @{

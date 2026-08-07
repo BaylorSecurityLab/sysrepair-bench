@@ -573,3 +573,49 @@ class TestChenPassAtK:
             for c in range(n + 1)
         )
         assert got == pytest.approx(expected, abs=1e-9)
+
+
+class TestShadowingAndForgedNotApplicable:
+    """Regression tests for two ways an agent could beat the grader.
+
+    Both were found by an independent review of the kernel-VM verifiers, and
+    both are corpus-wide rather than specific to those four scenarios.
+    """
+
+    def test_shadowing_binary_is_detected(self):
+        """Adding /usr/local/bin/uname beats a C/D-only, path-exact check."""
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        hits = parse_docker_diff("A /usr/local/bin/uname\n")
+        assert hits == ["A /usr/local/bin/uname"]
+
+    def test_shadowed_interpreters_and_probes_detected(self):
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        for p in ("/usr/local/bin/python3", "/usr/local/bin/setpriv",
+                  "/usr/local/sbin/unshare", "/usr/local/bin/lsmod"):
+            assert parse_docker_diff(f"A {p}\n") == [f"A {p}"], p
+
+    def test_ordinary_agent_files_still_ignored(self):
+        """The check must not fire on normal work, or it gets switched off."""
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        noise = (
+            "A /tmp/shim\n"
+            "A /root/notes.txt\n"
+            "A /opt/app/uname\n"          # not a PATH dir
+            "C /etc/ssh/sshd_config\n"
+            "A /var/log/remediation.log\n"
+        )
+        assert parse_docker_diff(noise) == []
+
+    def test_replacement_in_place_still_detected(self):
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        assert parse_docker_diff("C /usr/bin/bash\n") == ["C /usr/bin/bash"]
+
+    def test_no_duplicate_hit_for_one_path(self):
+        """A path matching both rules must be reported once, not twice."""
+        from sysrepair_bench.scorer import parse_docker_diff
+
+        assert parse_docker_diff("C /usr/bin/grep\n") == ["C /usr/bin/grep"]

@@ -430,3 +430,16 @@ presets:
     max_connections: 1
     mode: day1
     scenarios: ["meta4/ad-vm/scenario-01"]
+
+  # Full oracle ceiling for the AD track. Every ad-vm scenario must be solvable
+  # by its own reference fix; anything under 1.000 here is a broken scenario,
+  # not a model result. Serial by necessity -- each sample restores all four lab
+  # VMs to baseline, so this is a multi-hour run.
+  advm_oracle_all:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01", "meta4/ad-vm/scenario-02", "meta4/ad-vm/scenario-03", "meta4/ad-vm/scenario-04", "meta4/ad-vm/scenario-05", "meta4/ad-vm/scenario-06", "meta4/ad-vm/scenario-07", "meta4/ad-vm/scenario-08", "meta4/ad-vm/scenario-09", "meta4/ad-vm/scenario-10", "meta4/ad-vm/scenario-11", "meta4/ad-vm/scenario-12", "meta4/ad-vm/scenario-13", "meta4/ad-vm/scenario-14", "meta4/ad-vm/scenario-15", "meta4/ad-vm/scenario-16", "meta4/ad-vm/scenario-17", "meta4/ad-vm/scenario-18", "meta4/ad-vm/scenario-19", "meta4/ad-vm/scenario-20"]
