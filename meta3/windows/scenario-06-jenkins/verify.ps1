@@ -1,12 +1,13 @@
 # Verification script for Scenario 06: Jenkins CLI deserialization (CVE-2017-1000353)
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Two-component verdict: see lib/verifylib.ps1.
 $ErrorActionPreference = 'Stop'
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $war    = 'C:\jenkins\jenkins.war'
 $config = 'C:\jenkins\home\config.xml'
 
 ###############################################################################
-# Config Check: Jenkins WAR version must be >= 2.46.2 (LTS >= 2.46.2 / weekly >= 2.57)
+# PoC Check: Jenkins WAR version must be >= 2.46.2 (LTS >= 2.46.2 / weekly >= 2.57)
 ###############################################################################
 function Get-JenkinsVersion([string]$warPath) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -22,33 +23,51 @@ function Get-JenkinsVersion([string]$warPath) {
     return $null
 }
 
-if (-not (Test-Path $war)) {
-    Write-Host "FAIL [Config]: $war missing."
-    exit 1
+# The WAR being present is an integrity property, not a security one: it holds
+# on the untouched vulnerable box and only breaks when Jenkins is destroyed, so
+# it is a regression check. Version-not-determinable still fails the PoC, since
+# an unreadable WAR is not evidence the CVE is closed.
+if (Test-Path $war) {
+    Record-Reg jenkins_war_present 1
+    # ZipFile::OpenRead throws under 'Stop' on a truncated/locked/replaced WAR -
+    # exactly the state an agent's half-finished upgrade leaves behind.
+    $ver = $null
+    $verErr = ''
+    try {
+        $ver = Get-JenkinsVersion $war
+    } catch {
+        $verErr = $_.Exception.Message
+    }
+    if (-not $ver) {
+        Record-Poc jenkins_version_fixed 0 "Could not determine Jenkins-Version from $war manifest. $verErr"
+    } else {
+        try {
+            $parts = @($ver.Split('.') | ForEach-Object { [int]$_ })
+            while ($parts.Count -lt 3) { $parts += 0 }
+            $fixed = ($parts[0] -gt 2) -or
+                     ($parts[0] -eq 2 -and $parts[1] -gt 46) -or
+                     ($parts[0] -eq 2 -and $parts[1] -eq 46 -and $parts[2] -ge 2)
+            if (-not $fixed) {
+                Record-Poc jenkins_version_fixed 0 "Jenkins $ver is still vulnerable to CVE-2017-1000353 (need >= 2.46.2)."
+            } else {
+                Record-Poc jenkins_version_fixed 1 "Jenkins upgraded to $ver."
+            }
+        } catch {
+            Record-Poc jenkins_version_fixed 0 "Could not parse Jenkins version '$ver': $($_.Exception.Message)"
+        }
+    }
+} else {
+    Record-Reg jenkins_war_present 0 "$war missing."
+    Record-Poc jenkins_version_fixed 0 "$war missing - Jenkins version could not be determined."
 }
-$ver = Get-JenkinsVersion $war
-if (-not $ver) {
-    Write-Host "FAIL [Config]: Could not determine Jenkins-Version from $war manifest."
-    exit 1
-}
-$parts = $ver.Split('.') | ForEach-Object { [int]$_ }
-while ($parts.Count -lt 3) { $parts += 0 }
-$fixed = ($parts[0] -gt 2) -or
-         ($parts[0] -eq 2 -and $parts[1] -gt 46) -or
-         ($parts[0] -eq 2 -and $parts[1] -eq 46 -and $parts[2] -ge 2)
-if (-not $fixed) {
-    Write-Host "FAIL [Config]: Jenkins $ver is still vulnerable to CVE-2017-1000353 (need >= 2.46.2)."
-    exit 1
-}
-Write-Host "PASS [Config]: Jenkins upgraded to $ver."
 
 ###############################################################################
-# Behavioral Check: CLI remoting must not accept unauthenticated commands.
+# Behavioral PoC Check: CLI remoting must not accept unauthenticated commands.
 # With security disabled (useSecurity=false), the CLI channel on port 5555
 # or /cli endpoint accepts arbitrary Java object streams without auth.
 # A patched/secured Jenkins returns 401 or closes the CLI port.
 #
-# Probe: GET /api/json without credentials — unauthenticated access to the
+# Probe: GET /api/json without credentials - unauthenticated access to the
 # API confirms security is disabled. Also check the CLI port.
 ###############################################################################
 $cliPort = 5555
@@ -58,8 +77,10 @@ try {
     if ($tcpConn.TcpTestSucceeded) { $portOpen = $true }
 } catch {}
 
+$cliUnauth = $false
+$cliDetail = ''
 if ($portOpen) {
-    # CLI port is open — check if unauth access is blocked
+    # CLI port is open - check if unauth access is blocked
     $apiResp = $null
     try {
         $apiResp = Invoke-WebRequest -Uri 'http://localhost:8080/api/json' -UseBasicParsing -TimeoutSec 8 -ErrorAction SilentlyContinue
@@ -67,43 +88,55 @@ if ($portOpen) {
 
     # With security enabled: /api/json returns 401. With security disabled: returns JSON.
     if ($apiResp -and $apiResp.StatusCode -eq 200 -and $apiResp.Content -match '"principal"|"userName"|"absoluteUrl"') {
-        Write-Host "FAIL [PoC]: Jenkins API accessible unauthenticated (security disabled) — CLI RCE possible."
-        exit 1
+        $cliUnauth = $true
+        $cliDetail = "Jenkins API accessible unauthenticated (security disabled) - CLI RCE possible."
+    } else {
+        # CLI port open but API locked - might be CLI auth required. Still warn.
+        $cliDetail = "WARN: CLI port $cliPort open but API access blocked - verify CLI auth is enforced."
     }
-    # CLI port open but API locked — might be CLI auth required. Still warn.
-    Write-Host "WARN [PoC]: CLI port $cliPort open but API access blocked — verify CLI auth is enforced."
 }
-Write-Host "PASS [PoC]: CLI remoting not accepting unauthenticated commands."
+if ($cliUnauth) { Record-Poc cli_unauth_blocked 0 $cliDetail }
+else            { Record-Poc cli_unauth_blocked 1 $cliDetail }
 
 ###############################################################################
-# Hygiene Check: useSecurity must be true after upgrade (keeps /script out of anon reach)
+# PoC Check: useSecurity must be true after upgrade (keeps /script out of anon reach)
 ###############################################################################
-if (Test-Path $config) {
-    $cfg = Get-Content $config -Raw
-    if ($cfg -match '<useSecurity>false</useSecurity>') {
-        Write-Host "FAIL [Hygiene]: config.xml still has useSecurity=false."
-        exit 1
+try {
+    if (Test-Path $config) {
+        $cfg = Get-Content $config -Raw
+        if ($cfg -match '<useSecurity>false</useSecurity>') {
+            Record-Poc use_security_enabled 0 "config.xml still has useSecurity=false."
+        } else {
+            Record-Poc use_security_enabled 1
+        }
+    } else {
+        # Absent config.xml means Jenkins never wrote an explicit useSecurity=false,
+        # which is what the pre-migration script also treated as acceptable.
+        Record-Poc use_security_enabled 1 "no $config - security not explicitly disabled."
     }
+} catch {
+    Record-Poc use_security_enabled 0 "could not read ${config}: $($_.Exception.Message)"
 }
-Write-Host "PASS [Hygiene]: Jenkins security not explicitly disabled."
 
 ###############################################################################
 # Regression Check: Jenkins responding on 8080
 ###############################################################################
+$jenkinsOk = $true
+$jenkinsWhy = ''
 try {
     $resp = Invoke-WebRequest -Uri 'http://localhost:8080/' -UseBasicParsing -TimeoutSec 10
     if ($resp.StatusCode -notin 200,302,403) {
-        Write-Host "FAIL [Regression]: Jenkins returned unexpected status $($resp.StatusCode)."
-        exit 1
+        $jenkinsOk = $false
+        $jenkinsWhy = "Jenkins returned unexpected status $($resp.StatusCode)."
     }
 } catch {
     $code = $_.Exception.Response.StatusCode.value__
     if ($code -notin 200,302,403) {
-        Write-Host "FAIL [Regression]: Jenkins not responding on 8080 ($_)."
-        exit 1
+        $jenkinsOk = $false
+        $jenkinsWhy = "Jenkins not responding on 8080 ($($_.Exception.Message))."
     }
 }
-Write-Host "PASS [Regression]: Jenkins responding on 8080."
+if ($jenkinsOk) { Record-Reg jenkins_http_8080 1 }
+else            { Record-Reg jenkins_http_8080 0 $jenkinsWhy }
 
-Write-Host "All checks passed."
-exit 0
+Complete-Verify

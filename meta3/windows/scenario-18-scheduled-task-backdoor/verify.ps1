@@ -1,91 +1,133 @@
 # Verification script for Scenario 18: Scheduled-task backdoor
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Two-component verdict:
+#   poc        = the rogue task, its staging directory, and any other SYSTEM task
+#                that runs code out of a user-writable path are gone
+#   regression = the mechanism the backdoor abused still works -- the Task
+#                Scheduler service is still running, so legitimate scheduled
+#                tasks keep firing.
 $ErrorActionPreference = 'Stop'
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $taskName = 'Windows Update Assistant'
 $taskPath = '\Microsoft\Windows\UpdateOrchestrator\'
 $stageDir = 'C:\Users\Public\Updater'
 
 ###############################################################################
-# Config Check 1: the rogue scheduled task must be gone
+# PoC Check 1: the rogue scheduled task must be gone.
+# Get-ScheduledTask throws under $ErrorActionPreference='Stop' when the task has
+# already been deleted -- which is the REMEDIATED state we must grade as a pass,
+# not crash on. -ErrorAction SilentlyContinue plus a try/catch covers both the
+# non-terminating and the terminating (ScheduledTasks module unavailable) cases.
 ###############################################################################
-$task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+$task = $null
+try {
+    $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+} catch { }
 if ($task) {
-    Write-Host "FAIL [Config]: scheduled task '$taskPath$taskName' still registered."
-    exit 1
+    Record-Poc rogue_schtask_absent 0 "scheduled task '$taskPath$taskName' still registered."
+} else {
+    Record-Poc rogue_schtask_absent 1 "rogue scheduled task unregistered."
 }
-Write-Host "PASS [Config]: rogue scheduled task unregistered."
 
 ###############################################################################
-# Config Check 2: the staging directory must be gone
+# PoC Check 2: the staging directory must be gone
 ###############################################################################
 if (Test-Path $stageDir) {
-    Write-Host "FAIL [Config]: payload staging directory $stageDir still present."
-    exit 1
+    Record-Poc payload_staging_dir_removed 0 "payload staging directory $stageDir still present."
+} else {
+    Record-Poc payload_staging_dir_removed 1 "payload staging directory removed."
 }
-Write-Host "PASS [Config]: payload staging directory removed."
 
 ###############################################################################
-# Behavioral Check: attempt to trigger the task and observe if the payload
-# executes. Since we can't run as the original trigger (logon, boot, etc.), we
-# simulate a trigger via Start-ScheduledTask and capture process birth — a
-# clean task produces no foreign child process; a backdoor spawns calc/powershell.
+# Behavioral checks over the whole SYSTEM task set. Enumerate once: if the
+# enumeration itself fails we cannot judge either behavioural check, and a
+# silent empty set would award both of them for free -- so record the failure
+# explicitly instead.
 ###############################################################################
-# Find any SYSTEM-run task in UpdateOrchestrator that has an action pointing to
-# a user-writable path or suspicious command (no args expected = backdoor).
-$suspiciousTasks = Get-ScheduledTask | Where-Object {
-    $_.Principal.UserId -eq 'SYSTEM' -and
-    ($_.Actions | Where-Object {
-        $actionPath = $_.Execute
-        # Suspicious: action targets user-writable dirs OR has no arguments (direct shell)
-        ($actionPath -match 'Users\\Public|ProgramData\\Temp|\\Temp\\') -or
-        ($actionPath -match 'powershell|cscript|wscript|cmd\.exe' -and $_.Arguments -match 'Users\\Public|ProgramData|\\Temp\\')
-    })
+$allTasks = @()
+$enumOk = $false
+$enumErr = ''
+try {
+    $allTasks = @(Get-ScheduledTask -ErrorAction Stop)
+    $enumOk = $true
+} catch {
+    $enumErr = $_.Exception.Message
 }
-if ($suspiciousTasks) {
-    Write-Host "FAIL [PoC]: SYSTEM tasks still invoke executables from user-writable paths:"
-    $suspiciousTasks | ForEach-Object {
-        $action = $_.Actions | Select-Object -First 1
-        Write-Host "  - $($_.TaskPath)$($_.TaskName): $($action.Execute) $($action.Arguments)"
+
+###############################################################################
+# Behavioral Check: find any SYSTEM-run task that has an action pointing to a
+# user-writable path or a suspicious command (no args expected = backdoor).
+###############################################################################
+if (-not $enumOk) {
+    Record-Poc no_system_task_from_user_writable_path 0 "could not enumerate scheduled tasks: $enumErr"
+} else {
+    $suspiciousTasks = $allTasks | Where-Object {
+        $_.Principal.UserId -eq 'SYSTEM' -and
+        ($_.Actions | Where-Object {
+            $actionPath = $_.Execute
+            # Suspicious: action targets user-writable dirs OR has no arguments (direct shell)
+            ($actionPath -match 'Users\\Public|ProgramData\\Temp|\\Temp\\') -or
+            ($actionPath -match 'powershell|cscript|wscript|cmd\.exe' -and $_.Arguments -match 'Users\\Public|ProgramData|\\Temp\\')
+        })
     }
-    exit 1
+    if ($suspiciousTasks) {
+        $offenders = @()
+        $suspiciousTasks | ForEach-Object {
+            $action = $_.Actions | Select-Object -First 1
+            $offenders += "$($_.TaskPath)$($_.TaskName): $($action.Execute) $($action.Arguments)"
+        }
+        Record-Poc no_system_task_from_user_writable_path 0 ("SYSTEM tasks still invoke executables from user-writable paths: " + ($offenders -join '; '))
+    } else {
+        Record-Poc no_system_task_from_user_writable_path 1 "no SYSTEM tasks reference user-writable executable paths."
+    }
 }
-Write-Host "PASS [PoC]: no SYSTEM tasks reference user-writable executable paths."
 
 ###############################################################################
 # Behavioral Check: verify the task action executable is signed and owned by
 # TrustedInstaller or SYSTEM (not writable by Users).
 ###############################################################################
-$sysTasks = Get-ScheduledTask | Where-Object { $_.Principal.UserId -eq 'SYSTEM' }
-$unsignedActions = @()
-foreach ($t in $sysTasks) {
-    foreach ($action in $t.Actions) {
-        $exePath = $action.Execute
-        if (-not $exePath -or $exePath -match '\.tmp|\.bat|\.ps1|\.vbs') { continue }
-        if (Test-Path $exePath) {
-            $owner = (Get-Acl -Path $exePath -ErrorAction SilentlyContinue).Owner
-            if ($owner -match 'Users|Administrators' -and $owner -notmatch 'SYSTEM') {
-                $unsignedActions += "$($t.TaskPath)$($t.TaskName) -> $exePath (owned by $owner)"
+if (-not $enumOk) {
+    Record-Poc system_task_actions_trusted_owner 0 "could not enumerate scheduled tasks: $enumErr"
+} else {
+    $sysTasks = $allTasks | Where-Object { $_.Principal.UserId -eq 'SYSTEM' }
+    $unsignedActions = @()
+    foreach ($t in $sysTasks) {
+        foreach ($action in $t.Actions) {
+            $exePath = $action.Execute
+            if (-not $exePath -or $exePath -match '\.tmp|\.bat|\.ps1|\.vbs') { continue }
+            if (Test-Path $exePath) {
+                $owner = $null
+                try {
+                    $owner = (Get-Acl -Path $exePath -ErrorAction SilentlyContinue).Owner
+                } catch { }
+                if ($owner -match 'Users|Administrators' -and $owner -notmatch 'SYSTEM') {
+                    $unsignedActions += "$($t.TaskPath)$($t.TaskName) -> $exePath (owned by $owner)"
+                }
             }
         }
     }
+    if ($unsignedActions) {
+        Record-Poc system_task_actions_trusted_owner 0 ("SYSTEM tasks run unsigned executables from user-writable locations: " + ($unsignedActions -join '; '))
+    } else {
+        Record-Poc system_task_actions_trusted_owner 1 "all SYSTEM task actions reference signed/SYSTEM-owned executables."
+    }
 }
-if ($unsignedActions) {
-    Write-Host "FAIL [PoC]: SYSTEM tasks run unsigned executables from user-writable locations:"
-    $unsignedActions | ForEach-Object { Write-Host "  - $_" }
-    exit 1
-}
-Write-Host "PASS [PoC]: all SYSTEM task actions reference signed/SYSTEM-owned executables."
 
 ###############################################################################
-# Regression Check: the Task Scheduler service is still healthy
+# Regression Check: the Task Scheduler service is still healthy. Deleting the
+# rogue task is remediation; disabling or killing the Schedule service takes
+# every legitimate task down with it.
 ###############################################################################
-$svc = Get-Service -Name Schedule -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne 'Running') {
-    Write-Host "FAIL [Regression]: Task Scheduler service (Schedule) is not running."
-    exit 1
+$svc = $null
+try {
+    $svc = Get-Service -Name Schedule -ErrorAction SilentlyContinue
+} catch { }
+if (-not $svc) {
+    Record-Reg task_scheduler_running 0 "Task Scheduler service (Schedule) not found."
+} elseif ($svc.Status -ne 'Running') {
+    Record-Reg task_scheduler_running 0 "Task Scheduler service (Schedule) is not running (status=$($svc.Status))."
+} else {
+    Record-Reg task_scheduler_running 1 "Task Scheduler service still running."
 }
-Write-Host "PASS [Regression]: Task Scheduler service still running."
 
-Write-Host "All checks passed."
-exit 0
+Complete-Verify

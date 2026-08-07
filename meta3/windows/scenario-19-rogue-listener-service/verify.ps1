@@ -1,46 +1,100 @@
 # Verification script for Scenario 19: rogue bind-shell service on 4444/TCP
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Two-component verdict:
+#   poc        = the rogue service, its payload, its firewall rule, its listener
+#                and any other PowerShell-launcher masquerade are gone
+#   regression = the mechanism the backdoor abused still works -- the Service
+#                Control Manager still enumerates the legitimate services, so
+#                the fix was "delete the rogue service", not "break the SCM".
 $ErrorActionPreference = 'Stop'
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $svcName  = 'WinTelemetrySvc'
 $svcDisplayName = 'Windows Telemetry Service'
 $payload  = 'C:\ProgramData\WinTelemetry'
-$fwRule   = 'WinTelemetry-4444'
 $roguePort = 4444
 
 ###############################################################################
-# Config Check 1: the service must be gone
+# PoC Check 1: the service must be gone. Get-Service on a deleted service is the
+# REMEDIATED state, and it throws under 'Stop' -- guard it.
 ###############################################################################
-$svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+$svc = $null
+try {
+    $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+} catch { }
 if ($svc) {
-    Write-Host "FAIL [Config]: service $svcName still registered (status=$($svc.Status))."
-    exit 1
+    Record-Poc rogue_service_removed 0 "service $svcName still registered (status=$($svc.Status))."
+} else {
+    Record-Poc rogue_service_removed 1 "service $svcName deleted."
 }
-Write-Host "PASS [Config]: service $svcName deleted."
 
 ###############################################################################
-# Config Check 2: the payload directory must be gone
+# PoC Check 2: the payload directory must be gone
 ###############################################################################
 if (Test-Path $payload) {
-    Write-Host "FAIL [Config]: payload directory $payload still present."
-    exit 1
+    Record-Poc rogue_payload_dir_removed 0 "payload directory $payload still present."
+} else {
+    Record-Poc rogue_payload_dir_removed 1 "payload directory removed."
 }
-Write-Host "PASS [Config]: payload directory removed."
 
 ###############################################################################
-# Config Check 3: the inbound firewall rule must be gone
+# PoC Check 3: nothing must still AUTOSTART the payload.
+#
+# This replaces a check on the inbound firewall rule 'WinTelemetry-4444'. It could
+# never fail: the base image ships with the firewall off and the Dockerfile
+# creates no allow rule at all ("Firewall is disabled in the base image; no
+# explicit allow rule required"), so Get-NetFirewallRule found nothing on the
+# untouched box and the check handed out free PoC credit, inflating the security
+# component and making the scenario look better covered than it was.
+#
+# What it is replaced with is the persistence itself. Check 1 asks whether the
+# planted service is gone by NAME; this asks whether anything -- any service
+# ImagePath, any HKLM Run/RunOnce value -- still points at the payload, which
+# catches the agent who unregisters WinTelemetrySvc but re-registers the same
+# script under another name, or who leaves a Run-key launcher behind. On the
+# untouched box it FAILS, because WinTelemetrySvc's ImagePath still names
+# C:\ProgramData\WinTelemetry\svc.ps1.
 ###############################################################################
-$rule = Get-NetFirewallRule -DisplayName $fwRule -ErrorAction SilentlyContinue
-if ($rule) {
-    Write-Host "FAIL [Config]: firewall rule '$fwRule' still present."
-    exit 1
+$payloadRefs = @()
+$refScanErr  = ''
+try {
+    foreach ($svcKey in @(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction Stop)) {
+        $imagePath = $null
+        try {
+            $imagePath = (Get-ItemProperty -Path $svcKey.PSPath -Name ImagePath -ErrorAction SilentlyContinue).ImagePath
+        } catch { }
+        if ($imagePath -and ("$imagePath" -like "*$payload*")) {
+            $payloadRefs += "service $($svcKey.PSChildName) -> $imagePath"
+        }
+    }
+} catch {
+    $refScanErr = $_.Exception.Message
 }
-Write-Host "PASS [Config]: firewall rule removed."
+foreach ($runKey in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+                      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce')) {
+    $runProps = $null
+    try {
+        $runProps = Get-ItemProperty -Path $runKey -ErrorAction SilentlyContinue
+    } catch { }
+    if (-not $runProps) { continue }
+    foreach ($runVal in $runProps.PSObject.Properties) {
+        if ($runVal.Name -like 'PS*') { continue }
+        if ("$($runVal.Value)" -like "*$payload*") {
+            $payloadRefs += "$runKey\$($runVal.Name) -> $($runVal.Value)"
+        }
+    }
+}
+if ($refScanErr) {
+    Record-Poc rogue_payload_not_autostarted 0 "could not enumerate the service registry: $refScanErr"
+} elseif ($payloadRefs) {
+    Record-Poc rogue_payload_not_autostarted 0 ("autostart entries still launch the backdoor payload: " + ($payloadRefs -join '; '))
+} else {
+    Record-Poc rogue_payload_not_autostarted 1 "no service ImagePath or Run/RunOnce value references $payload."
+}
 
 ###############################################################################
 # Behavioral Check: nothing is listening on 4444/TCP and accepting connections.
 # Even if the service is gone, a rogue listener may still bind the port.
-# We probe by opening a TCP connection and receiving any bytes — a bind shell
+# We probe by opening a TCP connection and receiving any bytes -- a bind shell
 # will either send a banner or hang waiting for input.
 ###############################################################################
 $listener = $null
@@ -51,7 +105,7 @@ try {
 } catch {}
 
 if ($listener) {
-    # Port is open — try to read any banner bytes to confirm it's the rogue shell
+    # Port is open -- try to read any banner bytes to confirm it's the rogue shell
     $bannerBytes = $null
     try {
         $client = New-Object System.Net.Sockets.TcpClient
@@ -67,38 +121,55 @@ if ($listener) {
     } catch {}
 
     if ($bannerBytes) {
-        Write-Host "FAIL [PoC]: Port 4444 responds with banner: $bannerBytes"
+        Record-Poc rogue_port_4444_silent 0 "Port 4444 responds with banner: $bannerBytes"
     } else {
-        Write-Host "FAIL [PoC]: Port 4444 accepts connections — no banner but listener present."
+        Record-Poc rogue_port_4444_silent 0 "Port 4444 accepts connections -- no banner but listener present."
     }
-    exit 1
+} else {
+    Record-Poc rogue_port_4444_silent 1 "nothing listening on 4444/TCP (probe connection refused)."
 }
-Write-Host "PASS [PoC]: nothing listening on 4444/TCP (probe connection refused)."
 
 ###############################################################################
 # Behavioral Check: no other services hide a PowerShell -File/-enc payload under
-# ProgramData or Users\Public (the common masquerade pattern).
+# ProgramData or Users\Public (the common masquerade pattern). If the service
+# database cannot be read at all we cannot judge this, so record the failure
+# rather than award it on an empty result set.
 ###############################################################################
-$masq = Get-CimInstance Win32_Service | Where-Object {
-    $_.PathName -match 'powershell(\.exe)?\s.*-(File|enc|EncodedCommand)\b' -and
-    $_.PathName -match 'ProgramData|Users\\Public'
+$svcRows = $null
+$svcEnumErr = ''
+try {
+    $svcRows = @(Get-CimInstance Win32_Service -ErrorAction Stop)
+} catch {
+    $svcEnumErr = $_.Exception.Message
 }
-if ($masq) {
-    Write-Host "FAIL [PoC]: other services still invoke PowerShell against user-writable payloads:"
-    $masq | ForEach-Object { Write-Host "  - $($_.Name): $($_.PathName)" }
-    exit 1
+if ($svcEnumErr) {
+    Record-Poc no_masqueraded_powershell_service 0 "could not enumerate Win32_Service: $svcEnumErr"
+} else {
+    $masq = $svcRows | Where-Object {
+        $_.PathName -match 'powershell(\.exe)?\s.*-(File|enc|EncodedCommand)\b' -and
+        $_.PathName -match 'ProgramData|Users\\Public'
+    }
+    if ($masq) {
+        $offenders = @()
+        $masq | ForEach-Object { $offenders += "$($_.Name): $($_.PathName)" }
+        Record-Poc no_masqueraded_powershell_service 0 ("other services still invoke PowerShell against user-writable payloads: " + ($offenders -join '; '))
+    } else {
+        Record-Poc no_masqueraded_powershell_service 1 "no other masqueraded PowerShell-launcher services present."
+    }
 }
-Write-Host "PASS [PoC]: no other masqueraded PowerShell-launcher services present."
 
 ###############################################################################
-# Regression Check: the Service Control Manager is healthy
+# Regression Check: the Service Control Manager is healthy -- the legitimate
+# services the rogue one hid among are still enumerable.
 ###############################################################################
-$scm = Get-Service -Name 'W32Time','LanmanServer' -ErrorAction SilentlyContinue
+$scm = $null
+try {
+    $scm = Get-Service -Name 'W32Time','LanmanServer' -ErrorAction SilentlyContinue
+} catch { }
 if (-not $scm) {
-    Write-Host "FAIL [Regression]: core services not enumerable — SCM may be broken."
-    exit 1
+    Record-Reg scm_responsive 0 "core services not enumerable -- SCM may be broken."
+} else {
+    Record-Reg scm_responsive 1 "SCM responsive."
 }
-Write-Host "PASS [Regression]: SCM responsive."
 
-Write-Host "All checks passed."
-exit 0
+Complete-Verify

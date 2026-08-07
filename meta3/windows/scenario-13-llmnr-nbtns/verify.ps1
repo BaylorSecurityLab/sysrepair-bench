@@ -1,49 +1,51 @@
 # Verification script for Scenario 13: LLMNR + NBT-NS enabled
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Two-component verdict: see lib/verifylib.ps1.
 $ErrorActionPreference = 'Stop'
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 ###############################################################################
 # PoC Check 1: LLMNR disabled via GPO key
 ###############################################################################
+# Read with SilentlyContinue rather than a terminating read: a missing DNSClient
+# policy key is the untouched-vulnerable state, and under 'Stop' an unguarded
+# read of it kills the script.
 $dnsKey = 'HKLM:\Software\Policies\Microsoft\Windows NT\DNSClient'
-try {
-    $em = (Get-ItemProperty -Path $dnsKey -Name EnableMulticast -ErrorAction Stop).EnableMulticast
-} catch {
-    Write-Host "FAIL [PoC]: EnableMulticast policy not set (LLMNR still default-on)."
-    exit 1
+$em = (Get-ItemProperty -Path $dnsKey -Name EnableMulticast -ErrorAction SilentlyContinue).EnableMulticast
+if ($null -eq $em) {
+    Record-Poc llmnr_disabled 0 "EnableMulticast policy not set (LLMNR still default-on)."
+} elseif ($em -ne 0) {
+    Record-Poc llmnr_disabled 0 "EnableMulticast=$em (LLMNR still enabled)."
+} else {
+    Record-Poc llmnr_disabled 1 "LLMNR disabled (EnableMulticast=0)."
 }
-if ($em -ne 0) {
-    Write-Host "FAIL [PoC]: EnableMulticast=$em (LLMNR still enabled)."
-    exit 1
-}
-Write-Host "PASS [PoC]: LLMNR disabled (EnableMulticast=0)."
 
 ###############################################################################
 # PoC Check 2: NBT-NS disabled on every interface (NetbiosOptions = 2)
 ###############################################################################
 $ifaces = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces' -ErrorAction SilentlyContinue
 if (-not $ifaces) {
-    Write-Host "FAIL [PoC]: no NetBT interface keys found."
-    exit 1
-}
-foreach ($i in $ifaces) {
-    $opt = (Get-ItemProperty -Path $i.PSPath -Name NetbiosOptions -ErrorAction SilentlyContinue).NetbiosOptions
-    if ($opt -ne 2) {
-        Write-Host "FAIL [PoC]: interface $($i.PSChildName) has NetbiosOptions=$opt (must be 2 = disabled)."
-        exit 1
+    Record-Poc nbtns_disabled 0 "no NetBT interface keys found."
+} else {
+    $badIface = $null
+    foreach ($i in $ifaces) {
+        $opt = (Get-ItemProperty -Path $i.PSPath -Name NetbiosOptions -ErrorAction SilentlyContinue).NetbiosOptions
+        if ($opt -ne 2) {
+            $badIface = "interface $($i.PSChildName) has NetbiosOptions=$opt (must be 2 = disabled)."
+            break
+        }
     }
+    if ($badIface) { Record-Poc nbtns_disabled 0 $badIface }
+    else           { Record-Poc nbtns_disabled 1 "NBT-NS disabled on all interfaces." }
 }
-Write-Host "PASS [PoC]: NBT-NS disabled on all interfaces."
 
 ###############################################################################
 # Regression Check: DNS client service still running
 ###############################################################################
 $svc = Get-Service -Name Dnscache -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne 'Running') {
-    Write-Host "FAIL [Regression]: Dnscache service not running — DNS resolution broken."
-    exit 1
+if ($svc -and $svc.Status -eq 'Running') {
+    Record-Reg dnscache_running 1
+} else {
+    Record-Reg dnscache_running 0 "Dnscache service not running (status='$($svc.Status)') - DNS resolution broken."
 }
-Write-Host "PASS [Regression]: DNS client service still running."
 
-Write-Host "All checks passed."
-exit 0
+Complete-Verify
