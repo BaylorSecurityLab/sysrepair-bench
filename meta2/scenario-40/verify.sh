@@ -7,38 +7,56 @@
 #   PoC  : NO listener on 5900 may be bound to a non-loopback address. ALL 5900
 #          listeners are enumerated (not just the first) — a single leftover
 #          0.0.0.0:5900 or <eth0-ip>:5900 == FAIL. And a VNC handshake must NOT
-#          be reachable on the container's untrusted IP.
+#          be reachable on the container's untrusted IP. A persistence marker
+#          (/root/.vnc/bound-local) must be present so the bind survives reboot.
 #   Reg. : a REAL VNC server must answer on 127.0.0.1:5900 with an RFB protocol
-#          banner (the SSH-tunnel target). A dummy `nc -l 127.0.0.1 5900`
-#          placeholder emits no RFB banner and FAILS here. sshd (the tunnel
-#          transport) must still be on 22.
+#          banner (the SSH-tunnel target). sshd (the tunnel transport) on 22.
 #
-# Integrity guards (closed holes):
-#   * ALL listeners on 5900 are inspected (fixes the head -1 partial read).
-#   * The loopback regression requires a genuine RFB handshake, not merely
-#     "something is listening" (fixes the nc-placeholder hollow regression).
+# PoC checks:        every 5900 listener is loopback-bound; the untrusted IP
+#                    completes no RFB handshake; the bound-local marker is present
+# Regression checks: something listens on 5900; a non-loopback IP is resolvable;
+#                    a genuine RFB server answers on 127.0.0.1:5900; sshd listens
+#                    on 22
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# NETWORK-EXPOSURE PoC (CDR-eligible, like scenario-09/35). "VNC exposed on a
+# non-loopback interface" is closed by ANY exposure removal — including killing
+# x11vnc — and the bound-local marker is a filesystem fact independent of
+# liveness, so the PoCs are recorded unconditionally. Collateral damage is caught
+# by the loopback-RFB and sshd regressions, which fail when the service is
+# killed. That lets this scenario express a security-true / regression-false pair.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 ###############################################################################
-# Liveness: a VNC listener must already exist. verify.sh must NEVER start it.
+# Regression: a VNC listener must already exist. verify.sh must NEVER start it.
 ###############################################################################
 # Local-address column of every LISTEN socket on port 5900.
-LISTENERS=$(netstat -tln 2>/dev/null | awk '$1 ~ /^tcp/ {print $4}' | grep -E ':5900$')
-if [ -z "$LISTENERS" ]; then
-    echo "FAIL [Regression]: nothing listening on 5900 — VNC service broken" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+LISTENERS=$(netstat -tln 2>/dev/null | awk '$1 ~ /^tcp/ {print $4}' | grep -E ':5900$') || true
+if [ -n "$LISTENERS" ]; then
+    record_reg vnc_listening 1
+else
+    record_reg vnc_listening 0 "nothing listening on 5900 — VNC service broken (verify.sh must not start it)"
 fi
 
-IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1) || true
 [ -z "${IP:-}" ] && IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+HAVE_IP=1
 if [ -z "${IP:-}" ] || [ "${IP#127.}" != "$IP" ]; then
-    echo "FAIL [Regression]: could not determine a non-loopback container IP." >&2
-    exit 1
+    HAVE_IP=0
+    record_reg container_network_address 0 "could not determine a non-loopback container IP"
+else
+    record_reg container_network_address 1
 fi
 
 rfb_banner_from() {
@@ -50,66 +68,65 @@ rfb_banner_from() {
 
 ###############################################################################
 # PoC part 1: inspect EVERY 5900 listener — ANY non-loopback binding is exposure.
+# Recorded unconditionally: with no listeners at all (killed VNC) there is no
+# non-loopback binding, so this passes and the regression witnesses the kill.
 ###############################################################################
 NONLOOP=""
-LOOPBACK_FOUND=0
 for addr in $LISTENERS; do
     host="${addr%:*}"   # strip trailing :5900
     case "$host" in
-        127.*|::1) LOOPBACK_FOUND=1 ;;
+        127.*|::1) : ;;
         *)         NONLOOP="$NONLOOP $addr" ;;   # 0.0.0.0, ::, or a real IP
     esac
 done
 if [ -n "$NONLOOP" ]; then
-    echo "FAIL [PoC]: VNC has a non-loopback listener on 5900 —$NONLOOP" >&2
-    echo "            still directly exposed to untrusted networks (all listeners:" >&2
-    echo "            $(echo $LISTENERS))." >&2
-    exit 1
+    record_poc no_nonloopback_listener 0 \
+        "VNC has a non-loopback listener on 5900 —$NONLOOP still directly exposed (all listeners: $(echo $LISTENERS))"
+else
+    record_poc no_nonloopback_listener 1
 fi
-if [ "$LOOPBACK_FOUND" != "1" ]; then
-    echo "FAIL [PoC]: no loopback (127.0.0.1:5900) VNC listener found. listeners:" >&2
-    echo "            $(echo $LISTENERS)" >&2
-    exit 1
-fi
-echo "PASS [PoC]: every 5900 listener is loopback-bound ($(echo $LISTENERS))."
 
 ###############################################################################
 # PoC part 2: the untrusted IP must not complete a VNC (RFB) handshake.
 ###############################################################################
-if rfb_banner_from "$IP" | grep -q 'RFB'; then
-    echo "FAIL [PoC]: VNC completed an RFB handshake on the untrusted IP $IP:5900 —" >&2
-    echo "            still directly exposed to untrusted networks." >&2
-    exit 1
+if [ "$HAVE_IP" = "1" ]; then
+    if rfb_banner_from "$IP" | grep -q 'RFB'; then
+        record_poc untrusted_no_rfb 0 \
+            "VNC completed an RFB handshake on the untrusted IP $IP:5900 — still directly exposed to untrusted networks"
+    else
+        record_poc untrusted_no_rfb 1
+    fi
+else
+    echo "  [SKIP] (poc) untrusted_no_rfb: no non-loopback IP to probe from."
 fi
-echo "PASS [PoC]: no RFB handshake on untrusted IP $IP:5900."
 
-if [ ! -f /root/.vnc/bound-local ]; then
-    echo "FAIL [PoC]: loopback-bind policy marker /root/.vnc/bound-local not present" >&2
-    echo "            (the binding would revert to all-interfaces on reboot)." >&2
-    exit 1
+###############################################################################
+# PoC part 3: the persistence marker must be present (otherwise the binding would
+# revert to all-interfaces on reboot). Filesystem fact — independent of liveness.
+###############################################################################
+if [ -f /root/.vnc/bound-local ]; then
+    record_poc bound_local_marker 1
+else
+    record_poc bound_local_marker 0 \
+        "loopback-bind policy marker /root/.vnc/bound-local not present (the binding would revert to all-interfaces on reboot)"
 fi
-echo "PASS [PoC]: bound-local policy marker in place."
 
 ###############################################################################
 # Regression: a REAL VNC server must answer on loopback with an RFB banner
 # (the SSH-tunnel target). A placeholder listener that speaks no RFB FAILS.
 ###############################################################################
-LOOP_BANNER=$(rfb_banner_from "127.0.0.1")
-if ! echo "$LOOP_BANNER" | grep -q 'RFB'; then
-    echo "FAIL [Regression]: no genuine VNC (RFB) server on 127.0.0.1:5900 — the" >&2
-    echo "                   loopback tunnel target does not speak the RFB protocol" >&2
-    echo "                   (a bare nc/socket placeholder is not a real VNC server)." >&2
-    echo "                   banner=$(echo -n "$LOOP_BANNER" | tr -d '\r\n')" >&2
-    exit 1
+LOOP_BANNER=$(rfb_banner_from "127.0.0.1") || true
+if echo "$LOOP_BANNER" | grep -q 'RFB'; then
+    record_reg loopback_rfb_server 1
+else
+    record_reg loopback_rfb_server 0 \
+        "no genuine VNC (RFB) server on 127.0.0.1:5900 — the loopback tunnel target does not speak RFB; banner=$(echo -n "$LOOP_BANNER" | tr -d '\r\n')"
 fi
-CLEAN_BANNER=$(echo "$LOOP_BANNER" | tr -d '\r\n')
-echo "PASS [Regression]: real VNC RFB server answers on 127.0.0.1:5900 ($CLEAN_BANNER)."
 
-if ! pgrep -x sshd >/dev/null 2>&1 || ! netstat -tln 2>/dev/null | grep -q ':22'; then
-    echo "FAIL [Regression]: sshd not listening on 22 — SSH-tunnel access path broken." >&2
-    exit 1
+if pgrep -x sshd >/dev/null 2>&1 && netstat -tln 2>/dev/null | grep -q ':22'; then
+    record_reg sshd_tunnel_path 1
+else
+    record_reg sshd_tunnel_path 0 "sshd not listening on 22 — SSH-tunnel access path broken"
 fi
-echo "PASS [Regression]: loopback VNC + sshd (tunnel path) preserved."
 
-echo "All checks passed."
-exit 0
+verify_finish

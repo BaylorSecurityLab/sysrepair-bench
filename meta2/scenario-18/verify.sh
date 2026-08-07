@@ -9,8 +9,25 @@
 # editing the config without restarting leaves the old version live
 # (notrestart => FAIL). It NEVER starts the daemon -- a dead listener fails.
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# PoC checks:        the live advertised version is >= 3.2.10.7 (patched)
+# Regression checks: the IRC daemon runs, advertises a parseable version banner,
+#                    and still handles a normal registration
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: the only PoC signal is the version string in the live banner.
+# A dead daemon advertises nothing, so a killed listener would leave the version
+# unparseable — the PoC is left UNRECORDED unless a full version banner was read,
+# and the killed service instead fails the regression checks.
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 HOST=127.0.0.1
 PORT=6667
 
@@ -20,61 +37,68 @@ irc_register() {
     { printf "NICK probe\r\nUSER probe 0 * :probe\r\n"; sleep 2; } | nc -w 8 "$HOST" "$PORT" 2>/dev/null
 }
 
-if ! pgrep -f ircsim.py >/dev/null 2>&1; then
-    echo "FAIL [Regression]: the IRC daemon is not running -- a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+# Regression: the daemon must already be running; the verifier must not start it.
+if pgrep -f ircsim.py >/dev/null 2>&1; then
+    record_reg ircd_running 1
+else
+    record_reg ircd_running 0 "the IRC daemon is not running (verify.sh must not start it)"
 fi
 
-# Wait (bounded) until the daemon returns a full version banner (not just the
-# greeting), so an early/partial read can't be mistaken for a broken service.
+# Regression: wait (bounded) until the daemon returns a full version banner (not
+# just the greeting), so an early/partial read can't be mistaken for a broken
+# service.
 UP=0
 RESP=""
 for i in $(seq 1 20); do
-    RESP=$(irc_register)
+    RESP=$(irc_register) || true
     if echo "$RESP" | grep -qi "running version Unreal"; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != 1 ]; then
-    echo "FAIL [Regression]: IRC daemon did not advertise a version banner on port $PORT -- broken." >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg ircd_version_banner 1
+else
+    record_reg ircd_version_banner 0 "IRC daemon did not advertise a version banner on port $PORT -- broken"
 fi
 
 # Extract the advertised version (e.g. Unreal3.2.10.6 -> 3.2.10.6).
-VER=$(echo "$RESP" | grep -oiE "Unreal[0-9]+(\.[0-9]+)+" | head -1 | sed 's/^[Uu]nreal//')
-if [ -z "$VER" ]; then
-    echo "FAIL [Regression]: could not parse the advertised version -- broken." >&2
-    exit 1
+VER=""
+if [ "$UP" = "1" ]; then
+    VER=$(echo "$RESP" | grep -oiE "Unreal[0-9]+(\.[0-9]+)+" | head -1 | sed 's/^[Uu]nreal//') || true
 fi
 
 # PoC: is the live version below the patched 3.2.10.7?
-VULN=$(awk -v v="$VER" 'BEGIN{
-    n=split(v,a,".");
-    for(i=1;i<=4;i++){ if(a[i]=="") a[i]=0 }
-    min[1]=3; min[2]=2; min[3]=10; min[4]=7;
-    vuln=0;
-    for(i=1;i<=4;i++){
-        ai=a[i]+0;
-        if(ai<min[i]){vuln=1;break}
-        else if(ai>min[i]){vuln=0;break}
-    }
-    print vuln
-}')
+if [ "$UP" = "1" ] && [ -n "$VER" ]; then
+    VULN=$(awk -v v="$VER" 'BEGIN{
+        n=split(v,a,".");
+        for(i=1;i<=4;i++){ if(a[i]=="") a[i]=0 }
+        min[1]=3; min[2]=2; min[3]=10; min[4]=7;
+        vuln=0;
+        for(i=1;i<=4;i++){
+            ai=a[i]+0;
+            if(ai<min[i]){vuln=1;break}
+            else if(ai>min[i]){vuln=0;break}
+        }
+        print vuln
+    }')
 
-if [ "$VULN" = "1" ]; then
-    echo "FAIL [PoC]: the live IRC daemon advertises Unreal$VER (< 3.2.10.7)" >&2
-    echo "            -- vulnerable to CVE-2016-7144 authentication spoofing." >&2
-    exit 1
+    if [ "$VULN" = "1" ]; then
+        record_poc version_patched 0 \
+            "the live IRC daemon advertises Unreal$VER (< 3.2.10.7) -- vulnerable to CVE-2016-7144 authentication spoofing"
+    else
+        record_poc version_patched 1
+    fi
+else
+    echo "  [SKIP] (poc) version_patched: no live version banner was read, so the"
+    echo "         version cannot be judged. Left unrecorded so that killing the"
+    echo "         daemon cannot read as patching it."
 fi
-echo "PASS [PoC]: the live IRC daemon advertises Unreal$VER (>= 3.2.10.7, patched)."
 
 # Regression: the daemon still speaks IRC to a normal client.
 if echo "$RESP" | grep -qiE "Welcome to the IRC|running version Unreal"; then
-    echo "PASS [Regression]: the IRC daemon still answers a normal registration."
+    record_reg ircd_registration 1
 else
-    echo "FAIL [Regression]: the IRC daemon did not answer a normal registration -- broken." >&2
-    exit 1
+    record_reg ircd_registration 0 "the IRC daemon did not answer a normal registration -- broken"
 fi
 
-echo "All checks passed."
-exit 0
+verify_finish

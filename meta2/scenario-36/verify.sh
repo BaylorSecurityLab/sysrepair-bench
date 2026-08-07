@@ -9,25 +9,47 @@
 #          loopback, or ACL-denied). Getting root output back == FAIL.
 #   Reg. : a local client on druby://127.0.0.1:8787 can still call .ping -> DRB_OK.
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# PoC checks:        the RCE is unreachable from the untrusted container IP
+# Regression checks: the dRuby service runs and a LOCAL client still gets DRB_OK
+#                    from .ping
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# NETWORK-EXPOSURE PoC (CDR-eligible, like scenario-09/30). "RCE reachable from
+# the untrusted network" is closed by ANY exposure removal — including killing
+# the service — so the PoC is recorded unconditionally against the untrusted
+# vantage. The collateral damage is caught by the local-ping regression, which
+# fails when the service is killed. That is what lets this scenario express a
+# security-true / regression-false pair.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 ###############################################################################
-# Liveness: the dRuby service must already be running. Never start it here.
+# Regression: the dRuby service must already be running. Never start it here.
 ###############################################################################
-if ! pgrep -f drb_service.rb >/dev/null 2>&1; then
-    echo "FAIL [Regression]: dRuby service is not running — a dead service is a" >&2
-    echo "                   failure (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -f drb_service.rb >/dev/null 2>&1; then
+    record_reg drb_service_running 1
+else
+    record_reg drb_service_running 0 "dRuby service is not running (verify.sh must not start it)"
 fi
 
-IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1) || true
 [ -z "${IP:-}" ] && IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+HAVE_IP=1
 if [ -z "${IP:-}" ] || [ "${IP#127.}" != "$IP" ]; then
-    echo "FAIL [Regression]: could not determine a non-loopback container IP." >&2
-    exit 1
+    HAVE_IP=0
+    record_reg container_network_address 0 "could not determine a non-loopback container IP"
+else
+    record_reg container_network_address 1
 fi
 
 drb_call() {
@@ -45,38 +67,34 @@ drb_call() {
     cat "$out"; rm -f "$out"
 }
 
-# Wait for the service to answer a legitimate local ping before probing.
+# Regression: wait for the service to answer a legitimate local ping.
 UP=0
 for i in $(seq 1 15); do
     if drb_call "druby://127.0.0.1:8787" 'ping' | grep -q 'DRB_OK'; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: local client could not reach dRuby .ping — service down/broken." >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg local_ping_ok 1
+else
+    record_reg local_ping_ok 0 "local client could not reach dRuby .ping — service down/broken"
 fi
 
 ###############################################################################
-# PoC: remote RCE from the untrusted IP must be refused.
+# PoC: remote RCE from the untrusted IP must be refused. Recorded unconditionally
+# against the untrusted vantage — a killed service genuinely removes the exposure,
+# which the local-ping regression then flags as damage.
 ###############################################################################
-RCE=$(drb_call "druby://$IP:8787" 'exec_command("id")')
-if echo "$RCE" | grep -q 'uid='; then
-    echo "FAIL [PoC]: exec_command reached over druby://$IP:8787 and ran as:" >&2
-    echo "            $(echo "$RCE" | head -1)" >&2
-    echo "            the dRuby RCE is still exposed to untrusted clients." >&2
-    exit 1
+if [ "$HAVE_IP" = "1" ]; then
+    RCE=$(drb_call "druby://$IP:8787" 'exec_command("id")') || true
+    if echo "$RCE" | grep -q 'uid='; then
+        record_poc rce_unreachable_untrusted 0 \
+            "exec_command reached over druby://$IP:8787 and ran as: $(echo "$RCE" | head -1) — the dRuby RCE is still exposed to untrusted clients"
+    else
+        record_poc rce_unreachable_untrusted 1
+    fi
+else
+    echo "  [SKIP] (poc) rce_unreachable_untrusted: no non-loopback IP to probe from."
 fi
-echo "PASS [PoC]: dRuby RCE unreachable from untrusted IP $IP (got: $(echo "$RCE" | head -1))."
 
-###############################################################################
-# Regression: local client still works.
-###############################################################################
-PING=$(drb_call "druby://127.0.0.1:8787" 'ping')
-if ! echo "$PING" | grep -q 'DRB_OK'; then
-    echo "FAIL [Regression]: local client cannot reach dRuby service. got=$PING" >&2
-    exit 1
-fi
-echo "PASS [Regression]: local client still receives DRB_OK."
-
-echo "All checks passed."
-exit 0
+verify_finish

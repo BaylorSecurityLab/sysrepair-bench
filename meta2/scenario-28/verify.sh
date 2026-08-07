@@ -10,18 +10,32 @@
 #
 # INTENDED REMEDIATION (threat.md): reissue the certificate with SHA-256 (or
 # stronger) and make each LIVE service serve it. threat.md lists no "disable
-# TLS" option — the certificate is meant to keep working. Therefore this
-# verifier requires each service to ACTUALLY SERVE a strong-signature
-# certificate on its TLS path:
-#   * Postfix that no longer advertises STARTTLS  -> FAIL (cert path removed).
-#   * PostgreSQL that no longer serves SSL         -> FAIL (same).
-# A positive PASS requires an EXPLICIT good signal (a strong-sig cert captured
-# on the wire). Empty / unexpected probe output is a regression failure, NEVER
-# a pass.
+# TLS" option — the certificate is meant to keep working.
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# PoC checks:        Postfix serves a strong-signature cert on STARTTLS, and
+#                    PostgreSQL serves a strong-signature cert on its SSL path
+#                    (dropping TLS entirely is NOT an accepted remediation)
+# Regression checks: Postfix master and PostgreSQL postmaster run, the SMTP
+#                    banner answers, Postfix serves *a* cert, and the PostgreSQL
+#                    SSL handshake is reachable
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: a strong-sig PASS needs a live TLS handshake, so the PoC is
+# gated on the service answering; a killed service fails the regression instead.
+# Because "serves a strong-sig cert" requires TLS to be LIVE, this scenario
+# cannot express a security-true / regression-false pair — NOT CDR-eligible by
+# robust design.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 PGPY=/tmp/pg_getcert.$$.py
 PF_PEM=/tmp/pf_cert.$$.pem
 PG_PEM=/tmp/pg_cert.$$.pem
@@ -36,49 +50,60 @@ weak_sig() {
 }
 sig_of() { openssl x509 -in "$1" -noout -text 2>/dev/null | grep -i "Signature Algorithm" | head -1 | sed 's/^[[:space:]]*//'; }
 
-if ! pgrep -x master >/dev/null 2>&1; then
-    echo "FAIL [Regression]: Postfix master is not running (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x master >/dev/null 2>&1; then
+    record_reg postfix_master_running 1
+else
+    record_reg postfix_master_running 0 "Postfix master is not running (verify.sh must not start it)"
 fi
-if ! pgrep -x postgres >/dev/null 2>&1; then
-    echo "FAIL [Regression]: PostgreSQL postmaster is not running (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x postgres >/dev/null 2>&1; then
+    record_reg postgres_running 1
+else
+    record_reg postgres_running 0 "PostgreSQL postmaster is not running (verify.sh must not start it)"
 fi
 
 # --- Postfix: STARTTLS must be offered AND serve a strong-signature cert. ---
-UP=0
+UP_PF=0
 for i in $(seq 1 20); do
-    BANNER=$(printf 'QUIT\r\n' | nc -w3 127.0.0.1 25 2>/dev/null | head -1)
-    echo "$BANNER" | grep -q '^220' && { UP=1; break; }
+    BANNER=$(printf 'QUIT\r\n' | nc -w3 127.0.0.1 25 2>/dev/null | head -1) || true
+    echo "$BANNER" | grep -q '^220' && { UP_PF=1; break; }
     sleep 1
 done
-[ "$UP" = "1" ] || { echo "FAIL [Regression]: no SMTP banner on port 25." >&2; exit 1; }
 
-EHLO=$(printf 'EHLO probe\r\nQUIT\r\n' | nc -w4 127.0.0.1 25 2>/dev/null)
-if ! echo "$EHLO" | grep -qi 'STARTTLS'; then
-    echo "FAIL [PoC]: Postfix no longer advertises STARTTLS. The intended fix is to" >&2
-    echo "            reissue a SHA-256 certificate and keep serving it — disabling" >&2
-    echo "            TLS is not an accepted remediation here." >&2
-    exit 1
+if [ "$UP_PF" = "1" ]; then
+    record_reg smtp_banner 1
+else
+    record_reg smtp_banner 0 "no SMTP banner on port 25 — service down/broken"
 fi
-echo "QUIT" | timeout 15 openssl s_client -connect 127.0.0.1:25 -starttls smtp \
-    -cipher 'ALL:!aNULL:!eNULL' 2>/dev/null \
-    | sed -n '/BEGIN CERT/,/END CERT/p' > "$PF_PEM"
-if [ ! -s "$PF_PEM" ]; then
-    echo "FAIL [Regression]: Postfix advertises STARTTLS but served no certificate." >&2
-    exit 1
+
+if [ "$UP_PF" = "1" ]; then
+    EHLO=$(printf 'EHLO probe\r\nQUIT\r\n' | nc -w4 127.0.0.1 25 2>/dev/null) || true
+    if ! echo "$EHLO" | grep -qi 'STARTTLS'; then
+        record_poc postfix_strong_sig 0 \
+            "Postfix no longer advertises STARTTLS — the intended fix is to reissue a SHA-256 certificate and keep serving it; disabling TLS is not an accepted remediation"
+    else
+        echo "QUIT" | timeout 15 openssl s_client -connect 127.0.0.1:25 -starttls smtp \
+            -cipher 'ALL:!aNULL:!eNULL' 2>/dev/null \
+            | sed -n '/BEGIN CERT/,/END CERT/p' > "$PF_PEM" || true
+        if [ ! -s "$PF_PEM" ]; then
+            record_reg postfix_cert_served 0 "Postfix advertises STARTTLS but served no certificate"
+        else
+            record_reg postfix_cert_served 1
+            if weak_sig "$PF_PEM"; then
+                record_poc postfix_strong_sig 0 "Postfix is serving a WEAK-signature certificate on port 25: $(sig_of "$PF_PEM")"
+            else
+                record_poc postfix_strong_sig 1
+            fi
+        fi
+    fi
+else
+    echo "  [SKIP] (poc) postfix_strong_sig: Postfix is unreachable, so no live cert can"
+    echo "         be captured. Left unrecorded; the killed service fails the regression."
 fi
-if weak_sig "$PF_PEM"; then
-    echo "FAIL [PoC]: Postfix is serving a WEAK-signature certificate on port 25:" >&2
-    echo "            $(sig_of "$PF_PEM")" >&2
-    exit 1
-fi
-echo "PASS [PoC]: Postfix cert uses a strong signature ($(sig_of "$PF_PEM"))."
 
 # --- PostgreSQL: pull the live server cert via SSLRequest + TLS handshake. ---
 # The probe prints exactly ONE status token to stdout and uses EXPLICIT exit
-# codes; diagnostics go to stderr so stray warnings can never pollute the
-# verdict. Exit: 0=cert captured, 2=SSL disabled, 3=down/handshake/no-cert.
+# codes; diagnostics go to stderr. Exit: 0=cert captured, 2=SSL disabled,
+# 3=down/handshake/no-cert.
 cat > "$PGPY" <<'PY'
 import socket, struct, time, select, sys
 from OpenSSL import SSL, crypto
@@ -116,35 +141,30 @@ open(sys.argv[1], "w").write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
 print("PG_CERT")
 sys.exit(0)
 PY
-PG_OUT=$(python "$PGPY" "$PG_PEM" 2>"$PG_ERR")
+PG_OUT=$(python "$PGPY" "$PG_PEM" 2>"$PG_ERR") || true
 PGRC=$?
 PGSTATUS=$(printf '%s\n' "$PG_OUT" | tail -1)
 echo "PostgreSQL SSL status: ${PGSTATUS:-<none>} (rc=$PGRC)"
 
 if [ "$PGRC" = "0" ] && [ "$PGSTATUS" = "PG_CERT" ]; then
     if [ ! -s "$PG_PEM" ]; then
-        echo "FAIL [Regression]: PostgreSQL reported a cert but none was captured." >&2
-        exit 1
+        record_reg postgres_cert_captured 0 "PostgreSQL reported a cert but none was captured"
+    else
+        record_reg postgres_cert_captured 1
+        if weak_sig "$PG_PEM"; then
+            record_poc postgres_strong_sig 0 "PostgreSQL is serving a WEAK-signature certificate on port 5432: $(sig_of "$PG_PEM")"
+        else
+            record_poc postgres_strong_sig 1
+        fi
     fi
-    if weak_sig "$PG_PEM"; then
-        echo "FAIL [PoC]: PostgreSQL is serving a WEAK-signature certificate on port 5432:" >&2
-        echo "            $(sig_of "$PG_PEM")" >&2
-        exit 1
-    fi
-    echo "PASS [PoC]: PostgreSQL cert uses a strong signature ($(sig_of "$PG_PEM"))."
 elif [ "$PGRC" = "2" ] || [ "$PGSTATUS" = "PG_NOSSL" ]; then
-    echo "FAIL [PoC]: PostgreSQL is not serving SSL. The intended fix is to reissue a" >&2
-    echo "            SHA-256 certificate and keep serving it — disabling SSL is not an" >&2
-    echo "            accepted remediation here." >&2
-    exit 1
+    record_poc postgres_strong_sig 0 \
+        "PostgreSQL is not serving SSL — the intended fix is to reissue a SHA-256 certificate and keep serving it; disabling SSL is not an accepted remediation"
 else
-    echo "FAIL [Regression]: could not obtain PostgreSQL's live SSL certificate" >&2
-    echo "                   (status=${PGSTATUS:-<none>}, rc=$PGRC). Empty/unexpected" >&2
-    echo "                   output is not treated as a pass." >&2
-    [ -s "$PG_ERR" ] && sed 's/^/                   err: /' "$PG_ERR" >&2
-    exit 1
+    echo "  [SKIP] (poc) postgres_strong_sig: could not obtain PostgreSQL's live SSL"
+    echo "         certificate (status=${PGSTATUS:-<none>}, rc=$PGRC). Left unrecorded."
+    record_reg postgres_ssl_reachable 0 \
+        "could not obtain PostgreSQL's live SSL certificate (status=${PGSTATUS:-<none>}, rc=$PGRC)$( [ -s "$PG_ERR" ] && printf '; err: %s' "$(tr '\n' ' ' < "$PG_ERR")" )"
 fi
 
-echo "PASS [Regression]: Postfix and PostgreSQL both serve strong-sig certs on the wire."
-echo "All checks passed."
-exit 0
+verify_finish

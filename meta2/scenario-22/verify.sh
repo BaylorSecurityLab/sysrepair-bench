@@ -21,28 +21,40 @@
 #      proof the plaintext command was injected across the TLS boundary. A fixed
 #      Postfix discards the pre-TLS buffer (nothing to read).
 #
-# Truth table:
-#   TLS on, Postfix 2.5.1 running          -> injected NOOP replayed over TLS -> FAIL
-#   TLS disabled + reload, mail still works -> no STARTTLS, MAIL/RCPT 250      -> PASS
-#   TLS disabled + reload, mail bricked     -> no STARTTLS, MAIL/RCPT != 250   -> FAIL
-#   smtpd_use_tls=no in main.cf, NO reload  -> warm daemon still offers TLS    -> FAIL
-#   nothing done                            -> injection fires                 -> FAIL
+# PoC checks:        the STARTTLS plaintext-injection does not fire (RC 0 = safe)
+# Regression checks: Postfix master runs; the live SMTP/STARTTLS probe completes
+#                    (not SMTP_DOWN / ambiguous); and the legitimate mail path
+#                    (MAIL FROM / RCPT TO -> 250) still delivers
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: the exploit's safe/vulnerable verdict (RC 0/1) is only produced
+# when the daemon answered. If the probe reports SMTP_DOWN (RC 3) or an ambiguous
+# STARTTLS state (RC 4), the PoC is left UNRECORDED and the failure is recorded
+# on the regression side — so a killed Postfix cannot read as "injection closed".
+# The always-on mail-path check is the liveness witness.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 POC=/tmp/starttls_inject.$$.py
 trap 'rm -f "$POC"' EXIT
 
 ###############################################################################
-# The image CMD boots the Postfix master (see .preserve-cmd). verify.sh must
-# NEVER start it — a freshly started daemon would mask the "edited main.cf but
-# never reloaded" case, and a dead service is a real failure.
+# Regression: the image CMD boots the Postfix master (see .preserve-cmd).
+# verify.sh must NEVER start it — a freshly started daemon would mask the
+# "edited main.cf but never reloaded" case, and a dead service is a real failure.
 ###############################################################################
-if ! pgrep -x master >/dev/null 2>&1; then
-    echo "FAIL [Regression]: Postfix master is not running — a dead service is a" >&2
-    echo "                   failure (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x master >/dev/null 2>&1; then
+    record_reg postfix_master_running 1
+else
+    record_reg postfix_master_running 0 "Postfix master is not running (verify.sh must not start it)"
 fi
 
 cat > "$POC" <<'PY'
@@ -157,39 +169,41 @@ echo "$OUT"
 
 case "$RC" in
     0)
-        echo "PASS [PoC]: STARTTLS command injection (CVE-2011-0411) is not exploitable."
+        record_poc starttls_injection_closed 1
         ;;
     1)
-        echo "FAIL [PoC]: Postfix STARTTLS plaintext command injection succeeded against" >&2
-        echo "            the live daemon on port 25." >&2
-        exit 1
+        record_poc starttls_injection_closed 0 \
+            "Postfix STARTTLS plaintext command injection succeeded against the live daemon on port 25"
+        ;;
+    3)
+        echo "  [SKIP] (poc) starttls_injection_closed: the SMTP service did not answer"
+        echo "         (SMTP_DOWN), so the injection could not be exercised. Left unrecorded"
+        echo "         so that killing the service cannot read as closing the vulnerability."
+        record_reg smtp_service_reachable 0 "live SMTP service did not answer (rc=$RC): $OUT"
         ;;
     *)
-        echo "FAIL [Regression]: could not exercise the live SMTP/STARTTLS service" >&2
-        echo "                   (rc=$RC). A broken/dead service is a failure." >&2
-        exit 1
+        echo "  [SKIP] (poc) starttls_injection_closed: the STARTTLS probe was ambiguous"
+        echo "         (rc=$RC), so the injection verdict is unreliable. Left unrecorded."
+        record_reg starttls_probe_completed 0 "STARTTLS probe did not complete cleanly (rc=$RC): $OUT"
         ;;
 esac
 
 ###############################################################################
 # Regression: the LEGITIMATE mail path must still work. Drive a real envelope
 # (MAIL FROM / RCPT TO to a local recipient) and require Postfix to accept it
-# with 250 responses. This stops a "disable TLS and brick the service" edit
-# from passing on the STARTTLS-absent branch.
+# with 250 responses. This is the always-on liveness witness — it fails when the
+# daemon is killed regardless of which PoC branch was taken.
 ###############################################################################
 TX=$(printf 'EHLO probe\r\nMAIL FROM:<postmaster@localhost>\r\nRCPT TO:<root@localhost>\r\nQUIT\r\n' \
-        | timeout 15 nc -w6 127.0.0.1 25 2>/dev/null)
+        | timeout 15 nc -w6 127.0.0.1 25 2>/dev/null) || true
 # Postfix accepts MAIL FROM with "250 2.1.0" and RCPT TO with "250 2.1.5" (RFC
 # 3463 enhanced status codes, on by default). Both must be present: a fix that
 # turns TLS off but rejects recipients (bricks delivery) is missing "2.1.5".
-if ! printf '%s\n' "$TX" | grep -q '250 2\.1\.0' || \
-   ! printf '%s\n' "$TX" | grep -q '250 2\.1\.5'; then
-    echo "FAIL [Regression]: legitimate mail transaction was not accepted" >&2
-    echo "                   (MAIL FROM 250 2.1.0 and RCPT TO 250 2.1.5 required)." >&2
-    echo "                   transcript: $(printf '%s' "$TX" | tr '\r\n' '  ')" >&2
-    exit 1
+if printf '%s\n' "$TX" | grep -q '250 2\.1\.0' && printf '%s\n' "$TX" | grep -q '250 2\.1\.5'; then
+    record_reg legitimate_mail_path 1
+else
+    record_reg legitimate_mail_path 0 \
+        "legitimate mail transaction was not accepted (MAIL FROM 250 2.1.0 and RCPT TO 250 2.1.5 required); transcript: $(printf '%s' "$TX" | tr '\r\n' '  ')"
 fi
-echo "PASS [Regression]: legitimate mail path works (MAIL FROM/RCPT TO accepted, 250)."
 
-echo "All checks passed."
-exit 0
+verify_finish

@@ -9,57 +9,66 @@
 # that runs our command == the box is still owned.
 #
 # Integrity guards (closed holes):
-#   * The probe never trusts a single client binary. `/bin/nc.traditional` is
-#     only the FIRST method tried; if a defender DELETES the client binary
-#     (which does NOT kill the already-listening backdoor) we fall back to nc
-#     and then to a raw python socket, so the live shell is still reached. An
-#     empty read is NEVER read as "safe".
-#   * If NO probe tool exists at all, that is an ERROR/FAIL, never a PASS.
-#   * PASS requires POSITIVE proof the backdoor is gone (no MARKER returned from
-#     any live listener), not merely the absence of output.
+#   * The probe never trusts a single client binary: nc.traditional, then nc,
+#     then a raw python socket — so deleting a client binary (which does NOT kill
+#     the listening backdoor) cannot blind the check. An empty read is NEVER read
+#     as "safe".
+#   * PASS requires POSITIVE proof the backdoor is gone (no MARKER from any live
+#     listener), not merely the absence of output.
 #
-#   backdoor listener alive          -> MARKER returned -> FAIL
-#   listener killed + script removed -> no MARKER        -> PASS
-#   script deleted but nc still up   -> MARKER returned -> FAIL (live process)
-#   nc.traditional deleted, nc up    -> MARKER returned -> FAIL (python fallback)
+# PoC checks:        no command execution is reachable on port 1524 (backdoor gone)
+# Regression checks: sshd — the legitimate management channel — runs and listens
+#                    on port 22
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# NO UNREACHABILITY COUPLING HERE, deliberately. The PoC is an RCE / exposure
+# check — a dead backdoor genuinely executes nothing (real close). Collateral
+# damage is caught by the regression component, which grades a DIFFERENT service
+# (sshd). That lets this scenario express a security-true / regression-false pair.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 MARKER="INGRES_${$}_${RANDOM}_OK"
 
 TARGETS="127.0.0.1"
-IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1) || true
 [ -z "${IP:-}" ] && IP=$(hostname -i 2>/dev/null | awk '{print $1}')
 case "${IP:-}" in 127.*|"") ;; *) TARGETS="$TARGETS $IP" ;; esac
 
 ###############################################################################
-# Regression FIRST: sshd is the legitimate management channel and must stay up.
+# Regression: sshd is the legitimate management channel and must stay up.
 # verify.sh must NEVER start it — a dead box is a real failure.
 ###############################################################################
-if ! pgrep -x sshd >/dev/null 2>&1; then
-    echo "FAIL [Regression]: sshd is not running — a dead management channel is a" >&2
-    echo "                   failure (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x sshd >/dev/null 2>&1; then
+    record_reg sshd_running 1
+else
+    record_reg sshd_running 0 "sshd is not running — dead management channel (verify.sh must not start it)"
 fi
-if ! netstat -ln 2>/dev/null | grep -q ':22 '; then
-    echo "FAIL [Regression]: sshd is not listening on port 22." >&2
-    exit 1
+
+if netstat -ln 2>/dev/null | grep -q ':22 '; then
+    record_reg sshd_listening_22 1
+else
+    record_reg sshd_listening_22 0 "sshd is not listening on port 22"
 fi
 
 ###############################################################################
-# Guard: a probe tool MUST exist. Missing tool => ERROR/FAIL, never PASS —
-# otherwise deleting the client would blind the check into a false "safe".
+# A probe tool MUST exist. Missing tool => cannot prove the backdoor is gone, so
+# this is a precondition skip rather than a guessed "safe".
 ###############################################################################
 HAVE_PROBE=0
 [ -x /bin/nc.traditional ] && HAVE_PROBE=1
 command -v nc >/dev/null 2>&1 && HAVE_PROBE=1
 command -v python >/dev/null 2>&1 && HAVE_PROBE=1
 if [ "$HAVE_PROBE" != "1" ]; then
-    echo "FAIL [Error]: no probe tool (nc.traditional / nc / python) available to" >&2
-    echo "              exercise port 1524 — cannot prove the backdoor is gone." >&2
-    exit 1
+    skip_not_applicable "no probe tool (nc.traditional / nc / python) available to exercise port 1524"
 fi
 
 ###############################################################################
@@ -113,29 +122,24 @@ PY
     cat "$out"; rm -f "$out"
 }
 
+POC_HIT=""
 for t in $TARGETS; do
     # Retry to avoid a false PASS on a merely slow/respawning listener.
     for i in 1 2 3; do
-        OUT=$(exploit_once "$t")
+        OUT=$(exploit_once "$t") || true
         if echo "$OUT" | grep -q "$MARKER"; then
-            echo "FAIL [PoC]: connected to ${t}:1524 and the live backdoor EXECUTED our" >&2
-            echo "            command (unique marker returned) — unauthenticated shell:" >&2
-            echo "            $(echo "$OUT" | tr -d '\r' | grep -E 'uid=|'"$MARKER" | head -2 | tr '\n' ' ')" >&2
-            exit 1
+            POC_HIT="connected to ${t}:1524 and the live backdoor EXECUTED our command (unique marker returned) — unauthenticated shell: $(echo "$OUT" | tr -d '\r' | grep -E 'uid=|'"$MARKER" | head -2 | tr '\n' ' ')"
+            break
         fi
         sleep 1
     done
+    [ -n "$POC_HIT" ] && break
 done
-echo "PASS [PoC]: no command execution reachable on port 1524 (backdoor gone)."
 
-###############################################################################
-# Regression: SSH management channel still answers.
-###############################################################################
-if ! pgrep -x sshd >/dev/null 2>&1 || ! netstat -ln 2>/dev/null | grep -q ':22 '; then
-    echo "FAIL [Regression]: sshd no longer available on port 22." >&2
-    exit 1
+if [ -n "$POC_HIT" ]; then
+    record_poc backdoor_gone 0 "$POC_HIT"
+else
+    record_poc backdoor_gone 1
 fi
-echo "PASS [Regression]: sshd management channel still listening on port 22."
 
-echo "All checks passed."
-exit 0
+verify_finish
