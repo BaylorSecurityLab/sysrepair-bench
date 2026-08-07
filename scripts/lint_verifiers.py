@@ -249,8 +249,20 @@ def main() -> None:
                 if "verifylib" in f.read_text(encoding="utf-8", errors="replace")]
 
     n_ps = sum(1 for f in migrated if f.suffix == ".ps1")
-    print(f"migrated verifiers checked: {len(migrated)} "
+    print(f"migrated verifiers checked: {len(migrated)}/{len(files)} "
           f"({len(migrated) - n_ps} sh, {n_ps} ps1)")
+
+    # Report the denominator. This filters to files that already contain the
+    # library, so an UNMIGRATED verifier is invisible here by construction --
+    # which is how ten hivestorm Linux verifiers sat outside the migration while
+    # this printed "256, ALL CLEAN". A tool that only counts what it already
+    # accepts cannot tell you what it is missing, so say so explicitly.
+    unmigrated = [f for f in sorted(files) if f not in set(migrated)]
+    if unmigrated:
+        print(f"\nNOT MIGRATED ({len(unmigrated)}) -- outside every "
+              f"two-component metric:")
+        for f in unmigrated:
+            print(f"  {f.relative_to(REPO).as_posix()}")
     if BASH is None:
         print("  (no non-WSL bash found -- sh syntax check skipped)")
     if PWSH is None:
