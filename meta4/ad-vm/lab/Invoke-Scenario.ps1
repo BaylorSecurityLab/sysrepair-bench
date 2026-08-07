@@ -196,9 +196,28 @@ function Invoke-ScenarioVerify {
         $pocLocal "$($script:AttackerUser)@$($script:AttackerIP):$pocGuest" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Invoke-ScenarioVerify: could not stage verify-poc onto the attacker' }
 
-    Write-Host "[verify] verify-poc on attacker"
+    # Run the PoC INSIDE srb-attacker:1, not on the attacker VM itself.
+    #
+    # Every tool the PoCs call -- certipy-ad, impacket-*, nxc, bloodhound-python,
+    # responder, hashcat, ldapsearch, kinit -- lives in that image at the exact
+    # /usr/bin paths verify-poc.sh hardcodes. NONE of them exist on the VM
+    # filesystem; measured, all 11 missing. Running the PoC on the VM therefore
+    # produced "certipy-ad missing or not executable" and exit 2 (HARNESS ERROR)
+    # for every scenario, which is why no ad-vm run has ever graded.
+    #
+    # This is the same class of defect the image's own Dockerfile header
+    # documents about the provisioning it replaced: PoCs invoking binaries that
+    # could not exist, with `|| true` swallowing the failure and the fail-open
+    # branch grading "PoC BLOCKED" -- a PASS on an unmodified vulnerable box.
+    #
+    # --network host is REQUIRED: the container must resolve corp.local through
+    # the DC (10.20.30.5) and reach the domain on the isolated segment.
+    # The script is bind-mounted read-only so the run cannot mutate the grader.
+    Write-Host "[verify] verify-poc on attacker (inside srb-attacker:1)"
+    $pocRun = "sudo docker run --rm --network host -v ${pocGuest}:/srb-poc.sh:ro " +
+              "srb-attacker:1 /bin/bash /srb-poc.sh; rc=`$?; rm -f $pocGuest; exit `$rc"
     ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
-        "$($script:AttackerUser)@$($script:AttackerIP)" "chmod +x $pocGuest && $pocGuest; rc=`$?; rm -f $pocGuest; exit `$rc"
+        "$($script:AttackerUser)@$($script:AttackerIP)" $pocRun
     $pocRc = $LASTEXITCODE
 
     # --- service gate ---
