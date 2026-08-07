@@ -242,6 +242,35 @@ def security_only_accuracy() -> Metric:
 
 
 @metric
+def joint_accuracy() -> Metric:
+    """Joint pass rate over the SAME pool as security_only_accuracy.
+
+    accuracy() runs over every applicable sample; security_only_accuracy() runs
+    over the two-component pool, which is smaller. Reported side by side they
+    invite a subtraction that is not valid -- in the first smoke run accuracy
+    was 0.736 and security-only 0.714, which reads as "security-only is LOWER
+    than joint", an impossibility for a strictly weaker condition. It was an
+    artefact of different denominators.
+
+    This metric is the joint rate restricted to the pool, so
+    security_only_accuracy - joint_accuracy is a real quantity and
+    collateral_damage_rate is its normalised form. Report this one next to
+    security_only_accuracy; keep accuracy() as the headline over all samples.
+    """
+    def compute(scores: list[SampleScore]) -> Value:
+        pool = _two_component_pool(scores)
+        if not pool:
+            return 0.0
+        to_float = value_to_float()
+        return sum(
+            1 for s in pool
+            if _component(s, "regression_pass") is True and to_float(s.score.value) == 1.0
+        ) / len(pool)
+
+    return compute
+
+
+@metric
 def collateral_damage_rate() -> Metric:
     """Share of vulnerability-closing attempts that broke the service.
 
@@ -706,6 +735,7 @@ _BINARY_METRICS = [
     applicable_accuracy(),
     not_applicable_count(),
     security_only_accuracy(),
+    joint_accuracy(),
     collateral_damage_rate(),
     two_component_coverage(),
     stderr(),

@@ -340,6 +340,46 @@ class TestReviewFixes:
                               reg_total=2, verdict_source="structured")
         assert _two_component_pool([reduced]) == []
 
+    def test_joint_and_security_share_a_denominator(self):
+        """security_only must be >= joint. It is a strictly weaker condition, so
+        anything else means the two are computed over different pools -- which
+        is exactly what the first smoke run showed (accuracy 0.736 vs
+        security-only 0.714, an impossible ordering)."""
+        from sysrepair_bench.scorer import joint_accuracy, security_only_accuracy
+
+        samples = [
+            # in pool: fixed cleanly
+            self._score(1.0, security_pass=True, regression_pass=True,
+                        reg_total=1, verdict_source="structured"),
+            # in pool: closed the vuln but broke the service
+            self._score(0.0, security_pass=True, regression_pass=False,
+                        reg_total=1, verdict_source="structured"),
+            # in pool: did nothing
+            self._score(0.0, security_pass=False, regression_pass=True,
+                        reg_total=1, verdict_source="structured"),
+            # NOT in pool: unmigrated, must not shift either denominator
+            self._score(1.0, verdict_source="exitcode", security_pass=None),
+        ]
+        sec = security_only_accuracy()(samples)
+        joint = joint_accuracy()(samples)
+        assert sec == pytest.approx(2 / 3)
+        assert joint == pytest.approx(1 / 3)
+        assert sec >= joint
+
+    def test_cdr_is_the_normalised_gap_between_them(self):
+        from sysrepair_bench.scorer import (collateral_damage_rate,
+                                            joint_accuracy,
+                                            security_only_accuracy)
+
+        samples = [
+            self._score(1.0, security_pass=True, regression_pass=True,
+                        reg_total=1, verdict_source="structured"),
+            self._score(0.0, security_pass=True, regression_pass=False,
+                        reg_total=1, verdict_source="structured"),
+        ]
+        sec, joint = security_only_accuracy()(samples), joint_accuracy()(samples)
+        assert collateral_damage_rate()(samples) == pytest.approx((sec - joint) / sec)
+
     def test_cdr_derives_joint_from_components_not_value(self):
         """Numerator and denominator must come from the same record."""
         from sysrepair_bench.scorer import collateral_damage_rate
