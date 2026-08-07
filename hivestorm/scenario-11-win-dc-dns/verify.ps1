@@ -1,5 +1,6 @@
 # Hivestorm HS23 scenario-11 verifier — DC/DNS-style registry hardening.
 $ErrorActionPreference = "Continue"
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $roles = Get-Content C:\ProgramData\sysrepair\roles.json | ConvertFrom-Json
 $admin = $roles.admin_user
@@ -11,6 +12,18 @@ function Emit($check, $weight, $pass, $reason, $category = $null) {
     }
     if ($category) { $o.category = $category }
     ($o | ConvertTo-Json -Compress)
+    # Two-component verdict, additive. The weighted record above is emitted
+    # byte-for-byte as before and the records below carry no `weight` key, so
+    # hivestorm partial credit (raw/total/penalty) is unchanged. Mapping:
+    # `service` and `logging` checks are the ones that already pass on the
+    # un-remediated baseline -- they can only fail as collateral damage, so they
+    # are the regression component. Every other check passes only AFTER
+    # remediation, which makes it a PoC check.
+    if ($category -eq 'service' -or $category -eq 'logging') {
+        Record-Reg $check ([bool]$pass) "$reason"
+    } else {
+        Record-Poc $check ([bool]$pass) "$reason"
+    }
 }
 
 function GetDword($path, $name) {
@@ -87,4 +100,4 @@ try {
 } catch {}
 Emit admin_user_preserved 0 ($adminExists -and $adminInGroup) "exists=$adminExists inAdmins=$adminInGroup" service
 
-exit 0
+Complete-Verify

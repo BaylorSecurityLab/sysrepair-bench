@@ -1,5 +1,6 @@
 # Hivestorm HS20 scenario-05 verifier.
 $ErrorActionPreference = "Continue"
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $roles = Get-Content C:\ProgramData\sysrepair\roles.json | ConvertFrom-Json
 $admin       = $roles.admin_user
@@ -14,6 +15,20 @@ function Emit($check, $weight, $pass, $reason, $category = $null) {
     }
     if ($category) { $o.category = $category }
     ($o | ConvertTo-Json -Compress)
+    # Two-component verdict, additive. The weighted record above is emitted
+    # byte-for-byte as before and the records below carry no `weight` key, so
+    # hivestorm partial credit (raw/total/penalty) is unchanged. Mapping:
+    # `service` and `logging` checks are the ones that already pass on the
+    # un-remediated baseline -- they can only fail as collateral damage, so they
+    # are the regression component (eventlog_not_disabled is category=logging
+    # and is exactly that: EventLog is already running on the seeded box, so it
+    # can only fail if the agent turned logging off). Every other check passes
+    # only AFTER remediation, which makes it a PoC check.
+    if ($category -eq 'service' -or $category -eq 'logging') {
+        Record-Reg $check ([bool]$pass) "$reason"
+    } else {
+        Record-Poc $check ([bool]$pass) "$reason"
+    }
 }
 
 # 1. rogue admin removed
@@ -62,4 +77,4 @@ Emit admin_user_preserved 0 $adminExists "" service
 $elStart = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog" -Name Start -ErrorAction SilentlyContinue).Start
 Emit eventlog_not_disabled 2 ($elStart -ne 4) "EventLog Start=$elStart" logging
 
-exit 0
+Complete-Verify

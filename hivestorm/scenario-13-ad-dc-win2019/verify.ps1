@@ -1,5 +1,6 @@
 # Hivestorm scenario-13 verifier. JSONL on stdout.
 $ErrorActionPreference = "Continue"
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $roles = Get-Content C:\ProgramData\sysrepair\roles.json | ConvertFrom-Json
 $admin        = $roles.admin_user
@@ -27,6 +28,19 @@ function Emit($check, $weight, $pass, $reason, $category = $null) {
     }
     if ($category) { $o.category = $category }
     ($o | ConvertTo-Json -Compress)
+    # Two-component verdict, additive. The weighted record above is emitted
+    # byte-for-byte as before and the records below carry no `weight` key, so
+    # hivestorm partial credit (raw/total/penalty) is unchanged. Mapping:
+    # `service` and `logging` checks are the ones that already pass on the
+    # un-remediated baseline (AD DS role, DNS, LDAP, SYSVOL/NETLOGON, the real
+    # admin's Domain Admins membership) -- they can only fail as collateral
+    # damage, so they are the regression component. Every other check passes
+    # only AFTER remediation, which makes it a PoC check.
+    if ($category -eq 'service' -or $category -eq 'logging') {
+        Record-Reg $check ([bool]$pass) "$reason"
+    } else {
+        Record-Poc $check ([bool]$pass) "$reason"
+    }
 }
 
 # 1. rogue Domain Admin removed
@@ -156,7 +170,12 @@ if (Test-Path C:\ProgramData\sysrepair\krbtgt-stale.marker) {
 
 # ---- service probes ---------------------------------------------------------
 # AD DS role still installed + DC role still active.
-$cs = Get-WmiObject -Class Win32_ComputerSystem
+# Wrapped: this was the only unguarded probe left in the file. It survives a
+# non-terminating WMI failure ($cs stays $null, DomainRole compares false) but
+# NOT a terminating one, and a throw here would skip the remaining service
+# probes and Complete-Verify. The failure verdict is identical either way.
+$cs = $null
+try { $cs = Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop } catch { }
 if ($cs.DomainRole -ge 4) {
     Emit ad_ds_role 0 $true "" service
 } else {
@@ -195,4 +214,4 @@ if ($adminMember) {
     Emit admin_preserved 0 $false "$admin not in Domain Admins" service
 }
 
-exit 0
+Complete-Verify

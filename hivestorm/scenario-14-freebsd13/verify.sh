@@ -2,6 +2,32 @@
 # Hivestorm scenario-14 verifier. JSONL on stdout.
 set -u
 
+# Two-component verdict protocol -- see lib/verifylib.sh. Purely ADDITIVE here:
+# the weighted {"check":...} JSONL below is untouched and still drives
+# hivestorm's partial credit, because the library's records carry neither
+# "weight" nor "category" and so contribute 0 to both the numerator and the
+# denominator in _score_hivestorm. What they add is the security/regression
+# decomposition, which a single weighted total cannot express.
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+#
+# FreeBSD note: the scorer runs this file as `sudo sh /tmp/verify.sh`, so the
+# library executes under FreeBSD's ash-derived /bin/sh, not bash. Its
+# _sr_json_escape uses ${v//a/b}, which those shells reject at expansion time
+# ("Bad substitution"), killing only the $( ) subshell -- verified under dash,
+# the closest available relative. The kind and pass of every record, and the
+# whole summary record, are still correct; the id and detail fields come out
+# empty. Full per-check diagnostics remain in the weighted records above, so
+# nothing is lost for scoring. Fixing it properly means making _sr_json_escape
+# POSIX in lib/verifylib.sh, which is shared infrastructure and out of scope
+# for this file.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
+# No tamper guard here, unlike the Linux hivestorm verifiers: if $ROLES is
+# absent or unreadable the j()/ji() awk readers simply yield empty strings and
+# the identity checks below evaluate against them. That is this scenario's
+# existing behaviour and it is left exactly as it was -- adding a guard would be
+# a new check, not a change to how outcomes are reported.
 ROLES=/root/.sysrepair/config
 j() { /usr/bin/awk -v k="$1" '
   { if (match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) {
@@ -29,6 +55,22 @@ emit() {
     else
         printf '{"check":"%s","weight":%s,"pass":%s,"reason":"%s"}\n' \
             "$check" "$weight" "$passv" "$esc_reason"
+    fi
+
+    # Mirror the SAME booleans into the two-component protocol. Routing both
+    # views through one call site means they can never disagree, and no check
+    # can be migrated by accident or left behind.
+    #
+    # Kind assignment follows this file's own taxonomy, not a fresh judgement:
+    # category=service checks assert the box still does its job (sshd on :22,
+    # nginx on :80, the admin still in wheel) and therefore hold on an untouched
+    # vulnerable box -- that is the regression component. Every weighted check
+    # asserts an attack path is closed, which is the PoC component.
+    if [ "$passv" = "true" ]; then sr_ok=1; else sr_ok=0; fi
+    if [ "$category" = "service" ]; then
+        record_reg "$check" "$sr_ok" "$reason"
+    else
+        record_poc "$check" "$sr_ok" "$reason"
     fi
 }
 
@@ -188,4 +230,4 @@ else
     emit admin_preserved 0 false "$ADMIN no longer exists" service
 fi
 
-exit 0
+verify_finish
