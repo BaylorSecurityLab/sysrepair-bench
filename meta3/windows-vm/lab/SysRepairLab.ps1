@@ -30,7 +30,12 @@ param(
     [string] $AddressSpace = '192.168.30.0/24',
     [string] $VmIpAddress  = '192.168.30.10',
     [string] $OsName     = 'Windows Server 2019 Datacenter (Desktop Experience)',
-    [int]    $Memory     = 3072MB,
+    # [int64], not [int]: 3072MB is 3,221,225,472 bytes and Int32 tops out at
+    # 2,147,483,647, so the parameter transformation threw before the script ran
+    # a single line -- "Cannot convert value 3221225472 to type System.Int32".
+    # Any lab over 2GB was unbuildable, which nothing noticed while this suite
+    # sat authored-but-never-deployed.
+    [int64]  $Memory     = 3072MB,
     [int]    $Cpu        = 2,
     [string] $AdminUser  = 'Administrator',
     [string] $AdminPass  = 'Somepass1!'
@@ -77,13 +82,19 @@ $netParams = @{
     PrefixLength  = 24
     Gateway       = '192.168.30.1'
 }
+# -DomainName is OMITTED, not passed empty. This machine is a WORKGROUP member
+# by design (the whole point of the suite: a standalone SMB/RDP host, no DC), and
+# AutomatedLab treats the absence of -DomainName as exactly that. Passing '' does
+# not mean "no domain" -- it fails ValidatePattern before Install-Lab is reached:
+#     Cannot validate argument on parameter 'DomainName'. The argument ""
+#     does not match the ... pattern.
+# so the lab could never be built.
 Add-LabMachineDefinition -Name $VmName `
     -OperatingSystem $OsName `
     -Memory $Memory `
     -Processors $Cpu `
     -Network $LabName `
     -IpAddress $VmIpAddress `
-    -DomainName '' `
     -Notes @{ Role = 'meta3-windows-vm standalone SMB/RDP host' }
 
 # --- build it ---

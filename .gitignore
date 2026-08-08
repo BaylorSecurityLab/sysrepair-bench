@@ -103,3 +103,6 @@ meta4/ad-vm/*/build/bridge_key
 meta4/ad-vm/*/build/bridge_key.pub
 meta3/windows-vm/*/build/bridge_key
 meta3/windows-vm/*/build/bridge_key.pub
+# Lab-level too: SysRepairLab.ps1 reads meta3/windows-vm/build/bridge_key.pub,
+# which the pattern above (one directory deeper) does not match.
+meta3/windows-vm/build/
