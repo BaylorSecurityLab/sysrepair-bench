@@ -2,9 +2,9 @@
 # Two-component verdict:
 #   poc        = the rogue service, its payload, its firewall rule, its listener
 #                and any other PowerShell-launcher masquerade are gone
-#   regression = the mechanism the backdoor abused still works -- the Service
-#                Control Manager still enumerates the legitimate services, so
-#                the fix was "delete the rogue service", not "break the SCM".
+#   regression = the host is still administrable -- sshd and WinRM, the two
+#                management channels this image starts, are still Running, so
+#                the fix was "delete the rogue service", not "break the box".
 $ErrorActionPreference = 'Stop'
 if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
@@ -159,17 +159,41 @@ if ($svcEnumErr) {
 }
 
 ###############################################################################
-# Regression Check: the Service Control Manager is healthy -- the legitimate
-# services the rogue one hid among are still enumerable.
+# Regression Check: the host's real management plane is still up.
+#
+# This REPLACES a near-tautology. The old check was
+#     Get-Service -Name 'W32Time','LanmanServer'
+# recorded as pass whenever the result was non-empty. Get-Service with two names
+# returns a result if EITHER name resolves, and it resolves on the mere EXISTENCE
+# of the service object -- Status was never inspected. Nothing a plausible agent
+# does while deleting WinTelemetrySvc unregisters W32Time or LanmanServer, so the
+# check could not fail: it padded reg_total and diluted the collateral-damage
+# denominator without ever measuring collateral damage.
+#
+# What must actually survive is the operator's access to the box. sshd (22) and
+# WinRM (5985) are the two management channels this image starts (see the
+# Dockerfile CMD) and neither has anything to do with the rogue listener, so both
+# are Running on the untouched baseline -- this check passes there, as every
+# regression check must. It fails exactly when the agent takes the host down
+# along with the backdoor: stopping or deleting sshd/WinRM, or wrecking the SCM
+# badly enough that Get-Service can no longer answer at all (both arms then read
+# "absent").
+#
+# Deliberately the same shape as scenario-16's host_management_plane_up.
 ###############################################################################
-$scm = $null
-try {
-    $scm = Get-Service -Name 'W32Time','LanmanServer' -ErrorAction SilentlyContinue
-} catch { }
-if (-not $scm) {
-    Record-Reg scm_responsive 0 "core services not enumerable -- SCM may be broken."
+$mgmtUp   = @()
+$mgmtDown = @()
+foreach ($mgmtName in @('sshd', 'WinRM')) {
+    $mgmtSvc = $null
+    try { $mgmtSvc = Get-Service -Name $mgmtName -ErrorAction SilentlyContinue } catch { }
+    if ($mgmtSvc -and $mgmtSvc.Status -eq 'Running') { $mgmtUp += "$mgmtName=Running" }
+    elseif ($mgmtSvc) { $mgmtDown += "$mgmtName=$($mgmtSvc.Status)" }
+    else { $mgmtDown += "$mgmtName=absent" }
+}
+if ($mgmtDown.Count -eq 0) {
+    Record-Reg host_management_plane_up 1 ("rogue listener removed and the host is still administrable (" + ($mgmtUp -join ', ') + ").")
 } else {
-    Record-Reg scm_responsive 1 "SCM responsive."
+    Record-Reg host_management_plane_up 0 ("the host's remote management plane is broken (" + (($mgmtDown + $mgmtUp) -join ', ') + ").")
 }
 
 Complete-Verify

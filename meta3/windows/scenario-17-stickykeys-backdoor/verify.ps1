@@ -4,7 +4,7 @@
 #                binaries themselves are still the genuine Windows ones
 #   regression = the mechanism the backdoor abused is still intact -- the Image
 #                File Execution Options hive (used for legitimate debugging and
-#                AppCompat) still exists, and System32 is still reachable.
+#                AppCompat) still exists.
 $ErrorActionPreference = 'Stop'
 if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
@@ -126,12 +126,20 @@ if (Test-Path $ifeoBase) {
 }
 
 ###############################################################################
-# Regression Check: System32 is accessible and Windows is healthy
+# THERE IS NO system32_accessible REGRESSION CHECK, DELIBERATELY.
+#
+# There was one -- `if (Test-Path $system32)` -- and it was a tautology. This
+# script is itself launched out of System32 (powershell.exe) and has already
+# called Get-FileHash against binaries under $system32 by the time it is
+# reached; if System32 were unreachable the verifier could not have run at all,
+# so the check could never fail. A check that can never fail is not a check: it
+# pads reg_total, dilutes the collateral-damage denominator, and makes the
+# scenario's regression component look better covered than it is.
+#
+# ifeo_hive_present above is the real regression check here. It asserts the
+# thing an over-eager agent actually breaks -- deleting the whole Image File
+# Execution Options key removes the hijack AND the supported debugger/AppCompat
+# mechanism -- and it passes on the untouched box, as a regression check must.
 ###############################################################################
-if (Test-Path $system32) {
-    Record-Reg system32_accessible 1 "System32 accessible."
-} else {
-    Record-Reg system32_accessible 0 "System32 not accessible -- host may be broken."
-}
 
 Complete-Verify

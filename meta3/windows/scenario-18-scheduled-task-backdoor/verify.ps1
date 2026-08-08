@@ -61,8 +61,14 @@ try {
 if (-not $enumOk) {
     Record-Poc no_system_task_from_user_writable_path 0 "could not enumerate scheduled tasks: $enumErr"
 } else {
+    # Principal.UserId is normally the resolved name 'SYSTEM', but a host that
+    # cannot resolve the SID reports the raw S-1-5-18 that task.xml carries.
+    # Accept both: this check now carries the whole "SYSTEM task runs code from a
+    # user-writable path" property on its own (see the deleted check below), so a
+    # missed spelling here would silently hand the scenario a free PoC pass.
     $suspiciousTasks = $allTasks | Where-Object {
-        $_.Principal.UserId -eq 'SYSTEM' -and
+        ($_.Principal.UserId -eq 'SYSTEM' -or $_.Principal.UserId -eq 'S-1-5-18' -or
+         $_.Principal.UserId -eq 'NT AUTHORITY\SYSTEM') -and
         ($_.Actions | Where-Object {
             $actionPath = $_.Execute
             # Suspicious: action targets user-writable dirs OR has no arguments (direct shell)
@@ -83,35 +89,36 @@ if (-not $enumOk) {
 }
 
 ###############################################################################
-# Behavioral Check: verify the task action executable is signed and owned by
-# TrustedInstaller or SYSTEM (not writable by Users).
+# THERE IS NO system_task_actions_trusted_owner POC CHECK, DELIBERATELY.
+#
+# There was one, and it could not fail on the un-remediated box. It owner-checked
+# the action's EXECUTABLE. For this backdoor the executable is powershell.exe --
+# the payload is the SCRIPT powershell.exe is told to run, which lives in the
+# Arguments field. powershell.exe is owned by NT SERVICE\TrustedInstaller on
+# every Windows box, so the rogue task sailed through and the check reported
+# "all SYSTEM task actions reference signed/SYSTEM-owned executables" on the
+# untouched, still-backdoored image. Free PoC credit inflates
+# security_only_accuracy, which is the whole reason PoC checks must fail on
+# baseline.
+#
+# It is DELETED rather than re-pointed at the Arguments, for three reasons.
+#
+#   1. no_system_task_from_user_writable_path above already covers exactly this
+#      ground, and covers it correctly: its second clause matches an Execute of
+#      powershell/cmd/cscript/wscript whose ARGUMENTS name Users\Public,
+#      ProgramData or \Temp\. The seeded task
+#      (powershell.exe -File C:\Users\Public\Updater\updater.ps1) trips it, so
+#      that check FAILS on baseline and passes once the task is gone.
+#   2. Ownership is the wrong predicate anyway. A TrustedInstaller-owned script
+#      sitting in a user-WRITABLE directory is still hijackable; writability is
+#      the security property, and the check above tests it directly.
+#   3. Re-pointed at the argument it would have been actively harmful. The owner
+#      test was `$owner -match 'Users|Administrators'`, and BUILTIN\Administrators
+#      owns most admin-installed content, so on any box carrying real software
+#      the check would fail permanently -- unsolvable, pinning the oracle ceiling
+#      below 100%. It was invisible here only because Server Core ships almost
+#      no third-party SYSTEM tasks.
 ###############################################################################
-if (-not $enumOk) {
-    Record-Poc system_task_actions_trusted_owner 0 "could not enumerate scheduled tasks: $enumErr"
-} else {
-    $sysTasks = $allTasks | Where-Object { $_.Principal.UserId -eq 'SYSTEM' }
-    $unsignedActions = @()
-    foreach ($t in $sysTasks) {
-        foreach ($action in $t.Actions) {
-            $exePath = $action.Execute
-            if (-not $exePath -or $exePath -match '\.tmp|\.bat|\.ps1|\.vbs') { continue }
-            if (Test-Path $exePath) {
-                $owner = $null
-                try {
-                    $owner = (Get-Acl -Path $exePath -ErrorAction SilentlyContinue).Owner
-                } catch { }
-                if ($owner -match 'Users|Administrators' -and $owner -notmatch 'SYSTEM') {
-                    $unsignedActions += "$($t.TaskPath)$($t.TaskName) -> $exePath (owned by $owner)"
-                }
-            }
-        }
-    }
-    if ($unsignedActions) {
-        Record-Poc system_task_actions_trusted_owner 0 ("SYSTEM tasks run unsigned executables from user-writable locations: " + ($unsignedActions -join '; '))
-    } else {
-        Record-Poc system_task_actions_trusted_owner 1 "all SYSTEM task actions reference signed/SYSTEM-owned executables."
-    }
-}
 
 ###############################################################################
 # Regression Check: the Task Scheduler service is still healthy. Deleting the
