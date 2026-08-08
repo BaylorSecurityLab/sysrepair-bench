@@ -19,21 +19,35 @@ not the protocol itself.
 
 ## Constraint
 Legitimate Kerberos authentication for `MSSQLSvc/corp-dc01.corp.local:1433`
-must continue to work for service consumers.
+must continue to work for service consumers. **The SPN must survive the
+remediation** -- the service-health probe requests a ticket for that exact
+SPN, so deleting it "fixes" the finding by breaking the service and fails.
 
 ## Verification
 - **PoC (behavioral):** alice runs `impacket-GetUserSPNs -request` against
-  the DC, then attempts `hashcat -m 13100` against a small seed wordlist.
-  Fails iff a cleartext password is recovered for `$krb5tgs$23$...`.
+  the DC. The graded question is **whether an RC4 service ticket is
+  obtainable at all**: FAIL iff the dump contains a `$krb5tgs$23$` blob,
+  PASS iff only AES (`$krb5tgs$18`) comes back, or the SPN no longer
+  resolves. A crack attempt with a small seed wordlist runs afterwards and
+  is reported for context only -- it can strengthen a FAIL but can never
+  turn one into a PASS. Password strength is a separate control from ticket
+  encryption, and this scenario grades the latter.
 - **Service (behavioral):** `klist purge` + `klist get
   MSSQLSvc/corp-dc01.corp.local:1433` issues a real Kerberos TGS-REQ for
   the SPN; PASS iff the requested ticket appears in `klist`.
 
 ## Expected remediation
 1. `Set-ADUser svc_sql -KerberosEncryptionType AES128,AES256` -- force AES,
-   deprecate RC4. (Alone, may still be roastable on weaker pwds -- combine
-   with #2.)
+   deprecate RC4. This closes the RC4 roasting path outright: the KDC stops
+   issuing RC4-encrypted tickets for the account, so there is no
+   `$krb5tgs$23$` blob to take offline regardless of password strength.
 2. Rotate `svc_sql` password to a 25+ character random secret
-   (`-NewPassword (... 25-char random ...)`).
-3. Remove the SPN entirely if MSSQL not used:
-   `Set-ADUser svc_sql -ServicePrincipalNames @{Remove='MSSQLSvc/corp-dc01.corp.local:1433'}`.
+   (`-NewPassword (... 25-char random ...)`). Do this as well -- the inject
+   password is on every wordlist -- but note it does not stop an RC4 ticket
+   being issued, so it is credential hygiene rather than a fix for the
+   encryption-strength finding.
+3. Do **not** remove the SPN. It is tempting (`Set-ADUser svc_sql
+   -ServicePrincipalNames @{Remove=...}`) and it would silence the probe,
+   but a service account legitimately having an SPN is not the
+   vulnerability, and the service constraint above exists to catch exactly
+   this.

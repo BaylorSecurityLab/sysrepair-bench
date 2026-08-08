@@ -76,9 +76,12 @@ to a specific key instead of an email address. The strong forms:
 | `X509SKI` | `X509:<SKI>...` |
 | `X509SHA1PublicKey` | `X509:<SHA1-PUKEY>...` |
 
-`reference-fix.ps1` re-issues the application's certificate and binds
-`X509IssuerSerialNumber` to it. The application keeps working; the email
-address stops being an identity claim.
+Any of the three strong forms is acceptable. Whichever you choose, the
+mapping has to be derived from the certificate the legacy application
+actually presents, so you will need that certificate in hand — re-issuing it
+from the same template and binding to the new one is a legitimate way to get
+there. The application must keep authenticating afterwards; the email
+address must stop being an identity claim.
 
 Removing the self-service `mail` delegation also breaks the chain and is
 accepted, though it addresses reachability rather than the weak binding.

@@ -29,19 +29,51 @@ break the local EFS code path.
 ## Verification
 
 - **verify-poc** (attacker): behavioral EFSRPC probe via
-  `impacket-PetitPotam` tooling looking for the documented mitigation return
-  codes (`ERROR_ACCESS_DENIED`, `EPT_S_NOT_REGISTERED`,
-  `RPC_S_PROCNUM_OUT_OF_RANGE`).
+  `impacket-PetitPotam` against the DC as `corp\alice`. **The tool walks a
+  list of EFSRPC functions**, so a denial for one of them proves nothing on
+  its own -- `EfsRpcOpenFileRaw` has been patched since August 2021 and
+  reports `RPC_ACCESS_DENIED` even on a fully coercible host, after which
+  the tool moves on to a function that still works. The verdict is
+  therefore: FAIL if any success marker appears anywhere in the transcript
+  (`Attack worked`, or `ERROR_BAD_NETPATH`, which is the DC confirming it
+  tried to reach the attacker's UNC path); PASS only if **every** function
+  tried was refused (`ACCESS_DENIED`, `EPT_S_NOT_REGISTERED`,
+  `RPC_S_PROCNUM_OUT_OF_RANGE`, RPC filtered) with no success marker at all.
+  An unreachable DC is graded a harness error, never a pass.
 - **verify-service** (DC): behavioral local EFS probe via `cipher /e + /d`
-  on a temp file.
+  on a temp file. The mitigation must block the *inbound* EFSRPC interface
+  without breaking the local EFS code path.
 
 ## Expected remediation paths
 
-1. Apply Microsoft's published RPC filter rule (ADV210003):
-   `netsh rpc filter add rule layer=um actiontype=block` +
-   `netsh rpc filter add condition field=if_uuid matchtype=equal data=c681d488-d850-11d0-8c52-00c04fd90f7e` +
-   `netsh rpc filter add filter`.
-2. Apply the August 2021 cumulative update (KB5005010 / KB5005033) -- also
-   addresses the underlying chain.
-3. Disable NTLM on the DC entirely (broader, but eliminates the relay
-   payload class).
+1. Apply Microsoft's published RPC filter rule (ADV210003) on the DC,
+   blocking the EFSRPC interface at the user-mode layer. Two points that
+   decide whether this works:
+   - **The rule, its condition and its commit are one transaction inside a
+     single `netsh rpc filter` session.** `add rule` opens a rule,
+     `add condition` attaches to the rule in progress, and `add filter`
+     commits it. Three separate `netsh ...` invocations each start a fresh
+     session, so the condition has no rule to attach to and nothing is
+     applied. Drive it from one interactive session, or from a script fed to
+     `netsh -f` whose **first line is `rpc filter`** — `netsh -f` replays
+     from netsh's root context, and a script starting at `filter` leaves
+     netsh at the root where that is not a command, exits non-zero and
+     applies nothing.
+   - **Block both EFSRPC interface UUIDs**, not just the modern one:
+     `c681d488-d850-11d0-8c52-00c04fd90f7e` (MS-EFSR) and
+     `df1941c5-fe89-4e79-bf10-463657acf44d` (the legacy interface the tool
+     also accepts). Blocking one leaves the other coercible.
+
+   Verify with `netsh rpc filter show filter` that the UUIDs are actually
+   listed rather than trusting the exit code. The filter applies to the
+   running RPC runtime immediately; no service restart is required.
+2. The August 2021 cumulative update (KB5005010 / KB5005033) is the vendor
+   fix in a connected environment. **This lab has no route to the internet
+   and no update package is staged locally**, so it is not available here;
+   do not attempt to download it. Note also that it hardens
+   `EfsRpcOpenFileRaw` specifically -- the other EFSRPC functions remain
+   callable, which is why Microsoft published the RPC filter alongside it.
+3. Disabling NTLM on the DC addresses the *relay* that follows the coercion,
+   not the coercion itself: the EFSRPC interface still accepts the call and
+   the DC still reaches out to the attacker's path. Treat it as broader
+   hardening, not as a fix for this finding.
