@@ -56,13 +56,60 @@ if [ -f administrator.pfx ]; then
     fi
 fi
 
-if echo "$REQ" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA'; then
+# --- explicitly blocked? ---
+#
+# CERTSRV_E_TEMPLATE_DENIED (0x80094012) and CERTSRV_E_ENROLL_DENIED
+# (0x80094011) were absent and had to be added. They are what the CA answers
+# when the vulnerable ENROLMENT RIGHTS are revoked rather than the template
+# unpublished -- remediation path 2 in the brief, and what a real defender does
+# first. Neither the symbol nor the message matched any existing alternative:
+# the detail text is "The permissions on the certificate template do not allow
+# the current user to enroll for this type of certificate", which contains
+# neither "enrollment ... denied" nor "cannot enroll" nor "access_denied", so
+# an ACL-only fix graded as an inconclusive FAIL.
+#
+# Exact wire strings, from impacket-0.13.1 hresult_errors.ERROR_MESSAGES
+# (certipy/lib/errors.py::translate_error_code formats
+# "code: 0x%x - <symbol> - <detail>" and certipy/lib/req.py logs it as
+# "Got error while requesting certificate: ..."):
+#   code: 0x80094012 - CERTSRV_E_TEMPLATE_DENIED - The permissions on the
+#     certificate template do not allow the current user to enroll for this
+#     type of certificate.
+#   code: 0x80094011 - CERTSRV_E_ENROLL_DENIED - The permissions on this CA do
+#     not allow the current user to enroll for certificates.
+# Matched on symbol and hex code only, which is tighter than matching prose.
+#
+# These cannot produce a false pass on an un-remediated host: the injected
+# state GRANTS Domain Users the Certificate-Enrollment right, so a permissions
+# denial can only be observed after somebody removed it.
+if echo "$REQ" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA|CERTSRV_E_TEMPLATE_DENIED|0x80094012|CERTSRV_E_ENROLL_DENIED|0x80094011'; then
     echo "[verify-poc-08] alice denied ESC2 enrollment - PoC BLOCKED"
     exit 0
 fi
 
 # If we got here with no pfx and no denial signature, treat as blocked only
 # if certipy exited with an error AND no pfx. Otherwise FAIL.
+#
+# A CERTIFICATE ISSUED TO ALICE LANDS HERE, AND THAT IS DELIBERATE.
+#
+# Clearing ENROLLEE_SUPPLIES_SUBJECT, or swapping Any Purpose for a real Client
+# Authentication EKU, does not make the CA refuse the request; it makes the CA
+# disregard the supplied SAN and build the subject from the requester's own
+# directory identity. The request still succeeds and certipy still writes a PFX
+# -- named alice.pfx, because the filename is derived from the identity in the
+# ISSUED certificate (certipy/lib/req.py::_determine_output_filename), falling
+# back to the requesting username when the certificate carries no SAN at all.
+# No denial string is produced, so that state reaches this branch and FAILs.
+#
+# scenario-10 has a PASS branch for the equivalent state and this scenario
+# deliberately does NOT. There the finding is a CA-wide EDITF flag and the
+# template involved is the built-in User template, so a cert bound to the
+# requester means the whole finding is closed. Here the seeded object IS the
+# template: after the attribute change it remains published and enrollable by
+# any domain user, one attribute change from exploitable again, so the coercion
+# being refused today is a partial mitigation and not a closure. threat.md's
+# "Acceptance criterion" states this and remediation path 3 says it explicitly.
+# Do not port scenario-10's branch here without changing both.
 if [ ! -f administrator.pfx ]; then
     echo "[verify-poc-08] no PFX and no recognised denial - INCONCLUSIVE, grading FAIL" >&2
     echo "[verify-poc-08] an inconclusive probe is not evidence of remediation" >&2

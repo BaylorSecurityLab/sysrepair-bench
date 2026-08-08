@@ -58,8 +58,39 @@ if rpc_unreachable "$AGENT"; then
     exit 2
 fi
 
+# --- step 1 denial ---
+#
+# CERTSRV_E_TEMPLATE_DENIED (0x80094012) and CERTSRV_E_ENROLL_DENIED
+# (0x80094011) were absent and had to be added. They are what the CA answers
+# when the vulnerable ENROLMENT RIGHTS on ESC3-Agent are revoked rather than
+# the template unpublished -- remediation path 2 in the brief, and the fix that
+# closes the chain at its root, which the brief's acceptance criterion calls
+# the ideal outcome. Neither the symbol nor the message matched any existing
+# alternative: the detail text is "The permissions on the certificate template
+# do not allow the current user to enroll for this type of certificate", which
+# contains neither "enrollment ... denied" nor "cannot enroll" nor
+# "access_denied", so an ACL-only fix graded as an inconclusive FAIL.
+#
+# Exact wire strings, from impacket-0.13.1 hresult_errors.ERROR_MESSAGES
+# (certipy/lib/errors.py::translate_error_code formats
+# "code: 0x%x - <symbol> - <detail>" and certipy/lib/req.py logs it as
+# "Got error while requesting certificate: ..."):
+#   code: 0x80094012 - CERTSRV_E_TEMPLATE_DENIED - The permissions on the
+#     certificate template do not allow the current user to enroll for this
+#     type of certificate.
+#   code: 0x80094011 - CERTSRV_E_ENROLL_DENIED - The permissions on this CA do
+#     not allow the current user to enroll for certificates.
+#
+# DELIBERATELY STEP 1 ONLY. The same codes are NOT added to the on-behalf-of
+# check below: a permissions denial there means only ESC3-User was locked down
+# while ESC3-Agent stayed enrollable, and the brief is explicit that a partial
+# fix which still lets alice mint an enrollment-agent certificate does not pass.
+#
+# Cannot produce a false pass on an un-remediated host: the injected state
+# GRANTS Domain Users the Certificate-Enrollment right on both templates, so a
+# permissions denial can only be observed after somebody removed it.
 if [ ! -f alice.pfx ]; then
-    if echo "$AGENT" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA'; then
+    if echo "$AGENT" | grep -qiE 'template.*not found|access_denied|enrollment.*denied|cannot enroll|CERTSRV_E_UNSUPPORTED_CERT_TYPE|0x80094800|not supported by this CA|CERTSRV_E_TEMPLATE_DENIED|0x80094012|CERTSRV_E_ENROLL_DENIED|0x80094011'; then
         echo "[verify-poc-09] alice cannot enrol in ESC3-Agent -- BLOCKED"
         exit 0
     fi
@@ -76,7 +107,7 @@ ONBEHALF=$(timeout 60 /usr/bin/certipy-ad req \
     -dc-ip 10.20.30.5 \
     -template 'ESC3-User' \
     -on-behalf-of 'CORP\Administrator' \
-    -pfx alice.pfx 2>&1 || true)
+    -pfx alice.pfx 2>&1 </dev/null || true)
 echo "--- on-behalf-of req ---"; echo "$ONBEHALF"
 
 if rpc_unreachable "$ONBEHALF"; then
@@ -101,6 +132,17 @@ fi
 # An enrollment-agent certificate WAS issued to alice (we only reach here if
 # alice.pfx exists). That alone is the ESC3 precondition, so an unexplained
 # failure at the on-behalf-of step is not evidence the template was fixed.
+#
+# A CERTIFICATE ISSUED TO ALICE AT THE ON-BEHALF-OF STEP ALSO LANDS HERE, AND
+# THAT IS DELIBERATE. Removing the on-behalf-of requirement (clearing
+# msPKI-RA-Application-Policies and setting msPKI-RA-Signature = 0 on
+# ESC3-User) can leave the CA issuing an ordinary certificate for the signer
+# instead of refusing, with no denial string. scenario-10 has a PASS branch for
+# that shape of outcome; this scenario deliberately does not. ESC3-Agent stays
+# published and enrollable by any domain user in every such fix, so alice can
+# still mint an enrollment-agent certificate -- which threat.md names as the
+# finding itself, and its acceptance criterion requires refusal, ideally at
+# step 1. Do not port scenario-10's branch here without changing both.
 echo "[verify-poc-09] alice holds an enrollment-agent cert but the on-behalf-of step gave no clear result" >&2
 echo "[verify-poc-09] INCONCLUSIVE, grading FAIL - the ESC3 precondition is still present" >&2
 exit 1
