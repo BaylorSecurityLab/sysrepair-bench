@@ -39,10 +39,12 @@ $SrUnprivNames = '^(BUILTIN\\)?Users$|^Everyone$|^(NT AUTHORITY\\)?Authenticated
 #   0x00080000  TakeOwnership     (WRITE_OWNER)
 #   0x10000000  GENERIC_ALL
 #   0x40000000  GENERIC_WRITE
-# AppendData (0x4) is deliberately ABSENT. The default DACL on C:\ grants
-# BUILTIN\Users (CI)(AD), which creates SUBDIRECTORIES, not files -- you cannot
-# drop C:\Program.exe with it. Counting it would flag the drive root on every
-# stock Windows box and make this scenario unsolvable.
+# AppendData (0x4) is deliberately ABSENT. The default DACL on C:\ grants an
+# unprivileged principal (AD) -- BUILTIN\Users on Server 2019, NT AUTHORITY\
+# Authenticated Users on Windows 11 -- which creates SUBDIRECTORIES, not files,
+# so you cannot drop C:\Program.exe with it. MEASURED two ways: adding 0x4 to
+# this mask makes C:\ report 1 offender, and a directory granting only (AD)
+# really does refuse CreateFile to an unprivileged token (ERROR_ACCESS_DENIED).
 $SrDangerousMask = 0x00000002 -bor 0x00000040 -bor 0x00010000 -bor 0x00040000 `
                    -bor 0x00080000 -bor 0x10000000 -bor 0x40000000
 
@@ -50,21 +52,45 @@ $SrDangerousMask = 0x00000002 -bor 0x00000040 -bor 0x00010000 -bor 0x00040000 `
 # $Path; an empty result means the object is safe. Throws only when the DACL
 # itself cannot be read, which callers record as a FAILURE -- an unreadable DACL
 # is not evidence the grant is gone.
-# KNOWN EDGE CASE (reviewed, deliberately not handled): this ORs ALL Deny ACEs
-# against Allow, including INHERITED ones. Real Windows AccessCheck ranks an
-# EXPLICIT Allow above an INHERITED Deny, so a child with an explicit
-# Users:Modify under a parent carrying an inherited Deny is genuinely writable
-# while this predicate reports it safe. The direction is easier-to-pass, which
-# is the wrong direction in principle -- but it is unreachable from the seeded
-# state and from any plausible remediation of it, and modelling full ACE
-# precedence in a verifier is its own source of error. Revisit if a scenario
-# ever seeds inherited Deny.
+#
+# ACE PRECEDENCE. This used to OR every Deny against every Allow, INHERITED ACEs
+# included, so any Deny anywhere on the object cancelled the grant. Windows does
+# not evaluate a DACL that way. AccessCheck walks a canonical DACL IN ORDER and
+# the FIRST ace that mentions a right settles that right; canonical order puts
+# explicit ACEs ahead of inherited ones, and Deny ahead of Allow within each
+# group. Per right bit, therefore:
+#
+#     explicit Deny  >  explicit Allow  >  inherited Deny  >  inherited Allow
+#
+# The case that made the old form wrong is a child directory carrying an
+# EXPLICIT `Users:Modify` underneath a parent whose Deny it inherits. Windows
+# grants the write -- the explicit Allow outranks the inherited Deny -- and the
+# old predicate called it safe. That is the easier-to-pass direction, which for
+# a security check means reporting a box remediated while an attacker can still
+# drop C:\Program.exe. Each ACE is now filed by class using its IsInherited
+# flag, and the four classes are consulted in rank order.
+#
+# TWO DELIBERATE SIMPLIFICATIONS, both in the harder-to-pass direction:
+#   * Principals are scored INDEPENDENTLY. A real token holds Everyone,
+#     INTERACTIVE, Authenticated Users and Users at once, so a Deny on one of
+#     them would suppress an Allow on another. Folding them together could only
+#     ever REMOVE offenders, so each is asked on its own: if any unprivileged
+#     principal alone gets a content-write right, say so.
+#   * Within the inherited class, Deny wins over Allow regardless of which
+#     ancestor each came from. Real canonical order interleaves by inheritance
+#     depth, so a nearer inherited Allow can outrank a further inherited Deny.
+#     Resolving that needs the ancestors' own DACLs; treating the block as
+#     deny-wins is the conservative reading of the ACEs actually present.
 function Get-SrUnprivWriters {
     param([string] $Path)
     $found = @()
     $acl   = Get-Acl -LiteralPath $Path -ErrorAction Stop
-    $allow = @{}
-    $deny  = @{}
+    # One accumulator per (principal, ACE class).
+    $xDeny  = @{}   # explicit Deny   -- rank 1
+    $xAllow = @{}   # explicit Allow  -- rank 2
+    $iDeny  = @{}   # inherited Deny  -- rank 3
+    $iAllow = @{}   # inherited Allow -- rank 4
+    $seen   = @{}
     foreach ($ace in $acl.Access) {
         $who = "$($ace.IdentityReference)"
         $sid = ''
@@ -76,24 +102,40 @@ function Get-SrUnprivWriters {
                     ($who -match $SrUnprivNames)
         if (-not $isUnpriv) { continue }
         # An InheritOnly ACE (icacls "(IO)") does not apply to the object it is
-        # stored on, only to its children. Counting it would flag C:\, whose
-        # stock DACL carries BUILTIN\Users:(OI)(CI)(IO)(GR,GE).
+        # stored on, only to its children. Counting it would flag C:\ on a stock
+        # box: the drive root carries an inheritable-only grant to an
+        # unprivileged principal whose RAW mask includes bits in
+        # $SrDangerousMask -- BUILTIN\Users:(OI)(CI)(IO)(GR,GE) on Server 2019,
+        # NT AUTHORITY\Authenticated Users:(OI)(CI)(IO)(M) = 0xE0010000
+        # (GENERIC_WRITE|DELETE|...) on Windows 11. MEASURED: deleting this line
+        # makes C:\ report 1 offender, which would make the scenario unsolvable.
         if (([int]$ace.PropagationFlags -band 2) -ne 0) { continue }
         $key  = if ($sid) { $sid } else { $who }
         $mask = [int]$ace.FileSystemRights
-        if ($ace.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny) {
-            $deny[$key]  = ([int]$deny[$key])  -bor $mask
+        $isDeny = $ace.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny
+        if ($ace.IsInherited) {
+            if ($isDeny) { $iDeny[$key]  = ([int]$iDeny[$key])  -bor $mask }
+            else         { $iAllow[$key] = ([int]$iAllow[$key]) -bor $mask }
         } else {
-            $allow[$key] = ([int]$allow[$key]) -bor $mask
+            if ($isDeny) { $xDeny[$key]  = ([int]$xDeny[$key])  -bor $mask }
+            else         { $xAllow[$key] = ([int]$xAllow[$key]) -bor $mask }
         }
+        $seen[$key] = $true
     }
-    foreach ($key in @($allow.Keys)) {
-        # DENY WINS, which is how a DACL is actually evaluated. The previous
-        # check never read AccessControlType, so an explicit "Users: Deny
-        # Modify" -- a legitimate remediation -- was scored as a GRANT and the
-        # box was reported as still vulnerable after it had been fixed.
-        $eff = ([int]$allow[$key]) -band (-bnot ([int]$deny[$key])) -band $SrDangerousMask
-        if ($eff -ne 0) { $found += ("{0} -> {1} (rights 0x{2:X8})" -f $Path, $key, $eff) }
+    foreach ($key in @($seen.Keys)) {
+        $xd = [int]$xDeny[$key];  $xa = [int]$xAllow[$key]
+        $id = [int]$iDeny[$key];  $ia = [int]$iAllow[$key]
+        # Bits an explicit ACE already settled never reach the inherited pair,
+        # whichever way it settled them. That single term is the whole fix: an
+        # inherited Deny can no longer reach past an explicit Allow.
+        $settled = $xd -bor $xa
+        $eff = ($xa -band (-bnot $xd)) -bor
+               (($ia -band (-bnot $id)) -band (-bnot $settled))
+        $eff = $eff -band $SrDangerousMask
+        if ($eff -ne 0) {
+            $via = if (($eff -band $xa) -ne 0) { 'explicit' } else { 'inherited' }
+            $found += ("{0} -> {1} (rights 0x{2:X8}, {3})" -f $Path, $key, $eff, $via)
+        }
     }
     return $found
 }
