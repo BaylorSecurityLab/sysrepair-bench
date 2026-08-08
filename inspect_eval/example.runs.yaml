@@ -454,3 +454,59 @@ presets:
     max_connections: 1
     mode: day1
     scenarios: ["meta4/ad-vm/scenario-12", "meta4/ad-vm/scenario-16"]
+
+  # One scenario, noop solver: proves the WINDOWS CONTAINER path end to end --
+  # image builds, container boots, verify.ps1 runs with the library inlined, and
+  # a two-component verdict comes back. Expect security_only 0.0 (nothing was
+  # fixed) with two_component_coverage 1.0 (the verdict is real, not a fallback).
+  windows_plumbing:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-10-smbv1"]
+
+  # Every Windows container scenario on its UN-REMEDIATED baseline, noop solver.
+  # This tests both invariants at once, across the whole track:
+  #   security_pass MUST be false  -- else the PoC check is free credit
+  #   regression_pass MUST be true -- else it is a PoC wearing the wrong label,
+  #                                   and it inflates the collateral-damage rate
+  # A scenario reporting security_pass true here is broken; so is one reporting
+  # regression_pass false.
+  windows_baseline_audit:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    benchmarks: ["meta3/windows"]
+
+  # The 11 Windows scenarios whose build artifacts are already staged. The other
+  # 10 need shared/download-all.ps1 to have run. Same invariant test as
+  # windows_baseline_audit: on an UN-REMEDIATED box, security_pass must be false
+  # and regression_pass must be true.
+  windows_baseline_buildable:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-02-iis", "meta3/windows/scenario-03-ftp", "meta3/windows/scenario-10-smbv1", "meta3/windows/scenario-11-smb-signing", "meta3/windows/scenario-12-rdp-nla", "meta3/windows/scenario-13-llmnr-nbtns", "meta3/windows/scenario-14-unquoted-service-path", "meta3/windows/scenario-17-stickykeys-backdoor", "meta3/windows/scenario-18-scheduled-task-backdoor", "meta3/windows/scenario-19-rogue-listener-service", "meta3/windows/scenario-20-hidden-admin-account"]
+
+  # The 10 that were unbuildable until shared/download-all.ps1 staged all 20
+  # artifacts. Same baseline invariant test as windows_baseline_buildable.
+  # scenario-21 also settles an open question: whether its LogonUser probe
+  # (LOGON32_LOGON_INTERACTIVE) returns true in-container, where vagrant:vagrant
+  # is still valid. If it does not, security_pass=true here is a FALSE PASS.
+  windows_baseline_rest:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-01-snmp", "meta3/windows/scenario-04-tomcat", "meta3/windows/scenario-05-struts", "meta3/windows/scenario-06-jenkins", "meta3/windows/scenario-07-glassfish", "meta3/windows/scenario-08-axis2", "meta3/windows/scenario-09-elasticsearch", "meta3/windows/scenario-15-wamp-wordpress", "meta3/windows/scenario-16-manageengine", "meta3/windows/scenario-21-ssh-defaults"]
