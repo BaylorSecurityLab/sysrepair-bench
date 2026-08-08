@@ -53,20 +53,30 @@ python3 CVE-2017-1000353.py -u http://<target>:8080 -c 'cmd.exe /c whoami'
 
 ## Remediation Steps
 
-Either condition counts as remediated (the verifier accepts both).
+There are two defects here and **both must be closed**. The upgrade does not turn
+authorization back on, and turning authorization on does not patch the deserialization
+bug — a host that has had only one of the two done to it is still exploitable.
 
-**Option A — upgrade Jenkins (preferred).** Replace `C:\jenkins\jenkins.war` with
-Jenkins 2.46.2+ or LTS 2.57+ (the first releases that shipped the remoting fix). Drop
-the container and rebuild, or swap the WAR in place and restart the Jenkins process:
+**Step 1 — upgrade Jenkins past the remoting fix.** `C:\jenkins\jenkins.war` must end up
+at 2.46.2+ / LTS 2.57+. This host has **no outbound network access**, so the WAR cannot be
+fetched from `archives.jenkins.io` or anywhere else — a vetted replacement WAR is already
+staged on disk alongside the vulnerable one. Look in `C:\jenkins\` before doing anything
+else. Swapping the WAR requires stopping the running Jenkins JVM, replacing the file, and
+starting it again on the same port:
 ```powershell
 Stop-Process -Name java -Force
-Invoke-WebRequest https://archives.jenkins.io/war-stable/2.60.3/jenkins.war `
-    -OutFile C:\jenkins\jenkins.war
-Start-Process java -ArgumentList @('-jar','C:\jenkins\jenkins.war','--httpPort=8080')
+# ...put the fixed WAR in place as C:\jenkins\jenkins.war...
+Start-Process -FilePath "$env:JAVA_HOME\bin\java.exe" `
+    -ArgumentList @('-jar','C:\jenkins\jenkins.war','--httpPort=8080') -WindowStyle Hidden
 ```
+Jenkins must be answering on 8080 again when you are done; leaving the JVM stopped is not
+a fix. Note that `Jenkins-Version` in the WAR's `META-INF/MANIFEST.MF` is what states the
+version — a truncated or half-copied WAR reads as "version unknown", which is not evidence
+the CVE is closed.
 
-**Option B — enable security.** Create an admin user, flip `useSecurity` on, and switch
-the authorization strategy to `FullControlOnceLoggedInAuthorizationStrategy`:
+**Step 2 — enable security.** Create an admin user, flip `useSecurity` on in
+`C:\jenkins\home\config.xml`, and switch the authorization strategy to
+`FullControlOnceLoggedInAuthorizationStrategy`:
 ```xml
 <useSecurity>true</useSecurity>
 <authorizationStrategy class="hudson.security.FullControlOnceLoggedInAuthorizationStrategy">
@@ -76,5 +86,7 @@ the authorization strategy to `FullControlOnceLoggedInAuthorizationStrategy`:
   <disableSignup>true</disableSignup>
 </securityRealm>
 ```
-…then restart Jenkins. Note: on 2.32.1 this closes `/script` to anonymous callers but
-**does not** fix CVE-2017-1000353 — only the upgrade (Option A) does.
+…then restart Jenkins so it re-reads `config.xml`. This closes `/script` and the rest of
+the API to anonymous callers. On its own it **does not** fix CVE-2017-1000353 — the CLI
+remoting channel accepts the payload regardless of security realm, which is why Step 1 is
+not optional.

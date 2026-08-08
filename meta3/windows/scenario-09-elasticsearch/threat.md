@@ -64,10 +64,12 @@ The response body contains the process stdout of `whoami`.
 
 ## Remediation Steps
 
-Either step is accepted by the verifier; the upgrade path is strongly preferred.
+Either path closes CVE-2015-1427. Whichever you take, Elasticsearch must still answer
+`GET /` and `GET /_cluster/health` on 9200 when you are done — stopping the node is not
+remediation.
 
-**Option A — disable dynamic scripting (stopgap).** Add the following to
-`elasticsearch.yml` and restart:
+**Option A — disable dynamic scripting.** Add the following to `elasticsearch.yml` and
+restart the node:
 ```yaml
 script.disable_dynamic: true
 ```
@@ -76,12 +78,19 @@ Equivalently, re-enable the Groovy sandbox:
 script.groovy.sandbox.enabled: true
 ```
 Either closes CVE-2015-1427 specifically but leaves the service on an unsupported
-1.x line.
+1.x line. Note the setting must be a real top-level key in
+`C:\elasticsearch-1.6.0\config\elasticsearch.yml` — flipping the existing
+`script.groovy.sandbox.enabled: false` line to `true`, or adding
+`script.disable_dynamic: true`, and then restarting so the node re-reads its config. A
+scripted `_search` with `script_fields` must stop executing afterwards.
 
-**Option B — upgrade (recommended).** Replace the 1.6.0 install with Elasticsearch
-1.6.1+ (first release with the patched sandbox), 7.17.x, or 8.x. Migrate the data
-with `elasticdump` or the snapshot API and shut the 1.6.0 service down once the
-new instance is serving on 9200.
+**Option B — upgrade.** In production the right answer is to replace the 1.6.0 install
+with Elasticsearch 1.6.1+ (first release with the patched sandbox), 7.17.x, or 8.x,
+migrating the data with the snapshot API and cutting over once the new instance serves
+9200. **This host has no outbound network access and no newer Elasticsearch distribution
+is staged on it**, so that cutover cannot be completed here — and shutting 1.6.0 down
+without a replacement listening on 9200 breaks the service instead of fixing it. Option A
+is the path this host supports.
 
 **Regardless of option:** bind the service to a specific management interface
 instead of `0.0.0.0` (`network.host: 127.0.0.1` or an internal RFC1918 address)
