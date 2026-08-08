@@ -39,12 +39,29 @@ $SrUnprivNames = '^(BUILTIN\\)?Users$|^Everyone$|^(NT AUTHORITY\\)?Authenticated
 #   0x00080000  TakeOwnership     (WRITE_OWNER)
 #   0x10000000  GENERIC_ALL
 #   0x40000000  GENERIC_WRITE
-# AppendData (0x4) is deliberately ABSENT. The default DACL on C:\ grants an
-# unprivileged principal (AD) -- BUILTIN\Users on Server 2019, NT AUTHORITY\
-# Authenticated Users on Windows 11 -- which creates SUBDIRECTORIES, not files,
-# so you cannot drop C:\Program.exe with it. MEASURED two ways: adding 0x4 to
-# this mask makes C:\ report 1 offender, and a directory granting only (AD)
-# really does refuse CreateFile to an unprivileged token (ERROR_ACCESS_DENIED).
+# AppendData (0x4) is deliberately ABSENT: (AD) on a directory creates
+# SUBDIRECTORIES, not files, so you cannot drop C:\Program.exe with it.
+# MEASURED IN THIS CONTAINER with a real unprivileged token (LogonUser +
+# impersonation), against a C:\ granting Authenticated Users only (AD): creating
+# a subdirectory succeeded and creating C:\Program.exe was DENIED. Adding 0x4 to
+# this mask would therefore flag C:\ on a correctly-hardened box.
+#
+# WHERE (AD) COMES FROM, AND A CORRECTION. An earlier version of this comment
+# claimed the stock C:\ DACL grants an unprivileged principal only (AD) and said
+# so was measured. It was -- on the Windows 11 HOST, not in the container the
+# verifier actually runs in, and the two do not agree. Same query,
+# (Get-Acl 'C:\').Access for NT AUTHORITY\Authenticated Users:
+#
+#   Windows 11 host       prop=None mask=0x00000004  (AD)  <- subdirectories only
+#   servercore:ltsc2019   prop=None mask=0x001301BF  (M)   <- files too
+#
+# The base image really is writable at the drive root, so this predicate scoring
+# C:\ as an offender there was CORRECT, not a false positive. It is fixed where
+# the defect is -- this scenario's entrypoint.ps1 normalizes the root back to
+# (AD) at every container boot, which is the earliest it can be done because a
+# build-time change to C:\ does not survive the layer boundary. See the comment
+# there. Do not assume the base image and a desktop host agree about C:\, and do
+# not relax this mask to paper over it.
 $SrDangerousMask = 0x00000002 -bor 0x00000040 -bor 0x00010000 -bor 0x00040000 `
                    -bor 0x00080000 -bor 0x10000000 -bor 0x40000000
 
@@ -102,13 +119,20 @@ function Get-SrUnprivWriters {
                     ($who -match $SrUnprivNames)
         if (-not $isUnpriv) { continue }
         # An InheritOnly ACE (icacls "(IO)") does not apply to the object it is
-        # stored on, only to its children. Counting it would flag C:\ on a stock
-        # box: the drive root carries an inheritable-only grant to an
-        # unprivileged principal whose RAW mask includes bits in
-        # $SrDangerousMask -- BUILTIN\Users:(OI)(CI)(IO)(GR,GE) on Server 2019,
-        # NT AUTHORITY\Authenticated Users:(OI)(CI)(IO)(M) = 0xE0010000
-        # (GENERIC_WRITE|DELETE|...) on Windows 11. MEASURED: deleting this line
-        # makes C:\ report 1 offender, which would make the scenario unsolvable.
+        # stored on, only to its children. Counting it would flag C:\ on ANY
+        # box, hardened or not: the drive root carries an inheritable-only grant
+        # to an unprivileged principal whose RAW mask includes bits in
+        # $SrDangerousMask. MEASURED on servercore:ltsc2019 --
+        #   Authenticated Users (OI)(CI)(IO) mask 0xE0010000
+        #     = GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|DELETE;
+        #       0xE0010000 -band $SrDangerousMask = 0x40010000, so it scores.
+        #   BUILTIN\Users       (OI)(CI)(IO) mask 0xA0000000
+        #     = GENERIC_READ|GENERIC_EXECUTE; 0 against the mask, so it does not.
+        # Deleting this line makes C:\ report an offender NO remediation can
+        # clear: that ACE is how every child of C:\ inherits its permissions, so
+        # removing it would rewrite the whole filesystem, not fix the service.
+        # It is left in place on purpose by entrypoint.ps1's root normalization,
+        # which only touches the non-inherit-only grant.
         if (([int]$ace.PropagationFlags -band 2) -ne 0) { continue }
         $key  = if ($sid) { $sid } else { $who }
         $mask = [int]$ace.FileSystemRights
@@ -242,6 +266,14 @@ if ($svcDirErr) {
 # parent directory, up to and including the drive root, which is exactly the
 # candidate list SCM probes when the path is unquoted -- and asserts that none
 # of them lets an unprivileged principal put a binary there. Reads only.
+#
+# THE DRIVE ROOT IS IN SCOPE ON PURPOSE. Planting C:\Program.exe is the textbook
+# exploitation of an unquoted service path; stopping the walk one segment short
+# would concede the most important candidate. The servercore:ltsc2019 base image
+# does grant Authenticated Users MODIFY on C:\, which made this check fail on an
+# untouched box -- that was the IMAGE being writable, not the check being wrong,
+# and it is fixed in this scenario's entrypoint.ps1 rather than by narrowing the
+# walk. See the $SrDangerousMask comment above for the measurement.
 ###############################################################################
 $segFailures = @()
 $segErrors   = @()
