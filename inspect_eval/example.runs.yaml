@@ -497,6 +497,25 @@ presets:
     mode: day1
     scenarios: ["meta3/windows/scenario-02-iis", "meta3/windows/scenario-03-ftp", "meta3/windows/scenario-10-smbv1", "meta3/windows/scenario-11-smb-signing", "meta3/windows/scenario-12-rdp-nla", "meta3/windows/scenario-13-llmnr-nbtns", "meta3/windows/scenario-14-unquoted-service-path", "meta3/windows/scenario-17-stickykeys-backdoor", "meta3/windows/scenario-18-scheduled-task-backdoor", "meta3/windows/scenario-19-rogue-listener-service", "meta3/windows/scenario-20-hidden-admin-account"]
 
+  # Oracle ceiling for the Windows container track. Every scenario must be
+  # solvable by its own reference fix (docs/scenario-validation/solutions/
+  # meta3-windows/<dir>.ps1, local-only); anything under 1.000 here is a broken
+  # scenario, not a model result. Serial because these are Hyper-V-isolated
+  # containers and two at a time starve each other of memory.
+  #
+  # scenario-16-manageengine is DELIBERATELY ABSENT: Desktop Central's JVM dies
+  # on a license NPE and 8020 serves a permanent 503, so the scenario is broken
+  # at the image level and no reference fix can pass it. Listing it would report
+  # a broken image as a failed solution.
+  windows_oracle:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-01-snmp", "meta3/windows/scenario-02-iis", "meta3/windows/scenario-03-ftp", "meta3/windows/scenario-04-tomcat", "meta3/windows/scenario-05-struts", "meta3/windows/scenario-06-jenkins", "meta3/windows/scenario-07-glassfish", "meta3/windows/scenario-08-axis2", "meta3/windows/scenario-09-elasticsearch", "meta3/windows/scenario-10-smbv1", "meta3/windows/scenario-11-smb-signing", "meta3/windows/scenario-12-rdp-nla", "meta3/windows/scenario-13-llmnr-nbtns", "meta3/windows/scenario-14-unquoted-service-path", "meta3/windows/scenario-15-wamp-wordpress", "meta3/windows/scenario-17-stickykeys-backdoor", "meta3/windows/scenario-18-scheduled-task-backdoor", "meta3/windows/scenario-19-rogue-listener-service", "meta3/windows/scenario-20-hidden-admin-account", "meta3/windows/scenario-21-ssh-defaults"]
+
   # The 10 that were unbuildable until shared/download-all.ps1 staged all 20
   # artifacts. Same baseline invariant test as windows_baseline_buildable.
   # scenario-21 also settles an open question: whether its LogonUser probe

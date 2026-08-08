@@ -40,6 +40,8 @@ from __future__ import annotations
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util import sandbox
 
+from .solvers import _ps_write_file
+
 # Bounded so a hung attacker cannot consume a scenario's whole wall-clock
 # budget; these scripts do fixed work and should finish in seconds.
 _STEP_TIMEOUT = 90
@@ -373,13 +375,27 @@ def oracle_agent(solutions_root: str = "") -> Solver:
 
         script = Path(sol).read_text(encoding="utf-8")
         if str(sol).endswith(".ps1"):
-            # Windows container: PowerShell, a Windows path, and no chmod.
+            # Windows container. NEITHER of the Linux helpers works here and the
+            # first version of this branch used both:
+            #   * sandbox().write_file() shells out to `sh`
+            #   * _sh() wraps every command in `bash -lc`
+            # Neither binary exists in a Windows container, so this failed with
+            # "Failed to create container directory C:/" and completed zero
+            # samples. scorer.py already solved this; reuse its helper rather
+            # than reinventing it.
+            sb = sandbox()
             remote = "C:/oracle_fix.ps1"
-            await sandbox().write_file(remote, script)
-            out = await _sh(
-                f"powershell -NoProfile -ExecutionPolicy Bypass -File {remote} 2>&1", 600
+            await _ps_write_file(sb, remote, script)
+            r = await sb.exec(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-File", remote],
+                timeout=600,
             )
-            await _sh(f"powershell -NoProfile -Command \"Remove-Item -Force '{remote}'\"")
+            out = (r.stdout or "") + (r.stderr or "")
+            await sb.exec([
+                "powershell.exe", "-NoProfile", "-Command",
+                f"Remove-Item -Force '{remote}' -ErrorAction SilentlyContinue",
+            ])
         else:
             await sandbox().write_file("/tmp/oracle_fix.sh", script)
             out = await _sh("chmod +x /tmp/oracle_fix.sh && bash /tmp/oracle_fix.sh 2>&1", 600)
