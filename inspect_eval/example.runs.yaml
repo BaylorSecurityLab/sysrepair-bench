@@ -529,3 +529,17 @@ presets:
     max_connections: 1
     mode: day1
     scenarios: ["meta3/windows/scenario-01-snmp", "meta3/windows/scenario-04-tomcat", "meta3/windows/scenario-05-struts", "meta3/windows/scenario-06-jenkins", "meta3/windows/scenario-07-glassfish", "meta3/windows/scenario-08-axis2", "meta3/windows/scenario-09-elasticsearch", "meta3/windows/scenario-15-wamp-wordpress", "meta3/windows/scenario-16-manageengine", "meta3/windows/scenario-21-ssh-defaults"]
+
+  # Re-check the two scenarios the first harness oracle run could not pass.
+  # 05 failed because its solution aborted on shutdown.bat's stderr under
+  # $ErrorActionPreference='Stop' before it deleted anything; 14 fails because
+  # the ltsc2019 image grants Authenticated Users MODIFY on C:\ itself, so the
+  # drive root is an offender on an untouched box.
+  windows_oracle_recheck:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-05-struts", "meta3/windows/scenario-14-unquoted-service-path"]
