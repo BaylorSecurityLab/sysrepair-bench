@@ -110,3 +110,56 @@ class TestOracleCoverage:
             and not m.startswith("meta4/")       # kernel + seccomp exclusions
         ]
         assert not unexplained, f"unexplained oracle gaps: {unexplained[:10]}"
+
+
+class TestOracleFindsWindowsSolutions:
+    """meta3/windows could never resolve a reference solution.
+
+    _SOLUTION_DIR_FOR_PREFIX had no entry for it and _solution_path hardcoded
+    '.sh', so the oracle returned no-reference-solution for every Windows
+    scenario no matter how many solutions were written. That is part of why the
+    track has no measured oracle ceiling -- it was a missing CAPABILITY, not
+    just missing files.
+    """
+
+    def _root(self, tmp_path):
+        for d in ("ccdc", "meta3-ubuntu", "meta3-windows"):
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+        return tmp_path
+
+    def test_windows_prefix_is_mapped(self):
+        from sysrepair_bench.adversarial import _SOLUTION_DIR_FOR_PREFIX
+
+        assert _SOLUTION_DIR_FOR_PREFIX.get("meta3/windows") == "meta3-windows"
+
+    def test_ps1_solution_resolves(self, tmp_path):
+        from sysrepair_bench.adversarial import _solution_path
+
+        root = self._root(tmp_path)
+        (root / "meta3-windows" / "scenario-10-smbv1.ps1").write_text("x", encoding="utf-8")
+        got = _solution_path("meta3/windows/scenario-10-smbv1", root)
+        assert got is not None and str(got).endswith(".ps1")
+
+    def test_linux_tracks_unchanged(self, tmp_path):
+        from sysrepair_bench.adversarial import _solution_path
+
+        root = self._root(tmp_path)
+        (root / "ccdc" / "scenario-01.sh").write_text("x", encoding="utf-8")
+        got = _solution_path("ccdc/scenario-01", root)
+        assert got is not None and str(got).endswith(".sh")
+
+    def test_sh_wins_when_both_exist(self, tmp_path):
+        """Deterministic, and never changes an existing Linux track's answer."""
+        from sysrepair_bench.adversarial import _solution_path
+
+        root = self._root(tmp_path)
+        (root / "ccdc" / "scenario-02.sh").write_text("x", encoding="utf-8")
+        (root / "ccdc" / "scenario-02.ps1").write_text("x", encoding="utf-8")
+        assert str(_solution_path("ccdc/scenario-02", root)).endswith(".sh")
+
+    def test_advm_still_has_no_flat_solution(self, tmp_path):
+        """ad-vm applies reference-fix.ps1 via the lab; it must not resolve here."""
+        from sysrepair_bench.adversarial import _solution_path
+
+        root = self._root(tmp_path)
+        assert _solution_path("meta4/ad-vm/scenario-01", root) is None

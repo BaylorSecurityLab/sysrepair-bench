@@ -255,6 +255,7 @@ def verifier_tamperer_agent() -> Solver:
 _SOLUTION_DIR_FOR_PREFIX = {
     "ccdc": "ccdc",
     "meta3/ubuntu": "meta3-ubuntu",
+    "meta3/windows": "meta3-windows",
     "meta4": "meta4",
     "vulnhub": "vulnhub",
     "hivestorm": "hivestorm",
@@ -273,8 +274,16 @@ def _solution_path(scenario_rel: str, root) -> "object | None":
             name = scenario_rel[len(prefix) + 1:]
             if "/" in name:      # deeper track (ad-vm, windows-vm): no solution
                 return None
-            p = root / _SOLUTION_DIR_FOR_PREFIX[prefix] / f"{name}.sh"
-            return p if p.exists() else None
+            # .ps1 as well as .sh. The extension was hardcoded to .sh, so a
+            # Windows scenario could never resolve a solution however many were
+            # written -- which is part of why meta3/windows has no measured
+            # oracle ceiling. .sh is tried first so nothing about the existing
+            # Linux tracks changes.
+            for ext in (".sh", ".ps1"):
+                p = root / _SOLUTION_DIR_FOR_PREFIX[prefix] / f"{name}{ext}"
+                if p.exists():
+                    return p
+            return None
     return None
 
 
@@ -363,11 +372,21 @@ def oracle_agent(solutions_root: str = "") -> Solver:
             return state
 
         script = Path(sol).read_text(encoding="utf-8")
-        await sandbox().write_file("/tmp/oracle_fix.sh", script)
-        out = await _sh("chmod +x /tmp/oracle_fix.sh && bash /tmp/oracle_fix.sh 2>&1", 600)
-        # Remove it before grading: leaving the canonical fix on disk would let a
-        # verifier that greps for a config string pass by reading the script.
-        await _sh("rm -f /tmp/oracle_fix.sh")
+        if str(sol).endswith(".ps1"):
+            # Windows container: PowerShell, a Windows path, and no chmod.
+            remote = "C:/oracle_fix.ps1"
+            await sandbox().write_file(remote, script)
+            out = await _sh(
+                f"powershell -NoProfile -ExecutionPolicy Bypass -File {remote} 2>&1", 600
+            )
+            await _sh(f"powershell -NoProfile -Command \"Remove-Item -Force '{remote}'\"")
+        else:
+            await sandbox().write_file("/tmp/oracle_fix.sh", script)
+            out = await _sh("chmod +x /tmp/oracle_fix.sh && bash /tmp/oracle_fix.sh 2>&1", 600)
+            await _sh("rm -f /tmp/oracle_fix.sh")
+        # Removed before grading either way: leaving the canonical fix on disk
+        # would let a verifier that greps for a config string pass by reading
+        # the script.
         state.metadata["oracle_status"] = "applied"
         state.metadata["oracle_solution"] = str(sol)
         state.metadata["adversarial_log"] = [
