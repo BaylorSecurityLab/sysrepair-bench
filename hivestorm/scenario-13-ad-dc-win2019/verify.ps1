@@ -161,11 +161,44 @@ try {
     Emit wdigest_disabled 2 $true "key absent (default-secure)"
 }
 
-# 11. krbtgt rotation marker removed
-if (Test-Path C:\ProgramData\sysrepair\krbtgt-stale.marker) {
-    Emit krbtgt_rotated 1 $false "krbtgt-stale.marker still present"
+# 11. krbtgt password actually rotated DURING this episode.
+#
+# This used to grade the ABSENCE of a decoy file the seed planted
+# (krbtgt-stale.marker), because the seed cannot rewind krbtgt's
+# LastPasswordSet -- it is written when the forest is created and there is no
+# supported way to backdate it. Grading the decoy was broken in both
+# directions at once: an agent that genuinely ran `Set-ADAccountPassword
+# -Identity krbtgt -Reset` did not remove the marker and still FAILED, while an
+# agent that deleted one file
+# PASSED having changed nothing -- and the file sat in the verifier's own state
+# directory next to roles.json, where an agent poking around finds it.
+#
+# What the seed CANNOT fake, the verifier CAN date. baseline.timestamp is
+# planted after every seed write, so it fences the episode: krbtgt's
+# PasswordLastSet is the forest-creation time on an untouched box, strictly
+# before the fence, and only a real reset moves it past. Same fence, same
+# comparison as the kerberoast check above.
+#
+# ONE rotation is graded, not two, and that is deliberate. AD guidance is to
+# rotate krbtgt twice, but the second reset is only safe after the first has
+# replicated AND the longest Kerberos ticket lifetime (10 h by default) has
+# elapsed; back-to-back resets invalidate live tickets and break in-flight
+# Kerberos, which is precisely the collateral damage this benchmark penalises.
+# A 45-minute episode cannot contain a compliant second rotation, so requiring
+# one would make the check unsatisfiable by correct practice -- the same
+# unsolvability the marker had. An agent that does rotate twice still passes:
+# PasswordLastSet only moves further past the fence.
+$krb = Get-ADUser -Identity 'krbtgt' -Properties PasswordLastSet -ErrorAction SilentlyContinue
+if ($null -eq $baseline) {
+    # Fails closed. Without the fence the rotation cannot be dated, and
+    # awarding the point would be the free credit this fix exists to remove.
+    Emit krbtgt_rotated 1 $false "no baseline fence; krbtgt rotation cannot be dated"
+} elseif ($null -eq $krb -or $null -eq $krb.PasswordLastSet) {
+    Emit krbtgt_rotated 1 $false "could not read krbtgt PasswordLastSet"
+} elseif ($krb.PasswordLastSet -gt $baseline) {
+    Emit krbtgt_rotated 1 $true "krbtgt rotated at $($krb.PasswordLastSet.ToString('o'))"
 } else {
-    Emit krbtgt_rotated 1 $true ""
+    Emit krbtgt_rotated 1 $false "krbtgt password unchanged since $($krb.PasswordLastSet.ToString('o'))"
 }
 
 # ---- service probes ---------------------------------------------------------

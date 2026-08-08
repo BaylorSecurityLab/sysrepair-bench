@@ -20,10 +20,15 @@ function Emit($check, $weight, $pass, $reason, $category = $null) {
     # hivestorm partial credit (raw/total/penalty) is unchanged. Mapping:
     # `service` and `logging` checks are the ones that already pass on the
     # un-remediated baseline -- they can only fail as collateral damage, so they
-    # are the regression component (eventlog_not_disabled is category=logging
-    # and is exactly that: EventLog is already running on the seeded box, so it
-    # can only fail if the agent turned logging off). Every other check passes
-    # only AFTER remediation, which makes it a PoC check.
+    # are the regression component. Every other check passes only AFTER
+    # remediation, which makes it a PoC check.
+    #
+    # This scenario emits NO `logging` check. It used to: eventlog_not_disabled
+    # carried category=logging and this comment claimed EventLog "is already
+    # running on the seeded box". That was false -- seed.ps1 disables it
+    # (Start=4) -- so the mapping filed a check that CANNOT pass on an untouched
+    # box under the regression component, and the scenario reported collateral
+    # damage before the agent had done anything. See check 10 below.
     if ($category -eq 'service' -or $category -eq 'logging') {
         Record-Reg $check ([bool]$pass) "$reason"
     } else {
@@ -69,12 +74,25 @@ Emit schtask_removed 3 ($null -eq $task) ""
 # 9. trojan file removed
 Emit trojan_removed 3 (-not (Test-Path $trojan)) ""
 
+# 10. EventLog service re-enabled. THIS IS A PoC CHECK, NOT A REGRESSION ONE.
+# seed.ps1 sets Start=4 (Disabled) on the EventLog service: the intruder turned
+# logging off, so turning it back on is remediation, not preservation. It
+# previously carried category=logging, which the mapping above routes to
+# Record-Reg -- and a regression check must PASS on the untouched seeded box.
+# This one could never pass there, so every run of this scenario opened with
+# regression_pass:false and counted as collateral damage the agent had not
+# caused.
+#
+# Dropping the category leaves the WEIGHTED score bit-for-bit identical:
+# _score_hivestorm singles out category=="service" only (excluded from raw and
+# total, -10 penalty when failing). "logging" was never special there, so a
+# logging check and an uncategorised one contribute the same weight to the same
+# sums. Only the two-component mapping changes: poc instead of regression.
+$elStart = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog" -Name Start -ErrorAction SilentlyContinue).Start
+Emit eventlog_not_disabled 2 ($elStart -ne 4) "EventLog Start=$elStart"
+
 # ---- service / regression probes ---------------------------------------------
 $adminExists = $null -ne (Get-LocalUser -Name $admin -ErrorAction SilentlyContinue)
 Emit admin_user_preserved 0 $adminExists "" service
-
-# EventLog must NOT be left disabled.
-$elStart = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog" -Name Start -ErrorAction SilentlyContinue).Start
-Emit eventlog_not_disabled 2 ($elStart -ne 4) "EventLog Start=$elStart" logging
 
 Complete-Verify

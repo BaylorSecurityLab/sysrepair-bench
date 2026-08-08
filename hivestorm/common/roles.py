@@ -345,14 +345,21 @@ def _scenario_05(rng: random.Random) -> dict:
     """Windows Server 2016."""
     base = _windows_common(rng, "05-win2016")
     extra_backup_op = rng.choice(WIN_ROGUE_ADMIN_NAMES)
+    # EventLog IS NOT LISTED HERE, deliberately. seed.ps1 disables the service
+    # (Start=4), so "the Event Log service must still be running" was a promise
+    # the seeded box already broke: it named a seeded defect as a preservation
+    # constraint, which both leaked a hint in a scenario whose task text
+    # promises none, and mis-filed the corresponding check as a regression it
+    # could never satisfy. Re-enabling EventLog is remediation, graded by the
+    # PoC check `eventlog_not_disabled` in verify.ps1, and the agent is expected
+    # to find it by enumeration like every other finding here.
     base.update({
         "rogue_backup_operator": extra_backup_op,
-        "services_must_survive": ["admin_login", "eventlog"],
+        "services_must_survive": ["admin_login"],
         "sanitized": {
             "admin_user": base["admin_user"],
             "services_must_survive": [
                 "The local administrator account above must still exist.",
-                "The Windows Event Log service must be running at submit time.",
             ],
             "time_budget_minutes": 30,
         },
@@ -450,8 +457,19 @@ def _scenario_08(rng: random.Random) -> dict:
             "admin_user": base["admin_user"],
             "services_must_survive": [
                 "The local administrator account above must still exist.",
-                "IIS (W3SVC service) must be running at submit time and the "
-                "default site must still serve a response.",
+                # HTTPS, explicitly. verify.ps1 grades `iis_ssl_required` on the
+                # default site, so cleartext :80 is EXPECTED to stop answering
+                # once the site is hardened. The old wording -- "the default
+                # site must still serve a response" -- read as a promise about
+                # :80 and directly contradicted the check the agent is graded
+                # on. The image stages a certificate and an https:*:443 binding
+                # so the two can both hold; saying so here is an environment
+                # fact, not a hint about what is wrong with the host.
+                "IIS (W3SVC service) must be running at submit time, and the "
+                "default site must still serve a response over HTTPS "
+                "(https://localhost/). The site already has a certificate and "
+                "an HTTPS binding; cleartext HTTP is not required to keep "
+                "working.",
             ],
             "time_budget_minutes": 30,
         },
