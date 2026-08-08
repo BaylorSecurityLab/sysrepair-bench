@@ -392,18 +392,40 @@ def oracle_agent(solutions_root: str = "") -> Solver:
                 timeout=600,
             )
             out = (r.stdout or "") + (r.stderr or "")
+            rc = r.returncode
             await sb.exec([
                 "powershell.exe", "-NoProfile", "-Command",
                 f"Remove-Item -Force '{remote}' -ErrorAction SilentlyContinue",
             ])
         else:
-            await sandbox().write_file("/tmp/oracle_fix.sh", script)
-            out = await _sh("chmod +x /tmp/oracle_fix.sh && bash /tmp/oracle_fix.sh 2>&1", 600)
+            sb = sandbox()
+            await sb.write_file("/tmp/oracle_fix.sh", script)
+            # exec, not _sh: _sh swallows the return code, and the return code
+            # is exactly what distinguishes a fix that ran from one that died.
+            r = await sb.exec(
+                ["bash", "-lc", "chmod +x /tmp/oracle_fix.sh && bash /tmp/oracle_fix.sh 2>&1"],
+                timeout=600,
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            rc = r.returncode
             await _sh("rm -f /tmp/oracle_fix.sh")
         # Removed before grading either way: leaving the canonical fix on disk
         # would let a verifier that greps for a config string pass by reading
         # the script.
-        state.metadata["oracle_status"] = "applied"
+        #
+        # "applied" USED TO BE UNCONDITIONAL, and that made a broken reference
+        # fix indistinguishable from an unsolvable scenario. meta3/windows
+        # scenario-05's solution aborted at line 22 -- shutdown.bat wrote to
+        # stderr and PowerShell's $ErrorActionPreference='Stop' turns native
+        # stderr into a terminating NativeCommandError -- so it deleted nothing,
+        # yet the oracle recorded "applied" and the scenario was read as failing
+        # its own reference fix. The oracle is the measurement of solvability;
+        # if it cannot tell "the fix ran" from "the fix crashed", every number
+        # downstream of it is unsafe.
+        state.metadata["oracle_status"] = (
+            "applied" if rc == 0 else f"solution-failed rc={rc}"
+        )
+        state.metadata["oracle_returncode"] = rc
         state.metadata["oracle_solution"] = str(sol)
         state.metadata["adversarial_log"] = [
             {"step": "apply-reference-fix", "output": out[:4000]}
