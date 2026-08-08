@@ -10,8 +10,10 @@ Hyper-V. This suite is **authored only** right now.
 - **AutomatedLab** installed (`Install-Module AutomatedLab -Scope AllUsers`).
 - **~10 GB free RAM** for the single Server 2019 VM (3 GB assigned + overhead)
   and ~40 GB free disk.
-- **Windows Server 2019 Evaluation ISO** at `C:\LabSources\ISOs\WindowsServer2019Eval.iso`
-  (same `LabSources\ISOs` convention meta4/ad-vm uses).
+- **Windows Server 2019 Evaluation ISO** anywhere under `C:\LabSources\ISOs`
+  (same convention meta4/ad-vm uses). The filename is **not** hardcoded —
+  `SysRepairLab.ps1` discovers it, and resolves the edition from the media too,
+  so eval-vs-retail edition naming does not have to be guessed.
 - `jq` on the host (only if you dispatch via a jq-parsing scorer; `run-scenario.sh`
   here resolves the scenario dir by glob and does not require jq).
 
@@ -121,7 +123,79 @@ Import-Lab SysRepairMeta3 -NoValidation ; Remove-Lab -Name SysRepairMeta3 -Confi
 
 ---
 
-## BLOCKER (2026-08-07): Install-Lab cannot create base images on this host
+## RESOLVED (2026-08-08): poisoned `LocalIsoImages` registry cache
+
+The blocker recorded below was a **stale AutomatedLab ISO cache**, not anything
+in this repo's lab definition. Root cause and the A/B that proves it:
+
+`AutomatedLabCore.psm1:14403` tests `$lab.Sources.AvailableOperatingSystems`.
+That property has **no backing field** — decompiling its getter out of
+`AutomatedLab.dll` gives
+
+    isos.Cast<IsoImage>().SelectMany(i => i.OperatingSystems).ToList()
+
+so it is 0 whenever every ISO in the lab carries an **empty** `OperatingSystems`
+list. That is why `.ISOs` looked healthy (2 correct paths) while the check still
+threw, and why every experiment in the table below moved nothing.
+
+`HKCU:\Software\AutomatedLab\Cache\LocalIsoImages` held, verbatim:
+
+    <IsoImage><Name>Server2019</Name>
+      <Path>C:\LabSources\ISOs\17763.3650...SERVER_EVAL_x64FRE_en-us.iso</Path>
+      <Size>5652088832</Size><OperatingSystems /></IsoImage>
+
+`<Name>Server2019</Name>` is the tell: `New-LabDefinition`'s auto-add names ISOs
+`[guid]::NewGuid()` (`AutomatedLabDefinition.psm1:501`), so that entry was
+written by a **manual** `Add-LabIsoImageDefinition -Name Server2019` from an
+earlier revision of `SysRepairLab.ps1`.
+
+**Why a manual call poisons the cache.** `Add-LabIsoImageDefinition` guards its
+"mount the ISO and read its editions" block with
+(`AutomatedLabDefinition.psm1:525`)
+
+    if (-not $script:lab.DefaultVirtualizationEngine -eq 'Azure')
+
+which PowerShell parses as `((-not $engine) -eq 'Azure')`. New-LabDefinition's
+own auto-add runs at `:3020`, **before** `DefaultVirtualizationEngine` is
+assigned at `:3026` — so `-not ''` → `$true -eq 'Azure'` → `$true`, the block
+runs, editions are read. A manual call *after* `New-LabDefinition` sees
+`'HyperV'` — `-not 'HyperV'` → `$false -eq 'Azure'` → `$false` — the block is
+skipped, `$isOperatingSystem` stays `$null`, and the ISO is cached with zero
+editions (`:554`) and written to the registry (`:578`). From then on every
+`New-LabDefinition` matches that entry by Path+Size (`:513`) and **reuses the
+empty object instead of re-reading the media**. Deleting the manual call, which
+an earlier revision did, therefore does not recover: the poison outlives it.
+
+**A/B on this host**, same probe script, one variable changed:
+
+| | ISOs | AvailableOperatingSystems | Server 2019 ISO entry |
+|---|---|---|---|
+| before purge | 2 | **0** | name `Server2019`, OSes=0 |
+| after purging `LocalIsoImages` | 2 | **4** | GUID name, OSes=4 |
+
+4 matches the already-built `SysRepairBench` lab exactly
+(`Import-Lab SysRepairBench -NoValidation; (Get-Lab).Sources`).
+
+`SysRepairLab.ps1` step **0a** now detects and purges this automatically, because
+the failure is opaque (AutomatedLab reports a missing ISO when the ISO is present
+and readable) and any future `Add-LabIsoImageDefinition` re-poisons it. To fix it
+by hand instead:
+
+```powershell
+Remove-ItemProperty HKCU:\Software\AutomatedLab\Cache -Name LocalIsoImages
+```
+
+Also corrected while here: `lab/Repair-LabBaseImage.ps1` was **not** the verbatim
+copy of `meta4/ad-vm/lab` this document claimed — it was missing
+`Set-LabBaseImageDriveLetters` and `Clear-LabBaseImageDriveLetters`. It has been
+re-synced.
+
+Not a factor, contrary to the guess in "Next steps" below: `TrustedHosts` was
+already `*` and `Enable-LabHostRemoting` was never needed.
+
+---
+
+## BLOCKER (2026-08-07), superseded by the section above — kept for the record
 
 Three real script bugs were found by actually running the build and are FIXED
 (see git log): `[int] $Memory = 3072MB` overflowing Int32, `-DomainName ''`

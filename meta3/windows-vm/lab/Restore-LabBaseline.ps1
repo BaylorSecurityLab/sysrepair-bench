@@ -20,8 +20,20 @@ Import-Module AutomatedLab -ErrorAction Stop
 
 Import-Lab -Name $LabName -NoValidation
 
+# Filter on SnapshotName, NOT Name. Get-LabVMSnapshot returns
+# [AutomatedLab.Snapshot] objects whose only properties are SnapshotName,
+# CreationTime and ComputerName -- there is no Name property, so
+# `Where-Object Name -eq` silently matched nothing and this script threw
+# "no 'baseline' checkpoint on META3WIN" against a checkpoint that provably
+# existed (Get-VMSnapshot showed it). MEASURED, not inferred:
+#     Get-LabVMSnapshot -ComputerName META3WIN | Format-List *
+#     SnapshotName : baseline
+#     CreationTime : 8/8/2026 9:32:48 AM
+#     ComputerName : META3WIN
+# Every scenario run starts by restoring the baseline, so this made the whole
+# per-scenario harness unusable.
 $snap = Get-LabVMSnapshot -ComputerName $VmName -ErrorAction SilentlyContinue |
-    Where-Object Name -eq $SnapshotName
+    Where-Object SnapshotName -eq $SnapshotName
 if (-not $snap) {
     throw "[Restore-LabBaseline] no '$SnapshotName' checkpoint on $VmName. Run Save-LabBaseline.ps1 first."
 }
