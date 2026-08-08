@@ -118,3 +118,67 @@ scorer. Until then, use `run-scenario.sh NN --verify-only` for local scoring.
 ```powershell
 Import-Lab SysRepairMeta3 -NoValidation ; Remove-Lab -Name SysRepairMeta3 -Confirm:$false
 ```
+
+---
+
+## BLOCKER (2026-08-07): Install-Lab cannot create base images on this host
+
+Three real script bugs were found by actually running the build and are FIXED
+(see git log): `[int] $Memory = 3072MB` overflowing Int32, `-DomainName ''`
+failing ValidatePattern on a deliberately workgroup machine, and a hardcoded
+ISO filename plus a hardcoded edition string that do not match the evaluation
+media. Media and edition now resolve by discovery:
+
+    [lab] Server 2019 media: 17763.3650...SERVER_EVAL_x64FRE_en-us.iso
+    [lab] OS edition:        Windows Server 2019 Datacenter Evaluation (Desktop Experience)
+
+The build now reaches `Install-Lab` and dies there:
+
+    - Creating base images
+    There isn't a single operating system ISO available in the lab.
+
+### What is actually failing
+
+`AutomatedLabCore.psm1:14405` tests **`$lab.Sources.AvailableOperatingSystems`**
+-- NOT `.ISOs`. `.ISOs` is populated (2 entries, correct paths), which is what
+makes this misleading.
+
+Measured on this host:
+
+| state | ISOs | AvailableOperatingSystems |
+|---|---|---|
+| after `New-LabDefinition` | 2 | **0** |
+| after `Get-LabAvailableOperatingSystem -Path` | 2 | **0** |
+| after the same call with no `-Path` | 2 | **0** |
+| after `Add-LabIsoImageDefinition` | 2 | **0** |
+| with the OS cache warmed BEFORE `New-LabDefinition` | 2 | **0** |
+
+`Get-LabAvailableOperatingSystem` itself works and returns 6 editions every
+time, so the media is readable and the edition string is right.
+
+### Ruled out
+
+- ISO filename / edition string (both now discovered, and printed above).
+- Registering the ISO explicitly, omitting it, or doing either before/after
+  `New-LabDefinition`.
+- Passing the OS as a name vs. as an object.
+- Ordering preflight before the lab definition (now matches meta4/ad-vm).
+- A cold OS cache: warming it first changes nothing, and the registry cache
+  `HKCU:\Software\AutomatedLab\Cache\LocalOperatingSystems` exists.
+
+### Red herring, recorded so nobody re-chases it
+
+`C:\ProgramData\AutomatedLab\Labs\SysRepairMeta3\Lab.xml` is 2726 bytes with
+zero `OperatingSystemName` entries and no META3WIN, against 27 KB / 7 entries
+for the working `SysRepairBench` lab. That is a STUB written by
+`New-LabDefinition`; the real export happens later and never runs because the
+throw precedes it. It is a symptom of failing early, not the cause.
+
+### Next steps for whoever picks this up
+
+meta4/ad-vm's `SysRepairBench` lab WAS built successfully on this same host with
+the same module version and the same ISO, so this is reproducible-in-principle.
+Compare a live `Get-Lab` from that lab against a fresh definition, ideally in an
+interactive elevated session where `$lab.Sources` can be inspected directly.
+`Enable-LabHostRemoting -Force` (installation.md D6) has not been re-confirmed
+in this session and is worth ruling in or out first.

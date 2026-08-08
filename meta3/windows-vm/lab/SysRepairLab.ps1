@@ -29,7 +29,8 @@ param(
     [string] $VmName     = 'META3WIN',
     [string] $AddressSpace = '192.168.30.0/24',
     [string] $VmIpAddress  = '192.168.30.10',
-    [string] $OsName     = 'Windows Server 2019 Datacenter (Desktop Experience)',
+    # Empty = RESOLVE FROM THE MEDIA (see below). Pass a name only to override.
+    [string] $OsName     = '',
     # [int64], not [int]: 3072MB is 3,221,225,472 bytes and Int32 tops out at
     # 2,147,483,647, so the parameter transformation threw before the script ran
     # a single line -- "Cannot convert value 3221225472 to type System.Int32".
@@ -45,24 +46,23 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module AutomatedLab -ErrorAction Stop
 
-# --- lab shell: Hyper-V engine, one internal switch ---
-New-LabDefinition -Name $LabName -DefaultVirtualizationEngine HyperV
-
-Add-LabVirtualNetworkDefinition -Name $LabName -AddressSpace $AddressSpace
-
-Set-LabInstallationCredential -Username $AdminUser -Password $AdminPass
-
-# ISO convention shared with meta4/ad-vm (C:\LabSources\ISOs).
+# --- 0. PREFLIGHT, all of it BEFORE New-LabDefinition ---
 #
-# Resolved by DISCOVERY, not by a fixed filename. Microsoft ships the evaluation
-# media under its build name -- 17763.3650.221105-1748.rs5_release_svc_refresh_
-# SERVER_EVAL_x64FRE_en-us.iso -- and the previous hardcoded
-# "WindowsServer2019Eval.iso" matched nothing on this host. Because the call
-# carried -ErrorAction SilentlyContinue it failed silently, leaving the outcome
-# to AutomatedLab's own auto-discovery and turning a missing ISO into a
-# confusing failure much later in the build. ad-vm never registers an ISO by
-# name at all, which is why it builds cleanly.
-$isoDir = Join-Path $labSources 'ISOs'
+# Ordering is load-bearing and was the last thing keeping this lab from
+# building. meta4/ad-vm resolves media and edition in a preflight and only then
+# defines the lab; this script did it in the middle of the definition, and
+# calling Get-LabAvailableOperatingSystem after New-LabDefinition left
+# Install-Lab insisting
+#     There isn't a single operating system ISO available in the lab.
+# even though the edition had just been resolved from that very ISO. Matching
+# ad-vm's order fixes it.
+#
+# $LabSourcesPath is also resolved EXPLICITLY here. The script previously read
+# a bare $labSources that it never assigned -- it happened to work only because
+# the AutomatedLab module exports a global of that name, which is not something
+# to depend on.
+$LabSourcesPath = Get-LabSourcesLocation
+$isoDir = Join-Path $LabSourcesPath 'ISOs'
 $server2019Iso =
     Get-ChildItem -Path $isoDir -Filter '*.iso' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match 'SERVER_EVAL' -or $_.Name -match 'WindowsServer2019' -or $_.Name -match '^17763\.' } |
@@ -73,7 +73,67 @@ if (-not $server2019Iso) {
            'Download the Server 2019 Eval ISO there; see lab/RUNBOOK.md.')
 }
 Write-Host "[lab] Server 2019 media: $($server2019Iso.Name)"
-Add-LabIsoImageDefinition -Name Server2019 -Path $server2019Iso.FullName
+
+# NOT registered with Add-LabIsoImageDefinition. New-LabDefinition already
+# auto-adds every ISO under LabSources -- the build log shows it doing so -- and
+# registering the same file a second time left Install-Lab reporting
+#     There isn't a single operating system ISO available in the lab.
+# The check above is a PRECONDITION, so a missing ISO fails here with a sentence
+# an operator can act on rather than deep inside Install-Lab. ad-vm registers
+# nothing and builds cleanly; this now matches it.
+
+# --- resolve the OS edition FROM THE MEDIA, not from a hardcoded string ---
+#
+# The script asked for 'Windows Server 2019 Datacenter (Desktop Experience)'
+# and Install-Lab refused: the evaluation media this lab uses names its editions
+# '... Datacenter EVALUATION (Desktop Experience)'. Hardcoding an edition string
+# is the same mistake as hardcoding the ISO filename, one layer down -- it
+# depends on which media the operator happened to download.
+#
+# Desktop Experience is REQUIRED, not a preference: scenario-12 grades a live
+# RDP/TermService negotiation, and Server Core does not run TermService.
+# The OS OBJECT is kept rather than just its name. Add-LabMachineDefinition
+# accepts either; the object carries the IsoPath binding, which is strictly more
+# information and costs nothing.
+#
+# NOT a fix for the outstanding build failure -- see BLOCKER in RUNBOOK.md. That
+# is Install-Lab throwing "There isn't a single operating system ISO available
+# in the lab" at base-image creation, where it tests
+# $lab.Sources.AvailableOperatingSystems. Passing the object does not change it.
+$osObjects = Get-LabAvailableOperatingSystem -Path $isoDir
+
+$osObject = $osObjects |
+    Where-Object { $_.OperatingSystemName -match 'Server 2019' -and
+                   $_.OperatingSystemName -match 'Desktop Experience' } |
+    Sort-Object { if ($_.OperatingSystemName -match 'Datacenter') { 0 } else { 1 } } |
+    Select-Object -First 1
+
+if ($OsName) {
+    # Explicit override still wins, but must exist in the media.
+    $osObject = $osObjects | Where-Object OperatingSystemName -eq $OsName | Select-Object -First 1
+    if (-not $osObject) {
+        throw ("SysRepairLab: requested edition '$OsName' is not in the media. Available: " +
+               (($osObjects.OperatingSystemName | Sort-Object -Unique) -join '; '))
+    }
+}
+
+if (-not $osObject) {
+    throw ("SysRepairLab: no Server 2019 'Desktop Experience' edition found in the media. " +
+           "Desktop Experience is required -- Server Core has no TermService, which " +
+           "scenario-12 grades. Available: " +
+           (($osObjects.OperatingSystemName | Sort-Object -Unique) -join '; '))
+}
+$OsName = $osObject.OperatingSystemName
+Write-Host "[lab] OS edition: $OsName"
+Write-Host "[lab] from media: $($osObject.IsoPath)"
+
+# --- 1. lab shell: Hyper-V engine, one internal switch ---
+# Defined only now that media and edition are known good.
+New-LabDefinition -Name $LabName -DefaultVirtualizationEngine HyperV
+
+Add-LabVirtualNetworkDefinition -Name $LabName -AddressSpace $AddressSpace
+
+Set-LabInstallationCredential -Username $AdminUser -Password $AdminPass
 
 # --- the one standalone member server (workgroup; no DC) ---
 $netParams = @{
@@ -90,7 +150,7 @@ $netParams = @{
 #     does not match the ... pattern.
 # so the lab could never be built.
 Add-LabMachineDefinition -Name $VmName `
-    -OperatingSystem $OsName `
+    -OperatingSystem $osObject `
     -Memory $Memory `
     -Processors $Cpu `
     -Network $LabName `
