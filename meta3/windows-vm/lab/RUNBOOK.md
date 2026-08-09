@@ -103,6 +103,28 @@ A scenario is validated when (a) fails and (c) passes, and `verify-service.ps1`
 passes throughout (service Running, port listening) — proving the fix did not
 "cheat" by stopping the service.
 
+**Scenario 10 reboots the VM during inject, by design.** Windows registers the
+`srv` service (the SMB 1.x server driver) only while booting, so enabling the
+SMB1Protocol optional feature with `-NoRestart` leaves
+`Set-SmbServerConfiguration -EnableSMB1Protocol $true` failing with *"The
+specified service does not exist"* (Windows System Error 1243) and the host NOT
+vulnerable. `inject.ps1` therefore runs in two passes: pass 1 stages the
+feature and drops `.reboot-required` in its own directory, `Invoke-Scenario.ps1`
+reboots and re-runs it, and pass 2 turns the dialect on and refuses to return
+unless SMB1 is genuinely serving. Expect `./run-scenario.sh 10` to take roughly
+90 seconds. The sentinel is generic — any future inject that needs a boot can
+use it, and scenarios 11 and 12 never write one, so they are unaffected.
+
+After every inject the driver re-gates readiness by running that scenario's own
+`verify-service.ps1` until it exits 0 (5 min budget), mirroring meta4/ad-vm's
+`Invoke-ScenarioInject`. A PoC that fails only because a service has not
+finished starting would otherwise grade as "remediated".
+
+The reference solution for 10 does **not** need a reboot: measured on META3WIN,
+`Set-SmbServerConfiguration -EnableSMB1Protocol $false` plus
+`Restart-Service LanmanServer` stops the live SMB1 dialect immediately while
+`srv` stays Running and 445 keeps listening.
+
 ## 4. Scorer integration (SSH bridge)
 
 The eval scorer (`inspect_eval/sysrepair_bench/scorer.py`) reaches a Windows VM
