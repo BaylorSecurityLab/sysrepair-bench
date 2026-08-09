@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
+from .run import BASE_IMAGES
 from .task import REPO_ROOT, WINDOWS_FROM_HINTS, _advm_harness, _discover_scenarios
 
 TAG_PREFIX = "srb-prebuild"
@@ -89,9 +90,9 @@ def _image_os(scenario_dir: Path, _seen: set[str] | None = None) -> str:
     ref = _resolve_from(df)
     if any(h in ref for h in WINDOWS_FROM_HINTS):
         return "windows"
-    for tag, (_ctx, dockerfile) in LOCAL_BASES.items():
+    for tag in BASE_IMAGES:
         if ref == tag.lower():
-            base_df = REPO_ROOT / dockerfile
+            _ctx, base_df, _extra = _base_spec(tag)
             if base_df.is_file():
                 return _image_os(base_df.parent, _seen)
     return "linux"
@@ -201,19 +202,23 @@ def _buildable(scenario_dir: Path) -> bool:
 # Keyed by the exact tag scenarios reference; value is the build context.
 #   meta2-hardy   - Ubuntu 8.04's coreutils predates `timeout`; base adds a shim.
 #   meta3-win-base - shared Windows Server layer for the 21 meta3/windows scenarios.
-# (build context, Dockerfile) — the two are NOT always the same directory.
-# meta3-win-base lives in meta3/windows/base but COPYs shared/downloads/..., so
-# its context has to be meta3/windows or the COPY cannot see the file.
-LOCAL_BASES: dict[str, tuple[Path, Path]] = {
-    "sysrepair/meta2-hardy:latest": (
-        Path("meta2") / "_base",
-        Path("meta2") / "_base" / "Dockerfile",
-    ),
-    "sysrepair/meta3-win-base:ltsc2019": (
-        Path("meta3") / "windows",
-        Path("meta3") / "windows" / "base" / "Dockerfile",
-    ),
-}
+def _base_spec(tag: str) -> tuple[Path, Path, list[str]]:
+    """(context, dockerfile, extra docker-build flags) for a shared base image.
+
+    Single source of truth is run.BASE_IMAGES. This module used to carry its own
+    table, which drifted immediately: it missed `--isolation=hyperv`, without
+    which the Windows Server Core base cannot build on Win 10/11 Home.
+
+    run.BASE_IMAGES stores (context, extra_flags) and encodes a non-default
+    Dockerfile location inside extra_flags as `-f <path>` -- meta3-win-base lives
+    in meta3/windows/base but COPYs shared/downloads/..., so its context must be
+    meta3/windows. Unpack that here rather than duplicating the knowledge.
+    """
+    ctx, extra = BASE_IMAGES[tag]
+    dockerfile = ctx / "Dockerfile"
+    if "-f" in extra:
+        dockerfile = Path(extra[extra.index("-f") + 1])
+    return Path(ctx), dockerfile, list(extra)
 
 
 def _image_exists(tag: str, docker_context: str | None) -> bool:
@@ -227,28 +232,30 @@ def _image_exists(tag: str, docker_context: str | None) -> bool:
         return False
 
 
-def _required_bases(scenarios: list[Path]) -> list[tuple[str, Path, Path]]:
-    """Local base images the selected scenarios FROM: (tag, context, dockerfile)."""
-    needed: dict[str, tuple[Path, Path]] = {}
+def _required_bases(scenarios: list[Path]) -> list[tuple[str, Path, Path, list[str]]]:
+    """Bases the selected scenarios FROM: (tag, context, dockerfile, extra flags)."""
+    needed: list[str] = []
     for p in scenarios:
         df = p / "Dockerfile"
         if not df.is_file():
             continue
         text = df.read_text(encoding="utf-8", errors="ignore").lower()
-        for tag, (ctx, dockerfile) in LOCAL_BASES.items():
-            if f"from {tag.lower()}" in text:
-                needed[tag] = (ctx, dockerfile)
-    return [
-        (t, REPO_ROOT / c, REPO_ROOT / d)
-        for t, (c, d) in needed.items()
-        if (REPO_ROOT / d).is_file()
-    ]
+        for tag in BASE_IMAGES:
+            if f"from {tag.lower()}" in text and tag not in needed:
+                needed.append(tag)
+    out = []
+    for tag in needed:
+        ctx, dockerfile, extra = _base_spec(tag)
+        if dockerfile.is_file():
+            out.append((tag, ctx, dockerfile, extra))
+    return out
 
 
 def _build_one(context: Path, tag: str, quiet: bool,
                docker_context: str | None = None,
                dockerfile: Path | None = None,
-               name: str | None = None) -> BuildResult:
+               name: str | None = None,
+               extra_flags: list[str] | None = None) -> BuildResult:
     # Name must come from the scenario, not the context: with a widened context
     # every meta3/windows scenario would otherwise report as "meta3/windows".
     if name is None:
@@ -259,8 +266,18 @@ def _build_one(context: Path, tag: str, quiet: bool,
     cmd = ["docker"]
     if docker_context:
         cmd += ["--context", docker_context]
-    cmd += ["build", "-t", tag,
-            "-f", str(dockerfile or (context / "Dockerfile")), str(context)]
+    cmd += ["build", "-t", tag]
+    # Flags from run.BASE_IMAGES, e.g. --isolation=hyperv, which the Windows
+    # Server Core base needs on Win 10/11 Home. `-f` is passed explicitly below,
+    # so drop the copy embedded in the flag list to avoid a duplicate.
+    for flag in (extra_flags or []):
+        if flag == "-f":
+            continue
+        if extra_flags and "-f" in extra_flags and \
+                flag == extra_flags[extra_flags.index("-f") + 1]:
+            continue
+        cmd.append(flag)
+    cmd += ["-f", str(dockerfile or (context / "Dockerfile")), str(context)]
     if quiet:
         cmd.append("--quiet")
     start = time.perf_counter()
@@ -315,14 +332,15 @@ def prebuild(
 
     # Bases must be serial and first: every dependent scenario build fails on a
     # missing FROM otherwise, and in parallel they would race each other.
-    for tag, ctx, dockerfile in _required_bases(buildable):
+    for tag, ctx, dockerfile, extra in _required_bases(buildable):
         if _image_exists(tag, docker_context):
             # Bases are large and slow (meta3-win-base is 5 GB) and some pull
             # gitignored installers into their context. If one is already built,
             # rebuilding risks failing on an artifact that is not on this disk.
             print(f"[prebuild] base {tag}: already present, skipping")
             continue
-        base = _build_one(ctx, tag, quiet, docker_context, dockerfile)
+        base = _build_one(ctx, tag, quiet, docker_context, dockerfile,
+                          extra_flags=extra)
         results.append(base)
         print(f"[prebuild] base {tag}: {'ok' if base.ok else 'FAILED'} ({base.seconds:.0f}s)")
         if not base.ok:
