@@ -342,6 +342,15 @@ def _preflight_endpoint(cfg: dict) -> None:
 
     Skipped when ``preflight: false`` is set on the preset, or when the model
     is not an ``openai/`` provider.
+
+    ``preflight_wait: <seconds>`` turns the check into a *hold* instead of an
+    abort: poll until the endpoint answers, then launch. This exists for
+    scheduled-GPU workflows — pre-build the sandboxes (see
+    ``python -m sysrepair_bench.prebuild``), start the run, and let it block
+    until the queued serve job comes up, rather than babysitting the queue.
+
+    While holding, ``.env`` is re-read on each attempt, so a per-job API key
+    can be pasted in after the run has already started waiting.
     """
     if cfg.get("preflight") is False:
         return
@@ -372,26 +381,61 @@ def _preflight_endpoint(cfg: dict) -> None:
     # still aborts a truly-dead endpoint in ~60 s, vs the per-sample hour.
     pf_timeout = float(cfg.get("preflight_timeout", 30))
     pf_retries = int(cfg.get("preflight_max_retries", 1))
-    client = OpenAI(base_url=base_url, api_key=api_key or "x",
-                    timeout=pf_timeout, max_retries=pf_retries)
-    try:
-        client.chat.completions.create(
-            model=short,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=1,
-        )
-    except Exception as e:
+    # 0 (default) preserves the original abort-immediately behaviour.
+    wait_s = float(cfg.get("preflight_wait", 0) or 0)
+    poll_s = float(cfg.get("preflight_poll", 30) or 30)
+    deadline = time.monotonic() + wait_s
+    attempt = 0
+    last_err: Exception | None = None
+    success = False
+
+    while True:
+        attempt += 1
+        # Re-resolve the key each attempt: a serve job mints a fresh API key,
+        # so a hold that started before the job landed would otherwise keep
+        # presenting the previous job's dead credential.
+        if wait_s and attempt > 1:
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(override=True)
+            except ImportError:
+                pass
+            api_key = os.environ.get("OPENAI_API_KEY") or api_key
+
+        client = OpenAI(base_url=base_url, api_key=api_key or "x",
+                        timeout=pf_timeout, max_retries=pf_retries)
+        try:
+            client.chat.completions.create(
+                model=short,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            )
+            success = True
+            break
+        except Exception as e:  # noqa: BLE001 - reported below either way
+            last_err = e
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            print(f"[preflight] {short}: not up yet "
+                  f"({e.__class__.__name__}); retrying for {remaining/60:.0f} more min")
+            time.sleep(min(poll_s, max(1.0, remaining)))
+
+    if not success:
+        waited = f" after waiting {wait_s/60:.0f} min" if wait_s else ""
         raise SystemExit(
-            f"[preflight] Model endpoint unreachable.\n"
+            f"[preflight] Model endpoint unreachable{waited}.\n"
             f"           model:    {short}\n"
             f"           base_url: {url_shown}\n"
-            f"           error:    {e.__class__.__name__}: {e}\n"
+            f"           error:    {last_err.__class__.__name__}: {last_err}\n"
             f"\n"
             f"           Refusing to launch — a failing endpoint would burn the\n"
             f"           full per-sample time_limit on connection-error retries.\n"
-            f"           Set 'preflight: false' on the preset to skip this check."
-        ) from e
-    print(f"[preflight] {short} @ {url_shown}: ok")
+            f"           Set 'preflight_wait: <seconds>' to hold for a queued\n"
+            f"           serve job, or 'preflight: false' to skip this check."
+        ) from last_err
+    print(f"[preflight] {short} @ {url_shown}: ok"
+          + (f" (after {attempt} attempts)" if attempt > 1 else ""))
 
 
 def _hyperv_host_config(vm_dir: Path) -> dict | None:

@@ -46,7 +46,13 @@ def _make_prompt(seed: int, approx_tokens: int) -> str:
         "You are auditing a compromised Linux host. Prior tool output follows.",
         "",
     ]
-    n = max(1, approx_tokens // 12)
+    # ~28 tokens per generated line, not 12. Each line is ~95 chars and dense in
+    # digits and punctuation, which tokenize near one-per-character rather than
+    # one-per-word. The old //12 divisor overstated line count ~2.3x, so a
+    # nominal 6k-token prompt was really 12k-17k. Ratios between runs were
+    # unaffected (both sides used the same divisor) but the absolute workload
+    # was mischaracterised.
+    n = max(1, approx_tokens // 28)
     for i in range(n):
         v = (seed * 7919 + i * 104729) % 100000
         lines.append(
@@ -121,6 +127,7 @@ async def _run_level(
     requests: int,
     prompt_tokens: int,
     max_tokens: int,
+    seed_base: int = 0,
 ) -> LevelStats:
     sem = asyncio.Semaphore(level)
     counter = 0
@@ -133,8 +140,14 @@ async def _run_level(
         print(f"\r  level {level:>4}  {counter}/{requests}", end="", flush=True)
         return r
 
+    # seed_base advances across levels. Without it every level restarts at seed
+    # 0, re-sending prompts the server already has in its prefix cache, so each
+    # level after the first measures cached prefill and reports inflated
+    # throughput. Visible in the old A40 data as ttft_p50 4.96s -> 0.56s between
+    # levels 1 and 2.
     start = time.perf_counter()
-    results = await asyncio.gather(*(guarded(i) for i in range(requests)))
+    results = await asyncio.gather(
+        *(guarded(seed_base + i) for i in range(requests)))
     wall = time.perf_counter() - start
     print("\r" + " " * 40 + "\r", end="")
 
@@ -207,6 +220,11 @@ async def main() -> int:
     ap.add_argument("--prompt-tokens", type=int, default=6000)
     ap.add_argument("--max-tokens", type=int, default=300)
     ap.add_argument("--json", dest="json_out", help="write raw results here")
+    ap.add_argument("--auto-extend", action="store_true",
+                    help="keep doubling concurrency until throughput FALLS, so "
+                         "the reported peak is real rather than a lower bound")
+    ap.add_argument("--max-level", type=int, default=512,
+                    help="ceiling for --auto-extend (default 512)")
     args = ap.parse_args()
 
     levels = [int(x) for x in args.levels.split(",") if x.strip()]
@@ -228,9 +246,13 @@ async def main() -> int:
     print(" ok\n")
 
     stats: list[LevelStats] = []
+    seed_base = 1000                      # past the warmup seed
     for level in levels:
         n = args.requests or max(8, level * 4)
-        stats.append(await _run_level(client, args.model, level, n, args.prompt_tokens, args.max_tokens))
+        stats.append(await _run_level(client, args.model, level, n,
+                                      args.prompt_tokens, args.max_tokens,
+                                      seed_base=seed_base))
+        seed_base += n                    # never reuse a prompt across levels
         s = stats[-1]
         print(
             f"  level {s.level:>4}  {s.throughput:>8,.0f} tok/s  "
@@ -241,6 +263,36 @@ async def main() -> int:
         if s.errors:
             for e in s.errors:
                 print(f"           ! {e[:110]}")
+
+    # A peak at the highest level tested is not a peak -- it is a lower bound,
+    # and comparing it against another config's resolved peak is exactly how the
+    # earlier 5-vs-8 GPU cost comparison went wrong. Keep doubling until
+    # throughput actually falls (or the endpoint starts erroring).
+    if args.auto_extend:
+        while True:
+            clean = [s for s in stats if s.failed == 0 and s.ok > 0]
+            if not clean:
+                break
+            top = max(s.level for s in clean)
+            if max(clean, key=lambda s: s.throughput).level != top:
+                break                                   # peak is interior: done
+            if top >= args.max_level:
+                print(f"\n  auto-extend stopped at level {top} (--max-level); "
+                      f"peak is still UNRESOLVED.")
+                break
+            nxt = top * 2
+            print(f"\n  peak is at the top level ({top}) -- extending to {nxt} "
+                  f"to resolve it")
+            n = args.requests or max(8, nxt * 4)
+            stats.append(await _run_level(client, args.model, nxt, n,
+                                          args.prompt_tokens, args.max_tokens,
+                                          seed_base=seed_base))
+            seed_base += n
+            s = stats[-1]
+            print(f"  level {s.level:>4}  {s.throughput:>8,.0f} tok/s  "
+                  f"{s.completions_per_min:>6.1f} req/min  "
+                  f"p50 {s.lat_p50:>6.1f}s  p95 {s.lat_p95:>6.1f}s  "
+                  f"ttft {s.ttft_p50 or 0:>5.2f}s  fail {s.failed}")
 
     best, note = _recommend(stats)
     print("\n" + "=" * 68)
