@@ -97,7 +97,20 @@ Expected per scenario:
 |----|-----------------------------|-------------------|---------------------|
 | 10 | SMB1 accepted (445) | `Set-SmbServerConfiguration -EnableSMB1Protocol $false` + restart | SMB1 rejected -> SMB2 |
 | 11 | signing optional (445) | `Set-SmbServerConfiguration -RequireSecuritySignature $true` + restart | signing required |
-| 12 | plain RDP accepted (3389) | `UserAuthentication=1; SecurityLayer=2` + restart TermService | plain RDP rejected/upgraded |
+| 12 | plain RDP accepted (3389) | `UserAuthentication=1; SecurityLayer=2` (no restart) | plain RDP rejected/upgraded |
+
+**Scenario 12 deliberately does NOT restart TermService**, in either `inject.ps1`
+or `solution.ps1`. `Restart-Service -Name TermService -Force` *fails* on a
+freshly restored META3WIN — `Service 'Remote Desktop Services (TermService)'
+stop failed` / `StopServiceFailed` — which is terminating under the scripts'
+`$ErrorActionPreference = 'Stop'`, so it killed both scripts on their last line.
+It is also unnecessary: the RDP-Tcp security policy is read **per connection**.
+Measured with no restart between three transitions, probing the live listener
+after each registry write: `UA=1 SL=2` → `RDP_NEG_FAILURE
+HYBRID_REQUIRED_BY_SERVER`, `UA=0 SL=1` → `RDP_NEG_RSP selectedProtocol =
+PROTOCOL_RDP`, `UA=1 SL=2` → `RDP_NEG_FAILURE` again. Both scripts instead end
+by running `rdp_nla_probe.ps1` and refusing to return unless the live wire is in
+the state they intended.
 
 A scenario is validated when (a) fails and (c) passes, and `verify-service.ps1`
 passes throughout (service Running, port listening) — proving the fix did not
