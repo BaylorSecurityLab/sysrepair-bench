@@ -4,6 +4,9 @@
     "commit": "",
     "pr": ""
   },
+  "env": {
+    "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "2000"
+  },
   "permissions": {
     "allow": [
       "mcp__plugin_context-mode_context-mode__ctx_execute",
@@ -12,7 +15,8 @@
       "mcp__plugin_context-mode_context-mode__ctx_search",
       "mcp__pdf-reader__read_pdf",
       "Bash(docker version *)",
-      "Bash(docker info *)"
+      "Bash(docker info *)",
+      "Bash(/home/resbears/projects/sysrepair-bench/docs/meta2-haiku-eval/runs/21-2/srx *)"
     ]
   },
   "hooks": {

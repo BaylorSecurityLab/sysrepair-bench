@@ -120,3 +120,8 @@ meta3/windows-vm/build/
 hpc/vllm_args.env
 # Per-job vLLM API keys / endpoints written by hpc/vllm_serve.slurm
 .vllm_delta/
+# Panel B ladder run artifacts (scripts are tracked; logs + generated presets are not)
+inspect_eval/panelB/*.log
+inspect_eval/panelB/*.log.*
+inspect_eval/panelB/cascade_*.runs.yaml
+inspect_eval/smoke.runs.yaml
