@@ -507,6 +507,60 @@ def advm_inject(scenario_id: str, lab: str, pubkey: str) -> None:
         )
 
 
+def _docker_mode_guard(samples: list[Sample]) -> None:
+    """Refuse a run whose scenarios cannot exist in the current Docker mode.
+
+    Docker Desktop serves either Linux or Windows containers, never both. Run a
+    Linux-based scenario while it is in Windows mode and the only diagnostic is
+
+        no matching manifest for windows(10.0.26200)/amd64 in the manifest list
+
+    reported against whatever base image happened to be pulled first -- for the
+    ad-vm track that is debian:bookworm-slim, the SSH bridge, which says nothing
+    about the AD lab the run is actually for. Every sample then fails at build
+    and the eval produces no log at all, so there is not even a scored result to
+    inspect.
+
+    Naming the mismatch up front turns a ten-minute confusion into one line.
+    """
+    if not samples:
+        return
+    try:
+        r = subprocess.run(
+            ["docker", "info", "--format", "{{.OSType}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return          # docker unreachable is someone else's error to report
+        ostype = (r.stdout or "").strip().lower()
+    except Exception:       # noqa: BLE001 - never block a run on the guard itself
+        return
+    if ostype not in ("linux", "windows"):
+        return
+
+    need = {str((s.metadata or {}).get("os", "linux")).lower() for s in samples}
+    # freebsd and advm run through a LINUX bridge container.
+    wants_linux = bool(need - {"windows"})
+    wants_windows = "windows" in need
+
+    if ostype == "windows" and wants_linux:
+        raise SystemExit(
+            "[docker] this run needs LINUX containers but Docker is in WINDOWS "
+            "container mode.\n"
+            f"         scenario OS types in this run: {sorted(need)}\n"
+            "         Switch Docker Desktop to Linux containers and re-run. "
+            "Without this you get\n"
+            "         'no matching manifest for windows/amd64' against a base "
+            "image and no eval log."
+        )
+    if ostype == "linux" and wants_windows and not wants_linux:
+        raise SystemExit(
+            "[docker] this run needs WINDOWS containers but Docker is in LINUX "
+            "container mode.\n"
+            "         Switch Docker Desktop to Windows containers and re-run."
+        )
+
+
 def _advm_serial_guard(samples: list[Sample]) -> None:
     """Refuse to start an ad-vm run that could interleave samples.
 
@@ -1180,6 +1234,7 @@ def sysrepair_bench(
         raise ValueError("No scenarios matched the given filters.")
     samples = [_build_sample(d, mode=mode) for d in scenario_dirs]
     _advm_serial_guard(samples)
+    _docker_mode_guard(samples)
 
     solver_msg_limit = message_limit if message_limit > 0 else 1_000_000
     return Task(
