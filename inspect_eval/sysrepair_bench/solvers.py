@@ -1198,6 +1198,15 @@ def get_solver(
     verify_timeout: int = 300,
 ) -> Solver:
     name = name.lower()
+    # Validity-audit agents (oracle ceiling, gaming attackers) are scripted and
+    # take no model calls, so they ignore message_limit / max_attempts entirely.
+    # Checked first: their names cannot collide with a model-driven solver, and
+    # routing one through _with_attempts would re-run a deterministic script.
+    from .adversarial import get_adversarial_solver
+
+    audit = get_adversarial_solver(name)
+    if audit is not None:
+        return audit
     if name == "react":
         # Drives its own attempt loop natively (_react.py:261-269).
         return _react_solver(message_limit, max_attempts, bash_timeout, verify_timeout)

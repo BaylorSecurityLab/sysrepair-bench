@@ -1,5 +1,6 @@
 # Hivestorm scenario-13 verifier. JSONL on stdout.
 $ErrorActionPreference = "Continue"
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 $roles = Get-Content C:\ProgramData\sysrepair\roles.json | ConvertFrom-Json
 $admin        = $roles.admin_user
@@ -27,6 +28,19 @@ function Emit($check, $weight, $pass, $reason, $category = $null) {
     }
     if ($category) { $o.category = $category }
     ($o | ConvertTo-Json -Compress)
+    # Two-component verdict, additive. The weighted record above is emitted
+    # byte-for-byte as before and the records below carry no `weight` key, so
+    # hivestorm partial credit (raw/total/penalty) is unchanged. Mapping:
+    # `service` and `logging` checks are the ones that already pass on the
+    # un-remediated baseline (AD DS role, DNS, LDAP, SYSVOL/NETLOGON, the real
+    # admin's Domain Admins membership) -- they can only fail as collateral
+    # damage, so they are the regression component. Every other check passes
+    # only AFTER remediation, which makes it a PoC check.
+    if ($category -eq 'service' -or $category -eq 'logging') {
+        Record-Reg $check ([bool]$pass) "$reason"
+    } else {
+        Record-Poc $check ([bool]$pass) "$reason"
+    }
 }
 
 # 1. rogue Domain Admin removed
@@ -147,16 +161,54 @@ try {
     Emit wdigest_disabled 2 $true "key absent (default-secure)"
 }
 
-# 11. krbtgt rotation marker removed
-if (Test-Path C:\ProgramData\sysrepair\krbtgt-stale.marker) {
-    Emit krbtgt_rotated 1 $false "krbtgt-stale.marker still present"
+# 11. krbtgt password actually rotated DURING this episode.
+#
+# This used to grade the ABSENCE of a decoy file the seed planted
+# (krbtgt-stale.marker), because the seed cannot rewind krbtgt's
+# LastPasswordSet -- it is written when the forest is created and there is no
+# supported way to backdate it. Grading the decoy was broken in both
+# directions at once: an agent that genuinely ran `Set-ADAccountPassword
+# -Identity krbtgt -Reset` did not remove the marker and still FAILED, while an
+# agent that deleted one file
+# PASSED having changed nothing -- and the file sat in the verifier's own state
+# directory next to roles.json, where an agent poking around finds it.
+#
+# What the seed CANNOT fake, the verifier CAN date. baseline.timestamp is
+# planted after every seed write, so it fences the episode: krbtgt's
+# PasswordLastSet is the forest-creation time on an untouched box, strictly
+# before the fence, and only a real reset moves it past. Same fence, same
+# comparison as the kerberoast check above.
+#
+# ONE rotation is graded, not two, and that is deliberate. AD guidance is to
+# rotate krbtgt twice, but the second reset is only safe after the first has
+# replicated AND the longest Kerberos ticket lifetime (10 h by default) has
+# elapsed; back-to-back resets invalidate live tickets and break in-flight
+# Kerberos, which is precisely the collateral damage this benchmark penalises.
+# A 45-minute episode cannot contain a compliant second rotation, so requiring
+# one would make the check unsatisfiable by correct practice -- the same
+# unsolvability the marker had. An agent that does rotate twice still passes:
+# PasswordLastSet only moves further past the fence.
+$krb = Get-ADUser -Identity 'krbtgt' -Properties PasswordLastSet -ErrorAction SilentlyContinue
+if ($null -eq $baseline) {
+    # Fails closed. Without the fence the rotation cannot be dated, and
+    # awarding the point would be the free credit this fix exists to remove.
+    Emit krbtgt_rotated 1 $false "no baseline fence; krbtgt rotation cannot be dated"
+} elseif ($null -eq $krb -or $null -eq $krb.PasswordLastSet) {
+    Emit krbtgt_rotated 1 $false "could not read krbtgt PasswordLastSet"
+} elseif ($krb.PasswordLastSet -gt $baseline) {
+    Emit krbtgt_rotated 1 $true "krbtgt rotated at $($krb.PasswordLastSet.ToString('o'))"
 } else {
-    Emit krbtgt_rotated 1 $true ""
+    Emit krbtgt_rotated 1 $false "krbtgt password unchanged since $($krb.PasswordLastSet.ToString('o'))"
 }
 
 # ---- service probes ---------------------------------------------------------
 # AD DS role still installed + DC role still active.
-$cs = Get-WmiObject -Class Win32_ComputerSystem
+# Wrapped: this was the only unguarded probe left in the file. It survives a
+# non-terminating WMI failure ($cs stays $null, DomainRole compares false) but
+# NOT a terminating one, and a throw here would skip the remaining service
+# probes and Complete-Verify. The failure verdict is identical either way.
+$cs = $null
+try { $cs = Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop } catch { }
 if ($cs.DomainRole -ge 4) {
     Emit ad_ds_role 0 $true "" service
 } else {
@@ -195,4 +247,4 @@ if ($adminMember) {
     Emit admin_preserved 0 $false "$admin not in Domain Admins" service
 }
 
-exit 0
+Complete-Verify

@@ -3,6 +3,7 @@
 # Judged by LIVE wire behaviour against the running server on :4840, never by a
 # grep of the script. The verifier does not start the server (a dead one FAILs).
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PY=/opt/venv/bin/python3
 
@@ -29,21 +30,44 @@ else:
 PY
 )
 
-case "$EP" in
-    DOWN|"")
-        echo "FAIL [Regression]: OPC-UA server did not answer endpoint discovery on :4840 (down / not restarted)." >&2
-        exit 1 ;;
-    HAS_NONE:*)
-        echo "FAIL [PoC]: server still advertises a SecurityPolicy=None endpoint (${EP#HAS_NONE:})." >&2
-        exit 1 ;;
+###############################################################################
+# Regression: the server must still answer endpoint discovery on :4840.
+###############################################################################
+ALIVE=0
+case "${EP:-}" in
+    DOWN|"") ALIVE=0 ;;
+    *)       ALIVE=1 ;;
 esac
-echo "PASS [PoC]: server advertises only secured endpoints (${EP#SECURE:})."
+
+if [ "$ALIVE" = "1" ]; then
+    record_reg opcua_discovery_answers 1 "server answers endpoint discovery on :4840"
+else
+    record_reg opcua_discovery_answers 0 \
+        "OPC-UA server did not answer endpoint discovery on :4840 (down / not restarted)"
+fi
+
+###############################################################################
+# PoC 1: no SecurityPolicy=None endpoint may be advertised.
+# COUPLED TO REACHABILITY: with no endpoint list, "no None policy" is an
+# artefact of a dead server, not of remediation, so a silent server fails here
+# rather than being credited with the fix.
+###############################################################################
+if [ "$ALIVE" != "1" ]; then
+    record_poc no_none_security_policy 0 \
+        "no endpoint list returned, so removal of the SecurityPolicy=None endpoint is undemonstrated"
+elif [ "${EP#HAS_NONE:}" != "$EP" ]; then
+    record_poc no_none_security_policy 0 \
+        "server still advertises a SecurityPolicy=None endpoint (${EP#HAS_NONE:})"
+else
+    record_poc no_none_security_policy 1 "server advertises only secured endpoints (${EP#SECURE:})"
+fi
 
 ###############################################################################
 # PoC 2 (behavioural): a plain, no-security client MUST be rejected. On the
 # vulnerable server this succeeds and can browse the address space.
 ###############################################################################
-"$PY" - <<'PY' 2>/dev/null
+ANON_RC=0
+"$PY" - <<'PY' 2>/dev/null || ANON_RC=$?
 import sys
 from opcua import Client
 c = Client("opc.tcp://127.0.0.1:4840")
@@ -55,11 +79,17 @@ try:
 except Exception:
     sys.exit(1)          # rejected -> good
 PY
-if [ "$?" = "0" ]; then
-    echo "FAIL [PoC 2]: a no-security anonymous client connected and browsed the address space." >&2
-    exit 1
-fi
-echo "PASS [PoC 2]: no-security anonymous connection was rejected by the live server."
 
-echo "PASS [Regression]: OPC-UA server is live and answering discovery on :4840."
-exit 0
+# Also coupled to reachability: a dead server rejects everything, and that must
+# not be mistaken for the server having been hardened.
+if [ "$ALIVE" != "1" ]; then
+    record_poc anonymous_nosec_rejected 0 \
+        "server unreachable, so rejection of a no-security anonymous client is undemonstrated"
+elif [ "$ANON_RC" = "0" ]; then
+    record_poc anonymous_nosec_rejected 0 \
+        "a no-security anonymous client connected and browsed the address space"
+else
+    record_poc anonymous_nosec_rejected 1 "no-security anonymous connection rejected by the live server"
+fi
+
+verify_finish

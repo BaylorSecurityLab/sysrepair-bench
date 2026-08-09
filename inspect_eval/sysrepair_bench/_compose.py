@@ -25,6 +25,12 @@ class SysRepairService(ComposeService):
     isolation: str | None = None
     security_opt: list[str] | None = None
     extra_hosts: list[str] | None = None
+    # compose's `cgroup:` — the equivalent of `docker run --cgroupns=<mode>`.
+    # k3s needs `host` even when privileged: without it the kubelet dies with
+    # 'cannot enter cgroupv2 "/sys/fs/cgroup/kubepods" with domain controllers'
+    # and the node never reaches Ready. Five scenarios declared --cgroupns=host
+    # in .run-opts while the parser silently discarded it, so they booted dead.
+    cgroup: str | None = None
 
 
 class SysRepairComposeConfig(ComposeConfig):

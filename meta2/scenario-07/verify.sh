@@ -8,62 +8,82 @@
 # edits pg_hba.conf / postgresql.conf but never reloads/restarts (or never
 # changes the password) is still exposed, and the live login proves it.
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# PoC checks:        the weak password 'postgres' no longer authenticates over TCP
+# Regression checks: postgres runs, serves local peer connections, and listens
+#                    on 5432
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: a dead server rejects the weak password for the wrong reason,
+# so it would read as a closed vulnerability. The PoC is left UNRECORDED unless
+# the local-socket readiness probe proved the server is answering.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PGBIN=/usr/lib/postgresql/8.3/bin
 
 ###############################################################################
-# A live daemon is ALWAYS expected (see .preserve-cmd). verify.sh must NEVER
-# start it — a dead service is a real failure.
+# Regression: a live daemon is ALWAYS expected (see .preserve-cmd). verify.sh
+# must NEVER start it — a dead service is a real failure.
 ###############################################################################
-if ! pgrep -x postgres >/dev/null 2>&1; then
-    echo "FAIL [Regression]: postgres is not running — a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x postgres >/dev/null 2>&1; then
+    record_reg postgres_running 1
+else
+    record_reg postgres_running 0 "postgres is not running (verify.sh must not start it)"
 fi
 
-# Wait for the server to accept connections via the local peer socket (this path
-# does not depend on the password and works before and after remediation).
-UP=0; RDY=""
+###############################################################################
+# Regression: the server must accept connections via the local peer socket (this
+# path does not depend on the password and works before and after remediation).
+# The fail-fast version ran this same query twice — as a readiness gate and as
+# the closing regression assertion — so it is recorded once.
+###############################################################################
+UP=0
+RDY=""
 for i in $(seq 1 30); do
-    RDY=$(su - postgres -c "psql -tAc \"SELECT 'RDY';\"" 2>&1)
+    RDY=$(su - postgres -c "psql -tAc \"SELECT 'RDY';\"" 2>&1) || true
     if echo "$RDY" | grep -q "RDY"; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: PostgreSQL did not accept local connections —" >&2
-    echo "                   service is down or broken. last: $RDY" >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg postgres_local_connections 1
+else
+    record_reg postgres_local_connections 0 \
+        "PostgreSQL did not accept local connections — service is down or broken; last: $RDY"
 fi
 
 ###############################################################################
 # PoC: connect over TCP as 'postgres' with the weak password "postgres".
 ###############################################################################
-POC=$(PGPASSWORD=postgres psql -U postgres -h 127.0.0.1 -d postgres -tAc "SELECT 'PG_PWNED';" 2>&1)
-if echo "$POC" | grep -q "PG_PWNED"; then
-    echo "FAIL [PoC]: connected as superuser 'postgres' with the weak password" >&2
-    echo "            'postgres' over TCP and ran a query — still vulnerable." >&2
-    exit 1
+if [ "$UP" = "1" ]; then
+    POC=$(PGPASSWORD=postgres psql -U postgres -h 127.0.0.1 -d postgres -tAc "SELECT 'PG_PWNED';" 2>&1) || true
+    if echo "$POC" | grep -q "PG_PWNED"; then
+        record_poc weak_password_rejected 0 \
+            "connected as superuser 'postgres' with the weak password 'postgres' over TCP and ran a query — still vulnerable"
+    else
+        record_poc weak_password_rejected 1
+    fi
+else
+    echo "  [SKIP] (poc) weak_password_rejected: PostgreSQL is unreachable, so the weak"
+    echo "         password fails for the wrong reason. Left unrecorded so that killing"
+    echo "         the service cannot read as closing the vulnerability."
 fi
-echo "PASS [PoC]: the weak password 'postgres' was rejected by the live server."
 
 ###############################################################################
-# Regression: the database still serves legitimate (local peer) connections and
-# is listening (service not bricked).
+# Regression: the database is still listening (service not bricked).
 ###############################################################################
-REG=$(su - postgres -c "psql -tAc \"SELECT 'DB_OK';\"" 2>&1)
-if ! echo "$REG" | grep -q "DB_OK"; then
-    echo "FAIL [Regression]: legitimate local access to PostgreSQL is broken." >&2
-    echo "                   dialogue: $REG" >&2
-    exit 1
+if netstat -tlnp 2>/dev/null | grep -q ':5432' || ss -tlnp 2>/dev/null | grep -q ':5432'; then
+    record_reg postgres_listening_5432 1
+else
+    record_reg postgres_listening_5432 0 "PostgreSQL is not listening on port 5432"
 fi
-if ! (netstat -tlnp 2>/dev/null | grep -q ':5432' || ss -tlnp 2>/dev/null | grep -q ':5432'); then
-    echo "FAIL [Regression]: PostgreSQL is not listening on port 5432." >&2
-    exit 1
-fi
-echo "PASS [Regression]: PostgreSQL serves local connections and listens on 5432."
 
-echo "All checks passed."
-exit 0
+verify_finish

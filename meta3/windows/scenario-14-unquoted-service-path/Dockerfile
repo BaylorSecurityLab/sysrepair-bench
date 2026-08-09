@@ -18,5 +18,12 @@ RUN New-Item -ItemType Directory -Path 'C:\Program Files\Meta Vuln\bin' -Force |
     New-Service -Name 'MetaVulnSvc' -DisplayName 'Meta Vuln Service' -BinaryPathName 'C:\Program Files\Meta Vuln\bin\vulnsvc.exe --run' -StartupType Manual
 
 
+# The entrypoint normalizes the drive-root DACL before starting anything. It has
+# to happen at BOOT, not in a RUN: the Windows container runtime re-establishes
+# the security descriptor of the volume root when the container filesystem is
+# mounted, so a build-time change to C:\ is discarded. See entrypoint.ps1 for
+# the measurement and for what is being normalized and why.
+COPY scenario-14-unquoted-service-path/entrypoint.ps1 C:/entrypoint.ps1
+
 EXPOSE 22 5985
-CMD ["powershell", "-NoProfile", "-Command", "Start-Service sshd; Start-Service WinRM; while ($true) { Start-Sleep 60 }"]
+CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\entrypoint.ps1"]

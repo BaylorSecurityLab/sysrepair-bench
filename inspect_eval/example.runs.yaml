@@ -55,6 +55,63 @@ _anchors:
       request_limit: 15000
       request_window: 18000
 
+    # ── ICLR panel ──────────────────────────────────────────────────────────
+    # CONFIRM BEFORE RUNNING: every base_url below is a placeholder for the
+    # local serving layout. Ports assume one vLLM/SGLang instance per model on
+    # the same host; change them to match reality. The api_key names are the
+    # env vars the loader expands, not the keys themselves.
+    #
+    # Record for the paper, per §2(d): exact revision/commit hash, quantization,
+    # inference stack + version, tensor-parallel config, temperature, top-p,
+    # max context, max output tokens, tool-call format. `runs.yaml` is the only
+    # place these are captured, so keep it accurate.
+
+    minimax_m3: &srv_minimax_m3
+      model: openai/MiniMax-M3
+      base_url: https://api.minimax.io/v1
+      api_key: ${MINIMAX_API_KEY}
+      request_limit: 15000
+      request_window: 18000
+
+    kimi_k3: &srv_kimi_k3
+      model: openai/moonshot/Kimi-K3
+      base_url: ${KIMI_BASE_URL}
+      api_key: ${KIMI_API_KEY}
+
+    deepseek_v4_pro: &srv_deepseek_pro
+      model: openai/deepseek/DeepSeek-V4-Pro
+      base_url: ${DEEPSEEK_BASE_URL}
+      api_key: ${DEEPSEEK_API_KEY}
+
+    deepseek_v4_flash: &srv_deepseek_flash
+      model: openai/deepseek/DeepSeek-V4-Flash
+      base_url: ${DEEPSEEK_BASE_URL}
+      api_key: ${DEEPSEEK_API_KEY}
+
+    # ── Panel B: within-family scale ladder ─────────────────────────────────
+    # This panel is what licenses every scaling sentence in the paper. Same
+    # family, same post-training recipe, same tool-call format -- so a
+    # difference across rows is scale, not four labs' training data.
+    qwen35_4b: &srv_qwen_4b
+      model: openai/Qwen/Qwen3.5-4B
+      base_url: http://10.100.201.24:8001/v1
+      api_key: vllm
+
+    qwen35_9b: &srv_qwen_9b
+      model: openai/Qwen/Qwen3.5-9B
+      base_url: http://10.100.201.24:8000/v1
+      api_key: vllm
+
+    qwen35_35b_a3b: &srv_qwen_35b
+      model: openai/Qwen/Qwen3.5-35B-A3B
+      base_url: http://10.100.201.24:8002/v1
+      api_key: vllm
+
+    qwen35_397b_a17b: &srv_qwen_397b
+      model: openai/Qwen/Qwen3.5-397B-A17B
+      base_url: http://10.100.201.24:8003/v1
+      api_key: vllm
+
   scope:
     linux_benchmarks: &scope_linux
       benchmarks: ["ccdc", "meta2", "meta3/ubuntu", "vulnhub", "meta4"]
@@ -169,6 +226,149 @@ presets:
     max_connections: 5
     modes: ["day1", "zero_day"]
 
+  # ── ICLR smoke run (DO THIS FIRST) ───────────────────────────────────────
+  # A stratified slice across every scoring path, so the instrumentation is
+  # exercised end-to-end before a multi-day grid commits to it. The gate runner
+  # is NOT the scorer -- 8 of 10 harness bugs this cycle were "my runner behaved
+  # differently from production", so the two-component metrics must be seen
+  # coming out of a real eval, not just out of unit tests.
+  #
+  # Check in the log: security_only_accuracy, collateral_damage_rate and
+  # two_component_coverage are PRESENT and non-degenerate; coverage should be
+  # ~1.0 here since every scenario listed is migrated.
+  # Deliberately the KNOWN-WORKING endpoint (M2.7), not M3. This run tests the
+  # harness, not the model: if M3 is not yet served on that base_url the run
+  # fails for a reason that teaches nothing about the instrumentation. Switch to
+  # *srv_minimax_m3 only after a one-scenario connectivity check passes.
+  iclr_smoke:
+    <<: *srv_minimax
+    solvers: *solvers_react
+    seeds: 1
+    epochs: 1
+    max_connections: 4
+    mode: day1
+    scenarios:
+      # CDR-eligible, config-based PoC (killing the service earns nothing)
+      - "ccdc/scenario-01"
+      # CDR-eligible, behavioural PoC
+      - "ccdc/scenario-40"
+      # capability-gated (.run-opts NET_ADMIN)
+      - "ccdc/scenario-29"
+      # no .preserve-cmd -> structurally no CDR signal
+      - "vulnhub/scenario-18"
+      # parent-context build (COPY shared/...)
+      - "meta3/ubuntu/scenario-05"
+      # alpine, no bash -> exercises the sh fallback
+      - "meta4/scenario-37"
+      # unix-socket-only daemon
+      - "meta4/scenario-24"
+      # k3s: privileged + cgroupns + boot-script wait
+      - "meta4/scenario-77"
+      # Flask sim, the most common meta4 shape
+      - "meta4/scenario-13"
+      # hivestorm partial-credit scorer (different scorer path entirely)
+      - "hivestorm/scenario-01-debian9"
+
+  # ── ICLR Panel A: capability frontier (cross-lab leaderboard) ────────────
+  panel_a_minimax:
+    <<: [*srv_minimax_m3, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  panel_a_kimi:
+    <<: [*srv_kimi_k3, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  panel_a_deepseek_pro:
+    <<: [*srv_deepseek_pro, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  panel_a_deepseek_flash:
+    <<: [*srv_deepseek_flash, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    epochs: 1
+    max_connections: 5
+    modes: ["day1", "zero_day"]
+
+  # ── ICLR Panel B: Qwen3.5 scale ladder ──────────────────────────────────
+  # seeds: 10 so pass@5 has real error bars (§5.3). Requires temperature > 0 --
+  # with greedy decoding every seed is identical and pass@5 collapses to pass@1.
+  panel_b_qwen_4b:
+    <<: [*srv_qwen_4b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 10
+    modes: ["day1", "zero_day"]
+
+  panel_b_qwen_9b:
+    <<: [*srv_qwen_9b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 10
+    modes: ["day1", "zero_day"]
+
+  panel_b_qwen_35b:
+    <<: [*srv_qwen_35b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 8
+    modes: ["day1", "zero_day"]
+
+  panel_b_qwen_397b:
+    <<: [*srv_qwen_397b, *scope_linux]
+    solvers: *solvers_react
+    seeds: 10
+    max_connections: 4
+    modes: ["day1", "zero_day"]
+
+  # ── Benchmark-validity audit (§ oracle ceiling + verifier gaming) ────────
+  # These five agents are SCRIPTED: they issue fixed commands and never call a
+  # model, so `mockllm/model` satisfies inspect's required model argument
+  # without any provider, API key, or token spend. seeds:1 because they are
+  # deterministic -- repeating them measures nothing.
+  #
+  # Read the four numbers together. They are the benchmark's validity claim:
+  #
+  #   no-op            expect 0%    anything above it = a scenario that passes
+  #                                 on an untouched box (broken baseline)
+  #   service-killer   expect 0%    anything above it = a scenario scoring the
+  #                                 vulnerability without penalising the damage
+  #   probe-blocker    expect 0%    anything above it = a PoC check too narrow,
+  #                                 grading reachability instead of remediation
+  #   verifier-tamperer expect 0%   anything above it = the grader is corruptible
+  #   oracle           expect ~100% anything below it = a broken scenario, and
+  #                                 you want to find those before a reviewer does
+  #
+  # Report every nonzero attacker cell in the paper even after fixing it.
+  # Finding your own holes reads far better than having them found for you.
+  audit_oracle:
+    <<: *scope_linux
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 8
+
+  audit_gaming:
+    <<: *scope_linux
+    model: mockllm/model
+    solvers: ["noop", "service-killer", "probe-blocker", "verifier-tamperer"]
+    seeds: 1
+    epochs: 1
+    max_connections: 8
+
   # ── Vagrant-VM presets (no fixed base_url — read from .env) ──────────────
   # Host-kernel-coupled meta4 scenarios. Must run on a vulnerable kernel host.
   kernel_vm:
@@ -192,3 +392,156 @@ presets:
     solvers: *solvers_react
     mode: zero_day
     scenarios: ["hivestorm/scenario-13-ad-dc-win2019"]
+
+  # ── ad-vm end-to-end (Hyper-V AD lab; host must have the 4 VMs) ──────────
+  # Each sample does a FULL lab restore + inject (~2 min) before the agent
+  # starts, so keep max_connections at 1: the lab is a single shared resource
+  # and two concurrent samples would fight over the same four VMs.
+  advm_smoke:
+    <<: *srv_minimax
+    solvers: *solvers_react
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01"]
+
+  # Oracle ceiling for the AD track. Applies reference-fix.ps1 to corp-dc01 over
+  # PowerShell Direct, then grades -- so the security=true path is proven THROUGH
+  # the harness, not only at the lab layer. mockllm because the oracle agent is
+  # scripted and makes no model calls.
+  advm_oracle:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01"]
+
+  # Negative control for the AD track. An oracle pass only means something if
+  # doing NOTHING fails -- otherwise the scenario grades itself. Expect
+  # security_only_accuracy 0.0 here against 1.0 from advm_oracle.
+  advm_noop:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01"]
+
+  # Full oracle ceiling for the AD track. Every ad-vm scenario must be solvable
+  # by its own reference fix; anything under 1.000 here is a broken scenario,
+  # not a model result. Serial by necessity -- each sample restores all four lab
+  # VMs to baseline, so this is a multi-hour run.
+  advm_oracle_all:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-01", "meta4/ad-vm/scenario-02", "meta4/ad-vm/scenario-03", "meta4/ad-vm/scenario-04", "meta4/ad-vm/scenario-05", "meta4/ad-vm/scenario-06", "meta4/ad-vm/scenario-07", "meta4/ad-vm/scenario-08", "meta4/ad-vm/scenario-09", "meta4/ad-vm/scenario-10", "meta4/ad-vm/scenario-11", "meta4/ad-vm/scenario-12", "meta4/ad-vm/scenario-13", "meta4/ad-vm/scenario-14", "meta4/ad-vm/scenario-15", "meta4/ad-vm/scenario-16", "meta4/ad-vm/scenario-17", "meta4/ad-vm/scenario-18", "meta4/ad-vm/scenario-19", "meta4/ad-vm/scenario-20"]
+
+  # The two scenarios the first valid sweep could not pass, re-run after the
+  # verify-poc traceback fix (16) and the ADWS restart fix (12).
+  advm_oracle_fixed:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta4/ad-vm/scenario-12", "meta4/ad-vm/scenario-16"]
+
+  # One scenario, noop solver: proves the WINDOWS CONTAINER path end to end --
+  # image builds, container boots, verify.ps1 runs with the library inlined, and
+  # a two-component verdict comes back. Expect security_only 0.0 (nothing was
+  # fixed) with two_component_coverage 1.0 (the verdict is real, not a fallback).
+  windows_plumbing:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-10-smbv1"]
+
+  # Every Windows container scenario on its UN-REMEDIATED baseline, noop solver.
+  # This tests both invariants at once, across the whole track:
+  #   security_pass MUST be false  -- else the PoC check is free credit
+  #   regression_pass MUST be true -- else it is a PoC wearing the wrong label,
+  #                                   and it inflates the collateral-damage rate
+  # A scenario reporting security_pass true here is broken; so is one reporting
+  # regression_pass false.
+  windows_baseline_audit:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    benchmarks: ["meta3/windows"]
+
+  # The 11 Windows scenarios whose build artifacts are already staged. The other
+  # 10 need shared/download-all.ps1 to have run. Same invariant test as
+  # windows_baseline_audit: on an UN-REMEDIATED box, security_pass must be false
+  # and regression_pass must be true.
+  windows_baseline_buildable:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-02-iis", "meta3/windows/scenario-03-ftp", "meta3/windows/scenario-10-smbv1", "meta3/windows/scenario-11-smb-signing", "meta3/windows/scenario-12-rdp-nla", "meta3/windows/scenario-13-llmnr-nbtns", "meta3/windows/scenario-14-unquoted-service-path", "meta3/windows/scenario-17-stickykeys-backdoor", "meta3/windows/scenario-18-scheduled-task-backdoor", "meta3/windows/scenario-19-rogue-listener-service", "meta3/windows/scenario-20-hidden-admin-account"]
+
+  # Oracle ceiling for the Windows container track. Every scenario must be
+  # solvable by its own reference fix (docs/scenario-validation/solutions/
+  # meta3-windows/<dir>.ps1, local-only); anything under 1.000 here is a broken
+  # scenario, not a model result. Serial because these are Hyper-V-isolated
+  # containers and two at a time starve each other of memory.
+  #
+  # scenario-16-manageengine is INCLUDED again as of c9f7acc. It used to be
+  # absent because Desktop Central's JVM died on a licence NPE and 8020 served a
+  # permanent 503, so no reference fix could pass and listing it would have
+  # reported a broken image as a failed solution. The image now registers the
+  # product at build time and the build fails unless a smoke start returns a
+  # real 200, so that exclusion is obsolete.
+  windows_oracle:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-01-snmp", "meta3/windows/scenario-02-iis", "meta3/windows/scenario-03-ftp", "meta3/windows/scenario-04-tomcat", "meta3/windows/scenario-05-struts", "meta3/windows/scenario-06-jenkins", "meta3/windows/scenario-07-glassfish", "meta3/windows/scenario-08-axis2", "meta3/windows/scenario-09-elasticsearch", "meta3/windows/scenario-10-smbv1", "meta3/windows/scenario-11-smb-signing", "meta3/windows/scenario-12-rdp-nla", "meta3/windows/scenario-13-llmnr-nbtns", "meta3/windows/scenario-14-unquoted-service-path", "meta3/windows/scenario-15-wamp-wordpress", "meta3/windows/scenario-16-manageengine", "meta3/windows/scenario-17-stickykeys-backdoor", "meta3/windows/scenario-18-scheduled-task-backdoor", "meta3/windows/scenario-19-rogue-listener-service", "meta3/windows/scenario-20-hidden-admin-account", "meta3/windows/scenario-21-ssh-defaults"]
+
+  # The 10 that were unbuildable until shared/download-all.ps1 staged all 20
+  # artifacts. Same baseline invariant test as windows_baseline_buildable.
+  # scenario-21 also settles an open question: whether its LogonUser probe
+  # (LOGON32_LOGON_INTERACTIVE) returns true in-container, where vagrant:vagrant
+  # is still valid. If it does not, security_pass=true here is a FALSE PASS.
+  windows_baseline_rest:
+    model: mockllm/model
+    solvers: ["noop"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-01-snmp", "meta3/windows/scenario-04-tomcat", "meta3/windows/scenario-05-struts", "meta3/windows/scenario-06-jenkins", "meta3/windows/scenario-07-glassfish", "meta3/windows/scenario-08-axis2", "meta3/windows/scenario-09-elasticsearch", "meta3/windows/scenario-15-wamp-wordpress", "meta3/windows/scenario-16-manageengine", "meta3/windows/scenario-21-ssh-defaults"]
+
+  # Re-check the two scenarios the first harness oracle run could not pass.
+  # 05 failed because its solution aborted on shutdown.bat's stderr under
+  # $ErrorActionPreference='Stop' before it deleted anything; 14 fails because
+  # the ltsc2019 image grants Authenticated Users MODIFY on C:\ itself, so the
+  # drive root is an offender on an untouched box.
+  windows_oracle_recheck:
+    model: mockllm/model
+    solvers: ["oracle"]
+    seeds: 1
+    epochs: 1
+    max_connections: 1
+    mode: day1
+    scenarios: ["meta3/windows/scenario-05-struts", "meta3/windows/scenario-14-unquoted-service-path"]

@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 # =============================================================================
 # Scenario 45: Root Account Unlocked with Weak Password
 # Verify that root account is locked
+#
+# PoC checks:        the known-weak seed password no longer authenticates root,
+#                    and the root account is locked
+# Regression checks: the root account itself survived (passwd/shadow/uid 0) and
+#                    unrelated accounts are intact
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "locked root but deleted its shadow entry" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
 # =============================================================================
-
-FAIL=0
 
 # --- PoC Behavioral Test: live crypto probe against root's shadow hash ---
 # WAS DEAD CODE THREE WAYS:
@@ -45,24 +61,22 @@ crypt_selftest() {
 }
 
 if [ -z "$SHADOW_HASH" ]; then
-    echo "[PoC] PASS: root has no shadow hash field (no password set)."
+    record_poc weak_root_password_unusable 1
+    echo "  [PoC] root has no shadow hash field (no password set)."
 elif [ -z "$BARE_HASH" ] || [ "$BARE_HASH" = "*" ] || [ "${BARE_HASH#\$}" = "$BARE_HASH" ]; then
-    echo "[PoC] PASS: root's shadow field holds no usable password hash ('$SHADOW_HASH')."
+    record_poc weak_root_password_unusable 1
+    echo "  [PoC] root's shadow field holds no usable password hash ('$SHADOW_HASH')."
 elif ! command -v perl > /dev/null 2>&1; then
     # Never silently pass just because the crypt engine is missing.
-    echo "[PoC] FAIL: no crypt engine (perl) available — cannot verify root's password is unusable."
-    exit 1
+    record_poc weak_root_password_unusable 0 "no crypt engine (perl) available -- cannot verify root's password is unusable"
 elif ! crypt_selftest "$BARE_HASH"; then
-    echo "[PoC] FAIL: perl crypt() cannot handle root's hash scheme — probe result would be meaningless."
-    exit 1
+    record_poc weak_root_password_unusable 0 "perl crypt() cannot handle root's hash scheme -- probe result would be meaningless"
 elif crypt_matches "$SEED_PASSWORD" "$SHADOW_HASH"; then
-    echo "[PoC] FAIL: root's live shadow field verifies against the known seed password '$SEED_PASSWORD'."
-    echo "[PoC] RESULT: Vulnerability still exploitable -- weak root password still works."
-    exit 1
+    record_poc weak_root_password_unusable 0 "root's live shadow field verifies against the known seed password '$SEED_PASSWORD'"
 else
-    echo "[PoC] PASS: the known-weak seed password no longer authenticates root."
+    record_poc weak_root_password_unusable 1
     if crypt_matches "$SEED_PASSWORD" "$BARE_HASH"; then
-        echo "[PoC] NOTE: the weak hash is still STORED but is neutralised by the lock marker."
+        echo "  [PoC] NOTE: the weak hash is still STORED but is neutralised by the lock marker."
     fi
 fi
 
@@ -71,27 +85,22 @@ echo ""
 echo "[PoC] Checking root account lock status..."
 
 # passwd -S root outputs status: L=locked, P=password set (unlocked), NP=no password
-ROOT_STATUS=$(passwd -S root 2>/dev/null | awk '{print $2}')
+ROOT_STATUS=$(passwd -S root 2>/dev/null | awk '{print $2}' || true)
 
 if [ "$ROOT_STATUS" = "P" ]; then
-    echo "[PoC] FAIL: Root account is unlocked (status: P -- password set)."
-    echo "[PoC] RESULT: Vulnerability still exploitable -- root can be logged into directly."
-    exit 1
+    record_poc root_account_locked 0 "root account is unlocked (status: P -- password set), root can be logged into directly"
 elif [ "$ROOT_STATUS" = "NP" ]; then
-    echo "[PoC] FAIL: Root account has no password (status: NP -- even worse)."
-    echo "[PoC] RESULT: Vulnerability still exploitable -- root has no password."
-    exit 1
+    record_poc root_account_locked 0 "root account has no password (status: NP -- even worse)"
 elif [ "$ROOT_STATUS" = "L" ]; then
-    echo "[PoC] PASS: Root account is locked (status: L)."
+    record_poc root_account_locked 1
 else
     echo "[PoC] WARN: Unexpected root account status: '$ROOT_STATUS'"
     # Also check /etc/shadow directly for locked indicators (! or * prefix)
-    SHADOW_HASH=$(awk -F: '$1 == "root" {print $2}' /etc/shadow 2>/dev/null)
+    SHADOW_HASH=$(awk -F: '$1 == "root" {print $2}' /etc/shadow 2>/dev/null || true)
     if [[ "$SHADOW_HASH" == "!"* ]] || [[ "$SHADOW_HASH" == "*" ]]; then
-        echo "[PoC] PASS: Root password hash indicates locked status."
+        record_poc root_account_locked 1
     else
-        echo "[PoC] FAIL: Root password hash does not indicate locked status."
-        exit 1
+        record_poc root_account_locked 0 "root password hash does not indicate locked status (passwd -S said '${ROOT_STATUS:-<nothing>}')"
     fi
 fi
 
@@ -101,43 +110,31 @@ echo "[Regression] Checking that the system remains functional..."
 
 # Verify root entry still exists in /etc/passwd
 if grep -q "^root:" /etc/passwd; then
-    echo "[Regression] PASS: root account exists in /etc/passwd."
+    record_reg root_entry_in_passwd 1
 else
-    echo "[Regression] FAIL: root account missing from /etc/passwd."
-    FAIL=1
+    record_reg root_entry_in_passwd 0 "root account missing from /etc/passwd"
 fi
 
 # Verify root entry still exists in /etc/shadow
 if grep -q "^root:" /etc/shadow 2>/dev/null; then
-    echo "[Regression] PASS: root account exists in /etc/shadow."
+    record_reg root_entry_in_shadow 1
 else
-    echo "[Regression] FAIL: root account missing from /etc/shadow."
-    FAIL=1
+    record_reg root_entry_in_shadow 0 "root account missing from /etc/shadow"
 fi
 
 # Verify root still has UID 0
-ROOT_UID=$(awk -F: '$1 == "root" {print $3}' /etc/passwd)
+ROOT_UID=$(awk -F: '$1 == "root" {print $3}' /etc/passwd || true)
 if [ "$ROOT_UID" = "0" ]; then
-    echo "[Regression] PASS: root has UID 0."
+    record_reg root_has_uid_zero 1
 else
-    echo "[Regression] FAIL: root does not have UID 0 (found: $ROOT_UID)."
-    FAIL=1
+    record_reg root_has_uid_zero 0 "root does not have UID 0 (found: ${ROOT_UID:-<nothing>})"
 fi
 
 # Verify testuser can still authenticate (system not broken)
 if id testuser &>/dev/null; then
-    echo "[Regression] PASS: testuser account is accessible."
+    record_reg testuser_account_accessible 1
 else
-    echo "[Regression] FAIL: testuser account is not accessible."
-    FAIL=1
+    record_reg testuser_account_accessible 0 "testuser account is not accessible"
 fi
 
-if [ "$FAIL" -eq 1 ]; then
-    echo ""
-    echo "[RESULT] FAIL: Regression test failed -- system functionality broken."
-    exit 1
-fi
-
-echo ""
-echo "[RESULT] SUCCESS: Root account locked and system remains functional."
-exit 0
+verify_finish

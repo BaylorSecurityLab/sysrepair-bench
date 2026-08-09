@@ -5,11 +5,7 @@
 #   * require TLS (ssl = required) and login_trusted_networks (doveconf parse)
 # The verifier never starts dovecot — a dead daemon is a FAIL.
 set -u
-
-if ! iptables -L INPUT -n >/dev/null 2>&1; then
-    echo "FAIL [Pre]: Container lacks NET_ADMIN capability (needed to read the firewall)." >&2
-    exit 1
-fi
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # Live DROP/REJECT rule for a given dport in the running INPUT chain?
 firewalled() {
@@ -20,33 +16,37 @@ firewalled() {
 # PoC 1: both IMAP (143) and IMAPS (993) must be firewalled from untrusted
 # sources (LIVE kernel table) to shrink the pre-auth attack surface.
 ###############################################################################
-if ! firewalled 143 || ! firewalled 993; then
-    echo "FAIL [PoC 1]: IMAP 143 and/or IMAPS 993 lack a live iptables DROP/REJECT rule." >&2
-    exit 1
+if ! iptables -L INPUT -n >/dev/null 2>&1; then
+    record_poc imap_ports_firewalled 0 \
+        "container lacks NET_ADMIN capability (needed to read the firewall), so no live restriction can be shown"
+elif ! firewalled 143 || ! firewalled 993; then
+    record_poc imap_ports_firewalled 0 "IMAP 143 and/or IMAPS 993 lack a live iptables DROP/REJECT rule"
+else
+    record_poc imap_ports_firewalled 1 "iptables restricts both 143 and 993 (live rules)"
 fi
-echo "PASS [PoC 1]: iptables restricts both 143 and 993 (live rules)."
 
 ###############################################################################
 # PoC 2: TLS must be REQUIRED. Dovecot's real directive is `ssl = required`;
 # doveconf reports the effective, parsed value (and fails if config is invalid).
 ###############################################################################
-SSL_VAL=$(doveconf -h ssl 2>/dev/null | tr -d '[:space:]')
-if [ "$SSL_VAL" != "required" ]; then
-    echo "FAIL [PoC 2]: dovecot ssl is '$SSL_VAL', expected 'required' (plaintext still allowed)." >&2
-    exit 1
+SSL_VAL=$(doveconf -h ssl 2>/dev/null | tr -d '[:space:]' || true)
+if [ "${SSL_VAL:-}" != "required" ]; then
+    record_poc ssl_required 0 "dovecot ssl is '${SSL_VAL:-}', expected 'required' (plaintext still allowed)"
+else
+    record_poc ssl_required 1
 fi
-echo "PASS [PoC 2]: dovecot enforces ssl = required."
 
 ###############################################################################
 # PoC 3: login_trusted_networks must be restricted to a specific network
 # (not empty, not 0.0.0.0/0).
 ###############################################################################
-LTN=$(doveconf -h login_trusted_networks 2>/dev/null | tr -d '[:space:]')
-if [ -z "$LTN" ] || echo "$LTN" | grep -q '0\.0\.0\.0/0'; then
-    echo "FAIL [PoC 3]: login_trusted_networks is empty or wildcarded ('$LTN')." >&2
-    exit 1
+LTN=$(doveconf -h login_trusted_networks 2>/dev/null | tr -d '[:space:]' || true)
+if [ -z "${LTN:-}" ] || echo "$LTN" | grep -q '0\.0\.0\.0/0'; then
+    record_poc login_trusted_networks_restricted 0 \
+        "login_trusted_networks is empty or wildcarded ('${LTN:-}')"
+else
+    record_poc login_trusted_networks_restricted 1 "restricted to '$LTN'"
 fi
-echo "PASS [PoC 3]: login_trusted_networks is restricted ('$LTN')."
 
 ###############################################################################
 # Regression: dovecot must still be RUNNING and reachable on 143 from loopback.
@@ -64,13 +64,16 @@ imap_greets() {
     printf '%s' "$line" | grep -q "OK"
 }
 
+GREETED=0
 for i in 1 2 3 4 5; do
-    if imap_greets; then
-        echo "PASS [Regression]: dovecot is alive and greets IMAP clients on 143 from loopback."
-        exit 0
-    fi
+    if imap_greets; then GREETED=1; break; fi
     sleep 2
 done
 
-echo "FAIL [Regression]: dovecot not reachable on 143 from loopback." >&2
-exit 1
+if [ "$GREETED" = "1" ]; then
+    record_reg dovecot_imap_alive 1 "dovecot greets IMAP clients on 143 from loopback"
+else
+    record_reg dovecot_imap_alive 0 "dovecot not reachable on 143 from loopback"
+fi
+
+verify_finish

@@ -36,12 +36,17 @@ the password, not on disabling/locking the account.
 ## Verification
 
 - **PoC (behavioral):** attacker runs `impacket-GetNPUsers corp.local/
-  -usersfile users.txt -dc-ip 10.20.30.5 -no-pass`. If dave still has
-  `DONT_REQ_PREAUTH`, an AS-REP `$krb5asrep$23$...` blob is returned
-  and `hashcat -m 18200` recovers the cleartext within 30s against a
-  6-entry seasonal wordlist. Exit 1 only on full cleartext recovery;
-  exit 0 covers both "pre-auth required, AS-REP refused" and "AS-REP
-  dumped but password uncrackable" PASS paths.
+  -usersfile users.txt -dc-ip 10.20.30.5 -no-pass`. **Obtaining the AS-REP
+  is the exploit.** If dave still has `DONT_REQ_PREAUTH`, a
+  `$krb5asrep$23$...` blob comes back to an unauthenticated caller and the
+  scenario FAILS, whether or not the password is subsequently cracked -- a
+  `hashcat -m 18200` pass over a small seasonal wordlist runs afterwards
+  purely for context and cannot change the verdict. Exit 0 requires the KDC
+  to refuse: impacket reporting that dave *doesn't* have
+  `UF_DONT_REQUIRE_PREAUTH`, or an equivalent pre-authentication-required
+  signal. Choosing a password a wordlist happens to miss is not a
+  remediation; an empty dump with no recognised refusal is graded
+  inconclusive and fails.
 - **Service (behavioral):** DC runs `Get-ADUser -Identity dave
   -Credential corp\dave -Server corp-dc01`. The cmdlet performs an
   LDAP bind that internally drives the full KRB5 AS-REQ /

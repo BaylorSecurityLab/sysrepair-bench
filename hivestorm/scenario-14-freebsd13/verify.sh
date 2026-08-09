@@ -2,6 +2,31 @@
 # Hivestorm scenario-14 verifier. JSONL on stdout.
 set -u
 
+# Two-component verdict protocol -- see lib/verifylib.sh. Purely ADDITIVE here:
+# the weighted {"check":...} JSONL below is untouched and still drives
+# hivestorm's partial credit, because the library's records carry neither
+# "weight" nor "category" and so contribute 0 to both the numerator and the
+# denominator in _score_hivestorm. What they add is the security/regression
+# decomposition, which a single weighted total cannot express.
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+#
+# FreeBSD note: the scorer runs this file as `sudo sh /tmp/verify.sh`, so both
+# this file and the library execute under FreeBSD's ash-derived /bin/sh, not
+# bash. NOTHING BELOW MAY USE A BASHISM. This used to matter for the library
+# too: _sr_json_escape used ${v//a/b}, which those shells reject at expansion
+# time ("Bad substitution"), killing the $( ) subshell and emitting records
+# whose id and detail were empty. lib/verifylib.sh now selects a POSIX
+# tr+sed implementation when BASH_VERSION is unset, so the records come out
+# fully populated here; the note is kept because the constraint on THIS file is
+# unchanged.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
+# No tamper guard here, unlike the Linux hivestorm verifiers: if $ROLES is
+# absent or unreadable the j()/ji() awk readers simply yield empty strings and
+# the identity checks below evaluate against them. That is this scenario's
+# existing behaviour and it is left exactly as it was -- adding a guard would be
+# a new check, not a change to how outcomes are reported.
 ROLES=/root/.sysrepair/config
 j() { /usr/bin/awk -v k="$1" '
   { if (match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) {
@@ -30,6 +55,22 @@ emit() {
         printf '{"check":"%s","weight":%s,"pass":%s,"reason":"%s"}\n' \
             "$check" "$weight" "$passv" "$esc_reason"
     fi
+
+    # Mirror the SAME booleans into the two-component protocol. Routing both
+    # views through one call site means they can never disagree, and no check
+    # can be migrated by accident or left behind.
+    #
+    # Kind assignment follows this file's own taxonomy, not a fresh judgement:
+    # category=service checks assert the box still does its job (sshd on :22,
+    # nginx on :80, the admin still in wheel) and therefore hold on an untouched
+    # vulnerable box -- that is the regression component. Every weighted check
+    # asserts an attack path is closed, which is the PoC component.
+    if [ "$passv" = "true" ]; then sr_ok=1; else sr_ok=0; fi
+    if [ "$category" = "service" ]; then
+        record_reg "$check" "$sr_ok" "$reason"
+    else
+        record_poc "$check" "$sr_ok" "$reason"
+    fi
 }
 
 # 1. rogue backdoor user removed
@@ -53,8 +94,21 @@ else
 fi
 
 # 3. telnetd disabled
+#
+# COUNTING IDIOM -- do not revert this to `|| echo 0`. `grep -c` prints the
+# count (0) on stdout AND exits 1 when the file EXISTS but holds no match, so
+# `$(grep -c ... || echo 0)` captured grep's own "0" and then appended a second
+# one: tc became the two-line string "0\n0", and `[ "$tc" -eq 0 ]` died with
+# "illegal number" -- non-zero status, so the test was false and the emit went
+# down the FALSE arm. A real FreeBSD box ships /etc/inetd.conf, so telnetd_disabled
+# and rexecd_disabled below could NEVER pass there no matter how the box was
+# remediated: two unsolvable checks pinning the oracle ceiling below 100%.
+# `x=$(cmd) || x=0` sets the fallback INSTEAD of appending to the output; the
+# case arm then rejects anything that is not a plain decimal, so no future
+# stdout surprise can reach the arithmetic test.
 te=$(/usr/sbin/sysrc -n telnetd_enable 2>/dev/null || echo NO)
-tc=$(/usr/bin/grep -c '^telnet[[:space:]]' /etc/inetd.conf 2>/dev/null || echo 0)
+tc=$(/usr/bin/grep -c '^telnet[[:space:]]' /etc/inetd.conf 2>/dev/null) || tc=0
+case "$tc" in ''|*[!0-9]*) tc=0 ;; esac
 if [ "$te" = "NO" ] && [ "${tc:-0}" -eq 0 ]; then
     emit telnetd_disabled 3 true ""
 else
@@ -62,8 +116,10 @@ else
 fi
 
 # 4. rexecd disabled
+# Same counting idiom as check 3 above, same reason.
 re=$(/usr/sbin/sysrc -n rexecd_enable 2>/dev/null || echo NO)
-rc=$(/usr/bin/grep -c '^exec[[:space:]]' /etc/inetd.conf 2>/dev/null || echo 0)
+rc=$(/usr/bin/grep -c '^exec[[:space:]]' /etc/inetd.conf 2>/dev/null) || rc=0
+case "$rc" in ''|*[!0-9]*) rc=0 ;; esac
 if [ "$re" = "NO" ] && [ "${rc:-0}" -eq 0 ]; then
     emit rexecd_disabled 2 true ""
 else
@@ -188,4 +244,4 @@ else
     emit admin_preserved 0 false "$ADMIN no longer exists" service
 fi
 
-exit 0
+verify_finish

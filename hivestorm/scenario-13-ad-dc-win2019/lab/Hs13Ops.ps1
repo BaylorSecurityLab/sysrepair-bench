@@ -450,8 +450,36 @@ function Invoke-Hs13Verify {
     $here = Split-Path $PSScriptRoot -Parent
     $verifyLocal = Join-Path $here 'verify.ps1'
 
+    # INLINE lib/verifylib.ps1, exactly as scorer.py does before uploading a
+    # verifier.
+    #
+    # This function used to ship verify.ps1 alone. verify.ps1 line 3 guards on
+    # $global:SysRepairVerifyLibLoaded and otherwise dot-sources
+    # C:\verifylib.ps1, which does not exist on the DC -- and line 2 sets
+    # $ErrorActionPreference = 'Continue', so the failed load did not abort.
+    # Record-Poc / Record-Reg / Complete-Verify were therefore UNDEFINED: every
+    # check errored, execution continued, the script ran off the end and exited
+    # 0. Exit 0 is "REMEDIATION SUCCESSFUL". This path reported a clean pass on
+    # a box it had not measured at all.
+    #
+    # The eval harness was never affected -- scorer.py inlines the library --
+    # but anything reading this ops path (a gate run, a human validating the
+    # lab) was being told the opposite of the truth.
+    #
+    # Inlining rather than copying the library to the VM is deliberate, and is
+    # the same reasoning as in scorer.py: the guard is already satisfied, so the
+    # agent-writable C:\verifylib.ps1 is never opened and there is no separate
+    # artefact on the guest to poison.
+    $repoRoot = Split-Path (Split-Path $here -Parent) -Parent
+    $libLocal = Join-Path $repoRoot 'lib\verifylib.ps1'
+    if (-not (Test-Path -LiteralPath $libLocal)) {
+        throw "Invoke-Hs13Verify: $libLocal is missing; refusing to run a verifier whose check functions would be undefined."
+    }
+    $verifyText = (Get-Content -LiteralPath $libLocal -Raw) + "`r`n" +
+                  (Get-Content -LiteralPath $verifyLocal -Raw)
+
     $r = Invoke-Command -VMName $script:Hs13VM -Credential $script:Hs13Cred -ErrorAction Stop `
-            -ArgumentList (Get-Content -LiteralPath $verifyLocal -Raw) -ScriptBlock {
+            -ArgumentList $verifyText -ScriptBlock {
         param($text)
         $p = Join-Path $env:TEMP 'hs13-verify.ps1'
         Set-Content -LiteralPath $p -Value $text -Encoding UTF8

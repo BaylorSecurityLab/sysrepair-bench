@@ -1,8 +1,16 @@
 #!/bin/bash
 # Scenario 30: fail2ban not installed
 # Verification: PoC should fail (fail2ban active) AND functionality test should pass
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "installed brute-force protection but blackholed SSH" is
+# reported as security_pass=true / regression_pass=false rather than collapsing
+# into a bare exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 TEST_IP="10.88.77.66"
 
 # `pgrep` alone is unsafe here: PID 1 is `sleep infinity` and never reaps
@@ -18,10 +26,9 @@ proc_alive() {
 
 # --- PoC Test: fail2ban should be installed ---
 if dpkg -l fail2ban 2>/dev/null | grep -q "^ii"; then
-    echo "PASS [PoC]: fail2ban is installed"
+    record_poc fail2ban_installed 1
 else
-    echo "FAIL [PoC]: fail2ban is not installed"
-    PASS=false
+    record_poc fail2ban_installed 0 "fail2ban is not installed"
 fi
 
 # --- PoC Test: fail2ban should already be running ---
@@ -31,30 +38,28 @@ fi
 # arranged for it to actually run - the protection would be absent on the real
 # host. Verification must observe the system, not repair it.
 if proc_alive fail2ban-server; then
-    echo "PASS [PoC]: fail2ban-server is running"
+    record_poc fail2ban_server_running 1
     F2B_RUNNING=true
 else
-    echo "FAIL [PoC]: fail2ban-server is not running (the remediation must arrange for it to be started)"
-    PASS=false
+    record_poc fail2ban_server_running 0 "fail2ban-server is not running (the remediation must arrange for it to be started)"
     F2B_RUNNING=false
 fi
 
 # --- PoC Primary Test: fail2ban-client status sshd should show active jail ---
 F2B_STATUS=$(fail2ban-client status sshd 2>/dev/null || true)
 if echo "$F2B_STATUS" | grep -q "Status for the jail"; then
-    echo "PASS [PoC]: SSH jail is active (fail2ban-client status sshd confirms)"
+    record_poc sshd_jail_active 1 "SSH jail is active (fail2ban-client status sshd confirms)"
     JAIL_ACTIVE=true
 else
     JAIL_ACTIVE=false
-    PASS=false
     if [ -f /etc/fail2ban/jail.local ] || [ -f /etc/fail2ban/jail.d/sshd.conf ]; then
         if grep -rqE '^\[sshd\]' /etc/fail2ban/jail.local /etc/fail2ban/jail.d/ 2>/dev/null; then
-            echo "FAIL [PoC]: SSH jail is configured but fail2ban-client cannot confirm it is active"
+            record_poc sshd_jail_active 0 "SSH jail is configured but fail2ban-client cannot confirm it is active"
         else
-            echo "FAIL [PoC]: SSH jail is not configured in jail files"
+            record_poc sshd_jail_active 0 "SSH jail is not configured in jail files"
         fi
     else
-        echo "FAIL [PoC]: No fail2ban jail configuration found and fail2ban-client reports no sshd jail"
+        record_poc sshd_jail_active 0 "no fail2ban jail configuration found and fail2ban-client reports no sshd jail"
     fi
 fi
 
@@ -74,8 +79,7 @@ if [ "$JAIL_ACTIVE" = true ]; then
     if [ -n "$LOGFILE" ] && { [ ! -e "$LOGFILE" ] || [ ! -w "$LOGFILE" ]; }; then
         # A jail pointed at a log that does not exist can never see a brute
         # force, however healthy `fail2ban-client status` looks.
-        echo "FAIL [PoC]: the sshd jail watches '$LOGFILE', which does not exist or is not writable — it can never observe an SSH brute force"
-        PASS=false
+        record_poc jail_logpath_usable 0 "the sshd jail watches '$LOGFILE', which does not exist or is not writable - it can never observe an SSH brute force"
         LOGFILE=""
     fi
     if [ -n "$LOGFILE" ]; then
@@ -123,10 +127,9 @@ if [ "$JAIL_ACTIVE" = true ]; then
     done
 
     if [ "$BANNED" = true ]; then
-        echo "PASS [PoC]: sshd jail banned $TEST_IP ($BAN_METHOD)"
+        record_poc jail_bans_brute_force 1 "sshd jail banned $TEST_IP ($BAN_METHOD)"
     else
-        echo "FAIL [PoC]: sshd jail did NOT ban $TEST_IP ($BAN_METHOD) — the jail is not protecting SSH"
-        PASS=false
+        record_poc jail_bans_brute_force 0 "sshd jail did NOT ban $TEST_IP ($BAN_METHOD) - the jail is not protecting SSH"
     fi
 
     # The ban must reach the packet filter, not just fail2ban's own bookkeeping.
@@ -142,10 +145,9 @@ if [ "$JAIL_ACTIVE" = true ]; then
             sleep 1
         done
         if [ "$ENFORCED" = true ]; then
-            echo "PASS [PoC]: the ban is enforced in netfilter (a rule for $TEST_IP exists)"
+            record_poc ban_enforced_in_netfilter 1 "the ban is enforced in netfilter (a rule for $TEST_IP exists)"
         else
-            echo "FAIL [PoC]: $TEST_IP is banned in fail2ban but no netfilter rule enforces it"
-            PASS=false
+            record_poc ban_enforced_in_netfilter 0 "$TEST_IP is banned in fail2ban but no netfilter rule enforces it"
         fi
     fi
 
@@ -158,7 +160,7 @@ if [ "$JAIL_ACTIVE" = true ]; then
         fail2ban-client set sshd unbanip "$TEST_IP" > /dev/null 2>&1 || true
     fi
 elif [ "$F2B_RUNNING" = true ]; then
-    echo "FAIL [PoC]: cannot exercise a ban because the sshd jail is not active"
+    echo "  [skip] cannot exercise a ban because the sshd jail is not active (already recorded as sshd_jail_active)"
 fi
 
 # --- Regression Test: SSH should still be running and reachable ---
@@ -167,33 +169,24 @@ fi
 # would mask an agent that killed SSH - or fire-walled it off with an
 # over-broad banaction - while installing brute-force protection.
 if proc_alive sshd; then
-    echo "PASS [Regression]: sshd is running"
+    record_reg sshd_running 1
 else
-    echo "FAIL [Regression]: sshd is not running"
-    PASS=false
+    record_reg sshd_running 0 "sshd is not running"
 fi
 
 # WAS BROKEN: the regression never touched port 22, so a banaction that
 # blackholed all SSH traffic would still have passed. Read the real SSH banner.
 SSH_BANNER=$(timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/22; head -c 40 <&3' 2>/dev/null)
 if echo "$SSH_BANNER" | grep -q '^SSH-2.0'; then
-    echo "PASS [Regression]: sshd answers on port 22 (${SSH_BANNER%%$'\r'*})"
+    record_reg ssh_banner_on_port22 1 "sshd answers on port 22 (${SSH_BANNER%%$'\r'*})"
 else
-    echo "FAIL [Regression]: no SSH banner on port 22 (got '${SSH_BANNER:-nothing}')"
-    PASS=false
+    record_reg ssh_banner_on_port22 0 "no SSH banner on port 22 (got '${SSH_BANNER:-nothing}')"
 fi
 
 if sshd -t 2>/dev/null; then
-    echo "PASS [Regression]: sshd configuration is valid"
+    record_reg sshd_config_valid 1
 else
-    echo "FAIL [Regression]: sshd configuration is invalid"
-    PASS=false
+    record_reg sshd_config_valid 0 "sshd configuration is invalid"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

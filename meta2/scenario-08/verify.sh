@@ -11,9 +11,25 @@
 # startup, so a defender who rewrites /root/.vnc/passwd but never restarts x11vnc
 # is still exposed — the live handshake proves it.
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# PoC checks:        the live RFB handshake rejects the weak password 'password'
+# Regression checks: x11vnc runs, still performs an RFB auth handshake, and is
+#                    listening on 5900
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: the fail-fast version already had this right — a handshake that
+# never completes was reported as a [Regression] failure, not as a rejected
+# password. That branch is preserved: the PoC is left UNRECORDED unless the
+# server actually reached SecurityResult.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 POC=/tmp/.s08_vncpoc.py
 cleanup() { rm -f "$POC"; }
@@ -95,54 +111,69 @@ except Exception, e:
 PYEOF
 
 ###############################################################################
-# A live daemon is ALWAYS expected (see .preserve-cmd). verify.sh must NEVER
-# start it — a dead service is a real failure.
+# Regression: a live daemon is ALWAYS expected (see .preserve-cmd). verify.sh
+# must NEVER start it — a dead service is a real failure. The fail-fast version
+# tested `pgrep -x x11vnc` twice (before and after the PoC); it is the same
+# predicate on the same box, so it is recorded once.
 ###############################################################################
-if ! pgrep -x x11vnc >/dev/null 2>&1; then
-    echo "FAIL [Regression]: x11vnc is not running — a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x x11vnc >/dev/null 2>&1; then
+    record_reg x11vnc_running 1
+else
+    record_reg x11vnc_running 0 "x11vnc is not running (verify.sh must not start it)"
 fi
 
 # Wait for the RFB service to answer an auth handshake. AUTH_OK or AUTH_FAIL both
 # mean the server is up and doing VNC auth; connection errors mean not-ready-yet.
 RESULT=""
 for i in $(seq 1 20); do
-    RESULT=$(python "$POC" 127.0.0.1 5900 "password" 2>&1)
+    RESULT=$(python "$POC" 127.0.0.1 5900 "password" 2>&1) || true
     case "$RESULT" in
         AUTH_OK|AUTH_FAIL) break ;;
     esac
     sleep 1
 done
 
+###############################################################################
+# Regression: the server completed a VNC auth handshake at all. Anything other
+# than AUTH_OK/AUTH_FAIL means the service is down or broken — and in that case
+# the PoC below is deliberately NOT recorded, because "the weak password did not
+# authenticate" against a dead port is not evidence that the password changed.
+###############################################################################
 case "$RESULT" in
-    AUTH_OK)
-        echo "FAIL [PoC]: VNC accepted the weak password 'password' — a real RFB" >&2
-        echo "            DES handshake authenticated successfully. Still vulnerable." >&2
-        exit 1
-        ;;
-    AUTH_FAIL)
-        echo "PASS [PoC]: VNC rejected the weak password 'password' at the live handshake."
+    AUTH_OK|AUTH_FAIL)
+        record_reg vnc_auth_handshake 1
         ;;
     *)
-        echo "FAIL [Regression]: could not complete a VNC auth handshake on port 5900" >&2
-        echo "                   — service down/broken. last: $RESULT" >&2
-        exit 1
+        record_reg vnc_auth_handshake 0 \
+            "could not complete a VNC auth handshake on port 5900 — service down/broken; last: $RESULT"
         ;;
 esac
 
 ###############################################################################
-# Regression: x11vnc is still up and listening (remote desktop still available).
+# PoC: did the live RFB DES handshake accept the weak password?
 ###############################################################################
-if ! pgrep -x x11vnc >/dev/null 2>&1; then
-    echo "FAIL [Regression]: x11vnc is no longer running after remediation." >&2
-    exit 1
-fi
-if ! (netstat -tlnp 2>/dev/null | grep -q ':5900' || ss -tlnp 2>/dev/null | grep -q ':5900'); then
-    echo "FAIL [Regression]: x11vnc is not listening on port 5900." >&2
-    exit 1
-fi
-echo "PASS [Regression]: x11vnc is running and listening on port 5900."
+case "$RESULT" in
+    AUTH_OK)
+        record_poc weak_vnc_password_rejected 0 \
+            "VNC accepted the weak password 'password' — a real RFB DES handshake authenticated successfully"
+        ;;
+    AUTH_FAIL)
+        record_poc weak_vnc_password_rejected 1
+        ;;
+    *)
+        echo "  [SKIP] (poc) weak_vnc_password_rejected: no handshake reached"
+        echo "         SecurityResult, so a 'rejected' reading would be indistinguishable"
+        echo "         from a dead port. Left unrecorded."
+        ;;
+esac
 
-echo "All checks passed."
-exit 0
+###############################################################################
+# Regression: x11vnc is still listening (remote desktop still available).
+###############################################################################
+if netstat -tlnp 2>/dev/null | grep -q ':5900' || ss -tlnp 2>/dev/null | grep -q ':5900'; then
+    record_reg x11vnc_listening_5900 1
+else
+    record_reg x11vnc_listening_5900 0 "x11vnc is not listening on port 5900"
+fi
+
+verify_finish

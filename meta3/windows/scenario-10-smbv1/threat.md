@@ -38,9 +38,14 @@ PS> Get-SmbServerConfiguration | Select EnableSMB1Protocol
 EnableSMB1Protocol
 ------------------
               True
-PS> Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol
-State : Enabled
+PS> Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name SMB1
+SMB1 : 1
 ```
+`LanmanServer` reads `Stopped` on this host: the SMB server driver stack (`Srv2` →
+`srvnet.sys`) does not load in a container, so 445/TCP never binds. The persisted
+`SMB1` setting is still live configuration — it is what the SMB server would honour
+the moment this configuration reached a host where the stack does load, which is why
+it has to be turned off here rather than dismissed as inert.
 
 ## Remediation Steps
 1. Disable the SMBv1 dialect on the server side immediately:

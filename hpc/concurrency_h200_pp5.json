@@ -1,0 +1,62 @@
+{
+  "recommended": 64,
+  "note": "peak 251 tok/s; knee at 64 (251 tok/s, p95 206.5s); no level errored, so the ceiling may be above the sweep range",
+  "levels": [
+    {
+      "level": 1,
+      "wall": 34.18502879998414,
+      "ok": 8,
+      "failed": 0,
+      "out_tokens": 2400,
+      "throughput": 70.20617165608805,
+      "completions_per_min": 14.041234331217609,
+      "lat_mean": 4.273038824998366,
+      "lat_p50": 4.275150000001304,
+      "lat_p95": 4.2867125000339,
+      "ttft_p50": 1.2712438000016846,
+      "errors": []
+    },
+    {
+      "level": 8,
+      "wall": 90.74523820000468,
+      "ok": 32,
+      "failed": 0,
+      "out_tokens": 9600,
+      "throughput": 105.79067497559895,
+      "completions_per_min": 21.158134995119788,
+      "lat_mean": 22.63029149999602,
+      "lat_p50": 20.75132169999415,
+      "lat_p95": 28.784981100005098,
+      "ttft_p50": 10.704390699975193,
+      "errors": []
+    },
+    {
+      "level": 32,
+      "wall": 218.47733640001388,
+      "ok": 128,
+      "failed": 0,
+      "out_tokens": 38400,
+      "throughput": 175.76193774942763,
+      "completions_per_min": 35.15238754988553,
+      "lat_mean": 54.198253963281786,
+      "lat_p50": 64.93033930001548,
+      "lat_p95": 103.17401910002809,
+      "ttft_p50": 9.335092400026042,
+      "errors": []
+    },
+    {
+      "level": 64,
+      "wall": 306.32608430000255,
+      "ok": 256,
+      "failed": 0,
+      "out_tokens": 76800,
+      "throughput": 250.71322337925815,
+      "completions_per_min": 50.14264467585163,
+      "lat_mean": 75.421498301562,
+      "lat_p50": 28.009034299990162,
+      "lat_p95": 206.5145500000217,
+      "ttft_p50": 7.999125099973753,
+      "errors": []
+    }
+  ]
+}

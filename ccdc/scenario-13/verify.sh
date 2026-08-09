@@ -1,8 +1,25 @@
 #!/bin/bash
-# Scenario 13: PostgreSQL pg_hba.conf trust all connections
-# Verification: PoC should fail (no trust auth) AND functionality test should pass
+###############################################################################
+# Scenario 13 - Verification Script
+# PostgreSQL pg_hba.conf trust all connections
+#
+# PoC checks:        pg_hba.conf uses only strong auth methods AND the live
+#                    cluster rejects a wrong password
+# Regression checks: pg_hba.conf exists, postgres is running, testdb readable
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "closed the vulnerability but killed postgres" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+###############################################################################
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # Find pg_hba.conf
 PG_HBA=$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)
@@ -37,13 +54,14 @@ hba_methods() {   # prints "TYPE METHOD" for every active rule
 }
 
 if [ -z "$PG_HBA" ]; then
-    echo "FAIL [Regression]: pg_hba.conf not found"
-    PASS=false
+    record_reg pg_hba_present 0 "pg_hba.conf not found"
 else
+    record_reg pg_hba_present 1
     RULES=$(hba_methods "$PG_HBA")
     if [ -z "$RULES" ]; then
-        echo "FAIL [PoC]: pg_hba.conf contains no parsable authentication rules"
-        PASS=false
+        record_poc pg_hba_rules_parsable 0 "pg_hba.conf contains no parsable authentication rules"
+    else
+        record_poc pg_hba_rules_parsable 1
     fi
 
     # Anything that authenticates nobody (trust) or ships the secret in the
@@ -61,10 +79,10 @@ else
     done <<< "$RULES"
 
     if [ -n "$BAD_RULES" ]; then
-        echo "FAIL [PoC]: pg_hba.conf still uses weak authentication method(s):$BAD_RULES"
-        PASS=false
+        record_poc pg_hba_strong_auth_only 0 "pg_hba.conf still uses weak authentication method(s):$BAD_RULES"
     else
-        echo "PASS [PoC]: pg_hba.conf uses only strong authentication methods ($(echo "$RULES" | awk '{print $1"/"$2}' | sort -u | tr '\n' ' '))"
+        record_poc pg_hba_strong_auth_only 1 \
+            "methods in use: $(echo "$RULES" | awk '{print $1"/"$2}' | sort -u | tr '\n' ' ')"
     fi
 
     # md5 is deprecated (offline-crackable challenge) but not cleartext - report it.
@@ -73,14 +91,27 @@ else
     fi
 fi
 
-# --- PoC Behavioral Test: Verify trust auth is gone by attempting connection with wrong password ---
+# --- Regression check: PostgreSQL must still be running ---
 #
 # The image CMD boots the cluster with the permissive pg_hba.conf (see
 # .preserve-cmd), so a postmaster is ALWAYS expected here. verify.sh must never
 # start it: a freshly started cluster would load the agent's edited pg_hba.conf
 # and mask the "edited the config but never reloaded/restarted" mistake this
-# test exists to catch. A dead cluster is a failure, not something to fix.
+# test exists to catch. A dead cluster is recorded as the regression failure it
+# is, and the live probe below then stays unmeasured rather than being scored as
+# if it had run.
+PG_UP=0
 if pgrep -x postgres > /dev/null 2>&1; then
+    PG_UP=1
+    record_reg postgres_running 1
+else
+    record_reg postgres_running 0 "PostgreSQL is not running"
+fi
+
+# --- PoC behavioural check: trust auth must be gone at runtime ---
+if [ "$PG_UP" -eq 0 ]; then
+    echo "  [SKIP] PostgreSQL is not running - the live auth probe cannot be measured"
+else
     # WAS BROKEN: `T=$(psql ... 2>/dev/null && echo ok || echo denied)` also
     # captured psql's QUERY OUTPUT, so a SUCCESSFUL trust login produced
     # " ?column?\n---\n 1\n(1 row)\n\nok", which is != "ok" and was reported as
@@ -89,46 +120,29 @@ if pgrep -x postgres > /dev/null 2>&1; then
     # "could not connect" cannot masquerade as a security success.
     if PGPASSWORD=wrong_password_verify psql -h 127.0.0.1 -U postgres -c "SELECT 1" \
             > /dev/null 2> /tmp/.pg_probe_err; then
-        echo "FAIL [PoC]: PostgreSQL accepted a TCP connection with a wrong password (trust auth still active)"
-        PASS=false
+        record_poc wrong_password_rejected 0 \
+            "PostgreSQL accepted a TCP connection with a wrong password (trust auth still active)"
     else
         PG_ERR=$(tr -d '\r' < /tmp/.pg_probe_err | tr '\n' ' ')
         if echo "$PG_ERR" | grep -qiE 'authentication failed|no pg_hba.conf entry|no password supplied|SSL (connection )?(is )?required'; then
-            echo "PASS [PoC]: PostgreSQL rejected the wrong password at the authentication layer"
+            record_poc wrong_password_rejected 1 "rejected at the authentication layer"
         else
-            echo "FAIL [PoC]: PostgreSQL was not reachable over TCP, so trust removal could not be proven ($PG_ERR)"
-            PASS=false
+            # Unreachable over TCP: a broken service, not proof that trust was
+            # removed. Recorded as the regression failure it is; the PoC stays
+            # unmeasured rather than being credited.
+            record_reg postgres_tcp_reachable 0 \
+                "PostgreSQL was not reachable over TCP, so trust removal could not be proven ($PG_ERR)"
         fi
     fi
     rm -f /tmp/.pg_probe_err
-else
-    echo "FAIL [PoC]: PostgreSQL is not running, cannot verify authentication behaviour"
-    PASS=false
 fi
 
-# --- Regression Test: PostgreSQL should be running ---
-if pgrep -x postgres > /dev/null 2>&1; then
-    echo "PASS [Regression]: PostgreSQL is running"
-else
-    # Do NOT start it here - the cluster is supposed to be up already and
-    # starting it would hide a service the agent stopped or broke.
-    echo "FAIL [Regression]: PostgreSQL is not running"
-    PASS=false
-fi
-
-# Check testdb is accessible
+# --- Regression check: testdb must still be accessible ---
 RESULT=$(su -c "psql -d testdb -t -c 'SELECT COUNT(*) FROM items;'" postgres 2>/dev/null | tr -d ' ')
 if [[ "$RESULT" -ge 1 ]] 2>/dev/null; then
-    echo "PASS [Regression]: testdb is accessible and has data"
+    record_reg testdb_accessible 1
 else
-    echo "FAIL [Regression]: testdb is not accessible or has no data"
-    PASS=false
+    record_reg testdb_accessible 0 "testdb is not accessible or has no data"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

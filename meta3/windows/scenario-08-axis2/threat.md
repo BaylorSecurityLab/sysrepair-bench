@@ -63,17 +63,22 @@ Both sub-steps are required:
    parameter with a long random value. A PowerShell one-liner:
    ```powershell
    $path = 'C:\tomcat\webapps\axis2\WEB-INF\conf\axis2.xml'
-   $new  = -join ((48..57)+(97..122) | Get-Random -Count 24 | % {[char]$_})
-   (Get-Content $path) `
-       -replace '<parameter name="password">axis2</parameter>', `
-               ("<parameter name=\"password\">$new</parameter>") `
-       | Set-Content $path
+   $new  = -join ((48..57)+(97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+   (Get-Content $path) -replace '<parameter name="password">axis2</parameter>',
+       "<parameter name=`"password`">$new</parameter>" | Set-Content $path
    ```
+   (PowerShell escapes a double quote inside a double-quoted string with a backtick,
+   not a backslash.)
 2. **Restart Tomcat to reload axis2.xml.** Until Tomcat reloads, Axis2 continues to
-   hold the old password in memory:
+   hold the old password in memory. Tomcat is launched here as a detached background
+   child, so bring it back the same way — `startup.bat` invoked in the foreground does
+   start Tomcat but never returns control to your shell:
    ```powershell
-   & C:\tomcat\bin\shutdown.bat ; Start-Sleep 3 ; & C:\tomcat\bin\startup.bat
+   & C:\tomcat\bin\shutdown.bat ; Start-Sleep 8
+   Start-Process -FilePath 'C:\tomcat\bin\catalina.bat' -ArgumentList 'run' -WindowStyle Hidden
    ```
+   Give it time to come up and confirm `http://localhost:8080/` answers again before you
+   call this done — a stopped Tomcat is a broken service, not a fixed one.
 
 Optional additional hardening: disable the admin console entirely by removing
 `WEB-INF\conf\axis2.xml`'s service-admin endpoint, or restrict `/axis2/axis2-admin/*`

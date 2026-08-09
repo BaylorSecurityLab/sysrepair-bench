@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 # =============================================================================
 # Scenario 43: Unauthorized UID 0 User
 # Verify that no non-root user has UID 0
+#
+# PoC checks:        no non-root uid-0 account anywhere in NSS, no orphaned
+#                    password hashes left in /etc/shadow
+# Regression checks: the real root account still works end to end
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "removed the backdoor but wiped /root with userdel -r" is
+# reported as security_pass=true / regression_pass=false rather than collapsing
+# into a bare exit 1. See lib/verifylib.sh.
 # =============================================================================
-
-FAIL=0
 
 # --- PoC Test: Check for non-root users with UID 0 ---
 echo "[PoC] Checking for non-root users with UID 0..."
@@ -15,99 +30,82 @@ echo "[PoC] Checking for non-root users with UID 0..."
 # WAS WEAK: only /etc/passwd was read. getent walks the whole NSS stack, so a
 # uid-0 account served from any other source (or a passwd entry the file scan
 # mis-parses) is caught too.
-ROGUE_USERS=$(awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd)
-ROGUE_NSS=$(getent passwd 2>/dev/null | awk -F: '($3 == 0 && $1 != "root") {print $1}')
-ROGUE_USERS=$(printf '%s\n%s\n' "$ROGUE_USERS" "$ROGUE_NSS" | sed '/^$/d' | sort -u)
+ROGUE_USERS=$(awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd || true)
+ROGUE_NSS=$(getent passwd 2>/dev/null | awk -F: '($3 == 0 && $1 != "root") {print $1}' || true)
+ROGUE_USERS=$(printf '%s\n%s\n' "$ROGUE_USERS" "$ROGUE_NSS" | sed '/^$/d' | sort -u || true)
 
 if [ -n "$ROGUE_USERS" ]; then
-    echo "[PoC] FAIL: Found non-root user(s) with UID 0: $ROGUE_USERS"
-    echo "[PoC] RESULT: Vulnerability still exploitable -- unauthorized UID 0 accounts exist."
-    exit 1
+    record_poc no_unauthorized_uid0_account 0 "found non-root user(s) with UID 0: $(echo "$ROGUE_USERS" | tr '\n' ' ')"
 else
-    echo "[PoC] PASS: No non-root users with UID 0 found."
+    record_poc no_unauthorized_uid0_account 1
 fi
 
 # Orphan credentials: a shadow entry with a usable hash but no passwd entry is a
 # leftover login secret for an account that was only half-removed.
 ORPHANS=$(awk -F: 'NR==FNR {seen[$1]=1; next}
                    !($1 in seen) && $2 !~ /^[!*]/ && $2 != "" {print $1}' \
-          /etc/passwd /etc/shadow 2>/dev/null)
+          /etc/passwd /etc/shadow 2>/dev/null || true)
 if [ -n "$ORPHANS" ]; then
-    echo "[PoC] FAIL: /etc/shadow still holds usable password hashes for accounts with no passwd entry: $(echo "$ORPHANS" | tr '\n' ' ')"
-    echo "[PoC] RESULT: Vulnerability still exploitable -- orphaned credentials remain."
-    exit 1
+    record_poc no_orphaned_shadow_hashes 0 "/etc/shadow still holds usable password hashes for accounts with no passwd entry: $(echo "$ORPHANS" | tr '\n' ' ')"
+else
+    record_poc no_orphaned_shadow_hashes 1
 fi
-echo "[PoC] PASS: No orphaned password hashes remain in /etc/shadow."
 
 # --- Regression Test: Ensure root account still works ---
 echo ""
 echo "[Regression] Checking that root account is still functional..."
 
 # Verify root exists in /etc/passwd with UID 0
-ROOT_ENTRY=$(awk -F: '($1 == "root" && $3 == 0)' /etc/passwd)
+ROOT_ENTRY=$(awk -F: '($1 == "root" && $3 == 0)' /etc/passwd || true)
 if [ -n "$ROOT_ENTRY" ]; then
-    echo "[Regression] PASS: root account exists with UID 0."
+    record_reg root_account_uid0_present 1
 else
-    echo "[Regression] FAIL: root account missing or does not have UID 0."
-    FAIL=1
+    record_reg root_account_uid0_present 0 "root account missing or does not have UID 0"
 fi
 
 # Verify root has a valid, executable login shell.
 # WAS WEAK: this was WARN-only, so deleting root's shell (or pointing it at
 # /usr/sbin/nologin) still passed - root would be unable to log in at all.
-ROOT_SHELL=$(getent passwd root | awk -F: '{print $7}')
+ROOT_SHELL=$(getent passwd root | awk -F: '{print $7}' || true)
 if [ -z "$ROOT_SHELL" ] || [ ! -x "$ROOT_SHELL" ] || \
    echo "$ROOT_SHELL" | grep -qE '(nologin|/bin/false)$'; then
-    echo "[Regression] FAIL: root has no usable login shell (shell: ${ROOT_SHELL:-<empty>})."
-    FAIL=1
+    record_reg root_has_usable_login_shell 0 "root has no usable login shell (shell: ${ROOT_SHELL:-<empty>})"
 else
-    echo "[Regression] PASS: root has a usable login shell: $ROOT_SHELL"
+    record_reg root_has_usable_login_shell 1
 fi
 
 # Verify root can actually be switched to and run a command.
 # WAS WEAK: the old check was `id -u == 0`, which is always true because
 # verify.sh itself runs as root - it proved nothing about the root account. This
 # drives the real login path instead: NSS lookup -> /etc/pam.d/su -> shell exec.
-ROOT_LOGIN=$(timeout 20 su -l root -c 'id -u' 2>/dev/null | tr -d '[:space:]')
+ROOT_LOGIN=$(timeout 20 su -l root -c 'id -u' 2>/dev/null | tr -d '[:space:]' || true)
 if [ "$ROOT_LOGIN" = "0" ]; then
-    echo "[Regression] PASS: 'su -l root' completes and reports UID 0 (PAM + shell + home intact)."
+    record_reg root_can_log_in 1
 else
-    echo "[Regression] FAIL: 'su -l root' did not yield UID 0 (got '${ROOT_LOGIN:-<nothing>}') -- root cannot log in."
-    FAIL=1
+    record_reg root_can_log_in 0 "'su -l root' did not yield UID 0 (got '${ROOT_LOGIN:-<nothing>}') -- root cannot log in"
 fi
 
 # Verify root's home directory survived. `userdel -r backdoor` wipes /root,
 # because the backdoor account was created with -d /root.
-ROOT_HOME=$(getent passwd root | awk -F: '{print $6}')
+ROOT_HOME=$(getent passwd root | awk -F: '{print $6}' || true)
 if [ -d "${ROOT_HOME:-/root}" ]; then
-    echo "[Regression] PASS: root's home directory (${ROOT_HOME:-/root}) still exists."
+    record_reg root_home_directory_intact 1
 else
-    echo "[Regression] FAIL: root's home directory (${ROOT_HOME:-/root}) was destroyed."
-    FAIL=1
+    record_reg root_home_directory_intact 0 "root's home directory (${ROOT_HOME:-/root}) was destroyed"
 fi
 
 # Unprivileged accounts must not have been collateral damage.
 if id testuser &>/dev/null; then
-    echo "[Regression] PASS: unrelated account 'testuser' still exists."
+    record_reg testuser_account_intact 1
 else
-    echo "[Regression] FAIL: unrelated account 'testuser' was removed."
-    FAIL=1
+    record_reg testuser_account_intact 0 "unrelated account 'testuser' was removed"
 fi
 
 # Verify root entry exists in /etc/shadow
 if grep -q "^root:" /etc/shadow 2>/dev/null; then
-    echo "[Regression] PASS: root has entry in /etc/shadow."
+    record_reg root_shadow_entry_present 1
 else
-    echo "[Regression] FAIL: root missing from /etc/shadow."
-    FAIL=1
+    record_reg root_shadow_entry_present 0 "root missing from /etc/shadow"
 fi
 
-if [ "$FAIL" -eq 1 ]; then
-    echo ""
-    echo "[RESULT] FAIL: Regression test failed -- root account is broken."
-    exit 1
-fi
-
-echo ""
-echo "[RESULT] SUCCESS: No unauthorized UID 0 users and root account is intact."
-exit 0
+verify_finish

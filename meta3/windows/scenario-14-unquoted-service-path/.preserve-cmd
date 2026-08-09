@@ -1,11 +1,21 @@
 # Use the image CMD instead of replacing it with an idle keepalive.
 #
 # The harness runs the image CMD so services actually boot. The CMD is
-# PID-1-safe:
-#   * sshd + WinRM are started first;
+# C:\entrypoint.ps1 and it is PID-1-safe:
+#   * the drive-root DACL is normalized to desktop-Windows parity first - this
+#     MUST happen at boot, because the Windows container runtime re-establishes
+#     the volume root's security descriptor at mount time and discards any
+#     build-time change to C:\ (see entrypoint.ps1 for the measurement). It is
+#     NOT the seeded defect; it removes a base-image weakness that would
+#     otherwise make every unquoted service path on the image exploitable;
+#   * sshd + WinRM are started next;
 #   * the vulnerability is a registry ImagePath (unquoted service path) on a
 #     planted service - a config weakness, not a foreground process;
 #   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
+#
+# This scenario therefore REQUIRES the CMD to run. With the CMD replaced by an
+# idle keepalive the root DACL is never normalized and the scenario is
+# unsolvable, because verify.ps1 correctly scores C:\ as an offender.
 #
 # Consequence for solutions: the vulnerable service registration is ALREADY
 # present, so a fix must quote the ImagePath (and/or remove the hijack binary);

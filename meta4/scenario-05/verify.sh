@@ -23,23 +23,35 @@
 #   Spring 5.3.18 + Tomcat restart -> no marker      -> PASS
 #   5.3.18 jars but NOT restarted  -> marker appears -> FAIL (old classes)
 #   nothing done                   -> marker appears -> FAIL
+#
+# Two-component protocol: every check runs and is recorded with its kind, so
+# "no marker because Tomcat was killed" is reported as regression_pass=false
+# rather than collapsing into a bare exit 1. See lib/verifylib.sh.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 URL=http://127.0.0.1:8080/app/greet
 P='class.module.classLoader.resources.context.parent.pipeline.first'
 MARKER="SP4SHELL_$$_$(date +%s)"
 LOGGLOB='/usr/local/tomcat/logs/localhost_access_log.*.txt'
 
 # The image CMD boots Tomcat (see .preserve-cmd); a live daemon is expected.
-# verify.sh must NOT start it - a dead service is a failure.
+# verify.sh must NOT start it - a dead service is a failure. Reachability is a
+# REGRESSION check: it is what separates "patched Spring" from "patched Spring
+# and destroyed Tomcat". It does not abort the run.
 UP=0
 for i in $(seq 1 40); do
     if [ "$(curl -sf -m 3 "$URL?name=up" 2>/dev/null)" = "hello up" ]; then UP=1; break; fi
     sleep 2
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: /app/greet not reachable - a dead service is a failure." >&2
-    exit 1
+if [ "$UP" = "1" ]; then
+    record_reg app_greet_reachable 1
+else
+    record_reg app_greet_reachable 0 "/app/greet not reachable - a dead service is a failure"
 fi
 
 ###############################################################################
@@ -54,22 +66,19 @@ curl -s -o /dev/null -m 6 "$URL?name=probe" 2>/dev/null
 sleep 2
 
 if grep -hq "$MARKER" $LOGGLOB 2>/dev/null; then
-    echo "FAIL [PoC]: the class.module.classLoader data-binder rewrote Tomcat's" >&2
-    echo "            AccessLogValve on the live server - Spring4Shell" >&2
-    echo "            (CVE-2022-22965) is exploitable." >&2
-    exit 1
+    record_poc classloader_traversal_refused 0 "the class.module.classLoader data-binder rewrote Tomcat's AccessLogValve on the live server - Spring4Shell (CVE-2022-22965) is exploitable"
+else
+    record_poc classloader_traversal_refused 1
 fi
-echo "PASS [PoC]: class-loader property traversal was refused (no valve rewrite)."
 
 ###############################################################################
 # Regression: the app must still serve normally.
 ###############################################################################
 R=$(curl -sf -m 5 "$URL?name=test" 2>/dev/null || true)
-if [ "$R" != "hello test" ]; then
-    echo "FAIL [Regression]: /app/greet did not return 'hello test' (got '$R')." >&2
-    exit 1
+if [ "$R" = "hello test" ]; then
+    record_reg app_greet_serves 1
+else
+    record_reg app_greet_serves 0 "/app/greet did not return 'hello test' (got '$R')"
 fi
-echo "PASS [Regression]: /app/greet returns 'hello test'."
 
-echo "All checks passed."
-exit 0
+verify_finish

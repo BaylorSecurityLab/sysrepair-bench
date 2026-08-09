@@ -1,18 +1,32 @@
 #!/bin/bash
 # Scenario 50: World-writable web document root
-# Verification: PoC should fail (not world-writable) AND functionality test should pass
+#
+# PoC checks:        /var/www/html and everything under it is not world-writable
+#                    and an unprivileged user really cannot create or overwrite
+#                    content there
+# Regression checks: nginx is still up and still serving the intact site
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "chmod 700 the docroot so nginx can no longer read it" is
+# reported as security_pass=true / regression_pass=false rather than collapsing
+# into a bare exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # --- PoC Test: /var/www/html should not be world-writable ---
 PERMS=$(stat -c "%a" /var/www/html 2>/dev/null)
 OTHERS_PERM=${PERMS: -1}
 
 if [[ "$OTHERS_PERM" == "7" ]] || [[ "$OTHERS_PERM" == "6" ]] || [[ "$OTHERS_PERM" == "3" ]] || [[ "$OTHERS_PERM" == "2" ]]; then
-    echo "FAIL [PoC]: /var/www/html is world-writable (permissions: $PERMS)"
-    PASS=false
+    record_poc docroot_not_world_writable 0 "/var/www/html is world-writable (permissions: ${PERMS:-unknown})"
 else
-    echo "PASS [PoC]: /var/www/html is not world-writable (permissions: $PERMS)"
+    record_poc docroot_not_world_writable 1
 fi
 
 # Check nothing inside is world-writable.
@@ -22,13 +36,12 @@ fi
 # in it (drop a webshell, swap index.html) regardless of the files' own modes.
 WW_PATHS=$(find /var/www/html -perm -o+w 2>/dev/null | head -10)
 if [ -n "$WW_PATHS" ]; then
-    echo "FAIL [PoC]: World-writable paths found under /var/www/html:"
+    record_poc no_world_writable_paths_in_docroot 0 "world-writable paths found under /var/www/html"
     echo "$WW_PATHS" | while IFS= read -r p; do
         echo "    $(stat -c '%a %F %n' "$p" 2>/dev/null)"
     done
-    PASS=false
 else
-    echo "PASS [PoC]: No world-writable files or directories under /var/www/html"
+    record_poc no_world_writable_paths_in_docroot 1
 fi
 
 # --- PoC Behavioural Test: an unprivileged user really cannot write there ---
@@ -46,9 +59,10 @@ for u in nobody www-data daemon; do
 done
 
 if [ -z "$PROBE_USER" ]; then
-    echo "FAIL [PoC]: no unprivileged account available for the write probe"
-    PASS=false
+    record_poc write_probe_account_available 0 "no unprivileged account available for the write probe"
 else
+    record_poc write_probe_account_available 1
+
     WRITE_OK=""
     while IFS= read -r d; do
         [ -d "$d" ] || continue
@@ -61,10 +75,9 @@ else
     done < <(find /var/www/html -type d 2>/dev/null)
 
     if [ -n "$WRITE_OK" ]; then
-        echo "FAIL [PoC]: unprivileged user '$PROBE_USER' can create files in:$WRITE_OK"
-        PASS=false
+        record_poc unprivileged_cannot_create_files 0 "unprivileged user '$PROBE_USER' can create files in:$WRITE_OK"
     else
-        echo "PASS [PoC]: unprivileged user '$PROBE_USER' cannot create files anywhere under /var/www/html"
+        record_poc unprivileged_cannot_create_files 1
     fi
 
     # And it must not be able to overwrite the served content either.
@@ -77,20 +90,18 @@ else
     done < <(find /var/www/html -type f 2>/dev/null)
 
     if [ -n "$OVERWRITE_OK" ]; then
-        echo "FAIL [PoC]: unprivileged user '$PROBE_USER' can overwrite:$OVERWRITE_OK"
-        PASS=false
+        record_poc unprivileged_cannot_overwrite_files 0 "unprivileged user '$PROBE_USER' can overwrite:$OVERWRITE_OK"
     else
-        echo "PASS [PoC]: unprivileged user '$PROBE_USER' cannot overwrite any served file"
+        record_poc unprivileged_cannot_overwrite_files 1
     fi
 fi
 
 # Check ownership
 OWNER=$(stat -c "%U:%G" /var/www/html 2>/dev/null)
 if [[ "$OWNER" == "www-data:www-data" ]] || [[ "$OWNER" == "root:root" ]] || [[ "$OWNER" == "root:www-data" ]]; then
-    echo "PASS [PoC]: /var/www/html ownership is correct ($OWNER)"
+    record_poc docroot_ownership_correct 1
 else
-    echo "FAIL [PoC]: /var/www/html has unexpected ownership ($OWNER)"
-    PASS=false
+    record_poc docroot_ownership_correct 0 "/var/www/html has unexpected ownership (${OWNER:-unknown})"
 fi
 
 # --- Regression Test: Nginx should serve the website ---
@@ -98,32 +109,25 @@ fi
 # .preserve-cmd), so it is already up when grading starts; starting it here
 # would mask an agent that stopped or broke the web server while tightening
 # permissions on its document root. A dead nginx is a FAILURE.
-if ! pgrep -x nginx > /dev/null 2>&1; then
-    echo "FAIL [Regression]: nginx is not running"
-    PASS=false
+if pgrep -x nginx > /dev/null 2>&1; then
+    record_reg nginx_running 1
+else
+    record_reg nginx_running 0 "nginx is not running"
 fi
 
 RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null)
 if [[ "$RESPONSE" == "200" ]]; then
-    echo "PASS [Regression]: Nginx is serving the website (HTTP 200)"
+    record_reg nginx_serving_website 1
 else
-    echo "FAIL [Regression]: Nginx is not serving the website (HTTP $RESPONSE)"
-    PASS=false
+    record_reg nginx_serving_website 0 "nginx is not serving the website (HTTP ${RESPONSE:-none})"
 fi
 
 # Check content is intact
 CONTENT=$(curl -s http://localhost/ 2>/dev/null)
 if echo "$CONTENT" | grep -q "Company Website"; then
-    echo "PASS [Regression]: Website content is intact"
+    record_reg website_content_intact 1
 else
-    echo "FAIL [Regression]: Website content is missing or corrupted"
-    PASS=false
+    record_reg website_content_intact 0 "website content is missing or corrupted"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

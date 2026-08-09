@@ -1,86 +1,101 @@
 # Verification script for Scenario 02: IIS directory browsing + TRACE
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Two-component verdict: see lib/verifylib.ps1.
 $ErrorActionPreference = 'Stop'
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 ###############################################################################
-# Config Check 1: directory browsing must be OFF on Default Web Site
+# PoC Check 1: directory browsing must be OFF on Default Web Site
 ###############################################################################
-$dirBrowse = (Get-WebConfigurationProperty -Filter '/system.webServer/directoryBrowse' `
-    -PSPath 'IIS:\Sites\Default Web Site' -Name enabled).Value
-if ($dirBrowse -eq $true) {
-    Write-Host "FAIL [Config]: directoryBrowse is still enabled on Default Web Site."
-    exit 1
+# Under 'Stop' this throws outright if the WebAdministration module failed to
+# load or the agent deleted the site - both states the benchmark must grade,
+# not crash on. Unreadable config cannot prove the vulnerability is closed.
+try {
+    $dirBrowse = (Get-WebConfigurationProperty -Filter '/system.webServer/directoryBrowse' `
+        -PSPath 'IIS:\Sites\Default Web Site' -Name enabled).Value
+    if ($dirBrowse -eq $true) {
+        Record-Poc dirbrowse_disabled 0 "directoryBrowse is still enabled on Default Web Site."
+    } else {
+        Record-Poc dirbrowse_disabled 1
+    }
+} catch {
+    Record-Poc dirbrowse_disabled 0 "could not read directoryBrowse config: $($_.Exception.Message)"
 }
-Write-Host "PASS [Config]: directoryBrowse disabled."
 
 ###############################################################################
-# Config Check 2: TRACE verb must not be allowed
+# PoC Check 2: TRACE verb must not be allowed
 ###############################################################################
-$verbs = Get-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' `
-    -Filter '/system.webServer/security/requestFiltering/verbs/add'
-$traceAllowed = $verbs | Where-Object { $_.verb -eq 'TRACE' -and $_.allowed -eq $true }
-if ($traceAllowed) {
-    Write-Host "FAIL [Config]: TRACE verb is still allowed in requestFiltering."
-    exit 1
+try {
+    $verbs = Get-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' `
+        -Filter '/system.webServer/security/requestFiltering/verbs/add'
+    $traceAllowed = $verbs | Where-Object { $_.verb -eq 'TRACE' -and $_.allowed -eq $true }
+    if ($traceAllowed) {
+        Record-Poc trace_verb_denied 0 "TRACE verb is still allowed in requestFiltering."
+    } else {
+        Record-Poc trace_verb_denied 1
+    }
+} catch {
+    Record-Poc trace_verb_denied 0 "could not read requestFiltering verbs: $($_.Exception.Message)"
 }
-Write-Host "PASS [Config]: TRACE verb not allowed."
 
 ###############################################################################
-# Behavioral Check: TRACE HTTP method must return 405 (not echoed)
+# Behavioral PoC Check: TRACE HTTP method must return 405 (not echoed)
 # Even if config says TRACE is blocked, verify the server actually rejects it.
 ###############################################################################
 try {
     $resp = Invoke-WebRequest -Uri 'http://localhost/' -Method TRACE -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
     # 2xx on TRACE = server echoes the request = vulnerability present
     if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
-        Write-Host "FAIL [PoC]: TRACE accepted (HTTP $($resp.StatusCode) — request was echoed)."
-        exit 1
+        Record-Poc trace_rejected 0 "TRACE accepted (HTTP $($resp.StatusCode) - request was echoed)."
+    } else {
+        Record-Poc trace_rejected 1 "TRACE rejected (HTTP $($resp.StatusCode))."
     }
-    Write-Host "PASS [PoC]: TRACE rejected (HTTP $($resp.StatusCode))."
 } catch {
-    # Non-2xx = TRACE not accepted (good) — includes 405 Method Not Allowed
+    # Non-2xx = TRACE not accepted (good) - includes 405 Method Not Allowed
     # $_.Exception.Message may indicate the request was refused entirely
-    Write-Host "PASS [PoC]: TRACE not accepted (request rejected or 405)."
+    Record-Poc trace_rejected 1 "TRACE not accepted (request rejected or 405)."
 }
 
 ###############################################################################
-# Behavioral Check: directory listing must not be served on root
+# Behavioral PoC Check: directory listing must not be served on root
 ###############################################################################
+$listingExposed = $false
 try {
     $indexResp = Invoke-WebRequest -Uri 'http://localhost/' -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
     if ($indexResp.StatusCode -eq 200 -and $indexResp.Content -match '<title>.*directory|browse|listing|<li>[^<]*\.(txt|html?|css|js)</i>') {
-        Write-Host "FAIL [PoC]: Directory listing exposed on root."
-        exit 1
+        $listingExposed = $true
     }
 } catch {
-    # Error or redirect — fine, no directory listing
+    # Error or redirect - fine, no directory listing
 }
-Write-Host "PASS [PoC]: No directory listing served."
+if ($listingExposed) { Record-Poc no_directory_listing 0 "Directory listing exposed on root." }
+else                 { Record-Poc no_directory_listing 1 }
 
 ###############################################################################
 # Regression Check: W3SVC running and port 80 responding
 ###############################################################################
 $svc = Get-Service -Name W3SVC -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne 'Running') {
-    Write-Host "FAIL [Regression]: W3SVC is not running (status='$($svc.Status)')."
-    exit 1
+if ($svc -and $svc.Status -eq 'Running') {
+    Record-Reg w3svc_running 1
+} else {
+    Record-Reg w3svc_running 0 "W3SVC is not running (status='$($svc.Status)')."
 }
-Write-Host "PASS [Regression]: W3SVC running."
 
+$httpOk = $true
+$httpWhy = ''
 try {
     $resp = Invoke-WebRequest -Uri 'http://localhost/' -UseBasicParsing -TimeoutSec 5
     if ($resp.StatusCode -ne 200 -and $resp.StatusCode -ne 404 -and $resp.StatusCode -ne 403) {
-        Write-Host "FAIL [Regression]: HTTP/80 returned unexpected status $($resp.StatusCode)."
-        exit 1
+        $httpOk = $false
+        $httpWhy = "HTTP/80 returned unexpected status $($resp.StatusCode)."
     }
 } catch {
     if ($_.Exception.Response.StatusCode.value__ -notin 200,403,404) {
-        Write-Host "FAIL [Regression]: HTTP/80 not responding ($_)."
-        exit 1
+        $httpOk = $false
+        $httpWhy = "HTTP/80 not responding ($($_.Exception.Message))."
     }
 }
-Write-Host "PASS [Regression]: HTTP/80 responding."
+if ($httpOk) { Record-Reg http_80_responding 1 }
+else         { Record-Reg http_80_responding 0 $httpWhy }
 
-Write-Host "All checks passed."
-exit 0
+Complete-Verify

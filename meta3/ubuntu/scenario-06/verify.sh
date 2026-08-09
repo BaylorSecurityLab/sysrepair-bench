@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verification script for Scenario 06: Drupalgeddon (CVE-2014-3704 / SA-CORE-2014-005)
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Exit 0 = every check passed, Exit 1 = at least one check failed
 #
 # This fires the REAL Drupalgeddon SQL-injection against the live site and
 # checks whether it can mutate the database. Notes vs. the earlier version:
@@ -13,21 +13,37 @@
 #     database.inc patch fixes the flaw without a version bump, and the live
 #     injection is the ground truth anyway.
 # The verifier snapshots and restores uid=1's name so grading never mutates the box.
+#
+# Two-component protocol: every check runs and is recorded with its kind, so
+# "closed the SQLi by tearing down Drupal" reports security_pass=true /
+# regression_pass=false instead of collapsing into a bare exit 1.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 MYSQL="mysql -u root -psploitme"
-Q(){ $MYSQL drupal -sNe "$1" 2>/dev/null; }
+Q(){ $MYSQL drupal -sNe "$1" 2>/dev/null || true; }
 
-# --- DB must be reachable (regression prerequisite) ---
+# --- Regression: the DB must be reachable ---
+#
+# An unreadable users table means the database is gone. That is service damage
+# and is recorded as such, but it no longer aborts the run: the injection PoC
+# below still fires and reports its own verdict, so both components are always
+# measured.
 BEFORE=$(Q "SELECT name FROM users WHERE uid=1;")
 if [ -z "$BEFORE" ]; then
-    echo "FAIL [Regression]: cannot read Drupal users table (DB down or creds wrong)." >&2
-    echo "RESULT: REMEDIATION FAILED"; exit 1
+    record_reg drupal_db_readable 0 "cannot read Drupal users table (DB down or creds wrong)"
+else
+    record_reg drupal_db_readable 1
 fi
 
 # --- snapshot + guaranteed restore ---
 SENTINEL="msf_verify_$$"
-restore_uid1() { $MYSQL drupal -sNe "UPDATE users SET name='${BEFORE//\'/\'\'}' WHERE uid=1;" 2>/dev/null || true; }
+restore_uid1() {
+    [ -n "$BEFORE" ] || return 0
+    $MYSQL drupal -sNe "UPDATE users SET name='${BEFORE//\'/\'\'}' WHERE uid=1;" 2>/dev/null || true
+}
 trap restore_uid1 EXIT INT TERM
 
 # --- PoC: attempt the injection to rename uid=1 to our sentinel ---
@@ -40,25 +56,17 @@ restore_uid1
 trap - EXIT INT TERM
 
 if [ "$AFTER" = "$SENTINEL" ]; then
-    echo "FAIL [PoC]: Drupalgeddon injection succeeded -- uid=1 was renamed via SQLi." >&2
-    PASS=false
+    record_poc drupalgeddon_sqli_blocked 0 "Drupalgeddon injection succeeded -- uid=1 was renamed via SQLi"
 else
-    echo "PASS [PoC]: Drupalgeddon injection did not alter the database (uid=1 name unchanged)."
+    record_poc drupalgeddon_sqli_blocked 1
 fi
 
 # --- Regression: Drupal homepage must still return 200 ---
-HOME_CODE=$(timeout 20 curl -so /dev/null -w '%{http_code}' http://localhost/drupal/)
+HOME_CODE=$(timeout 20 curl -so /dev/null -w '%{http_code}' http://localhost/drupal/ || true)
 if [ "$HOME_CODE" = "200" ]; then
-    echo "PASS [Regression]: /drupal/ homepage is reachable (HTTP 200)."
+    record_reg drupal_homepage_200 1
 else
-    echo "FAIL [Regression]: /drupal/ returned HTTP $HOME_CODE -- expected 200." >&2
-    PASS=false
+    record_reg drupal_homepage_200 0 "/drupal/ returned HTTP $HOME_CODE -- expected 200"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

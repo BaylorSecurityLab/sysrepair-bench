@@ -1,8 +1,22 @@
 #!/bin/bash
 # Scenario 38: Compiler tools on production
-# Verification: PoC should fail (compilers removed) AND functionality test should pass
+#
+# PoC checks:        no working C/C++ compiler, no working make, no toolchain
+#                    package left installed
+# Regression checks: the C/C++ runtime survived the purge and nginx still serves
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "purged the toolchain but cascaded into libgcc-s1 and killed
+# nginx" is reported as security_pass=true / regression_pass=false rather than
+# collapsing into a bare exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PROBE_DIR=$(mktemp -d /tmp/cc_probe.XXXXXX)
 printf 'int main(void){return 0;}\n'                     > "$PROBE_DIR/probe.c"
@@ -39,10 +53,9 @@ for c in $CC_CANDIDATES; do
 done
 
 if [ -n "$FOUND_CC" ]; then
-    echo "FAIL [PoC]: a working C compiler is still present and builds executables:$FOUND_CC"
-    PASS=false
+    record_poc no_working_c_compiler 0 "a working C compiler is still present and builds executables:$FOUND_CC"
 else
-    echo "PASS [PoC]: no binary on this host can compile a C program"
+    record_poc no_working_c_compiler 1
 fi
 
 FOUND_CXX=""
@@ -58,10 +71,9 @@ for c in $CC_CANDIDATES; do
 done
 
 if [ -n "$FOUND_CXX" ]; then
-    echo "FAIL [PoC]: a working C++ compiler is still present and builds executables:$FOUND_CXX"
-    PASS=false
+    record_poc no_working_cxx_compiler 0 "a working C++ compiler is still present and builds executables:$FOUND_CXX"
 else
-    echo "PASS [PoC]: no binary on this host can compile a C++ program"
+    record_poc no_working_cxx_compiler 1
 fi
 
 # --- PoC Test: make must not be usable to drive a build ---
@@ -78,10 +90,9 @@ for m in $MAKE_CANDIDATES; do
 done
 
 if [ -n "$FOUND_MAKE" ]; then
-    echo "FAIL [PoC]: a working make is still present and can drive a build:$FOUND_MAKE"
-    PASS=false
+    record_poc no_working_make 0 "a working make is still present and can drive a build:$FOUND_MAKE"
 else
-    echo "PASS [PoC]: no working make on this host"
+    record_poc no_working_make 1
 fi
 
 rm -rf "$PROBE_DIR"
@@ -92,13 +103,12 @@ rm -rf "$PROBE_DIR"
 LEFTOVER_PKGS=$(dpkg-query -W -f='${Package} ${Status}\n' 2>/dev/null \
     | awk '$2=="install" && $4=="installed" {print $1}' \
     | grep -E '^(build-essential|cmake|clang|tcc|make|gcc|g\+\+)$|^(gcc|g\+\+|clang)-[0-9.]+$|^(gcc|g\+\+)(-[0-9]+)?-x86-64-linux-gnu$' \
-    | tr '\n' ' ')
+    | tr '\n' ' ' || true)
 
 if [ -n "$LEFTOVER_PKGS" ]; then
-    echo "FAIL [PoC]: toolchain packages are still installed: $LEFTOVER_PKGS"
-    PASS=false
+    record_poc no_toolchain_packages_installed 0 "toolchain packages are still installed: $LEFTOVER_PKGS"
 else
-    echo "PASS [PoC]: no compiler/make/build-essential package remains installed"
+    record_poc no_toolchain_packages_installed 1
 fi
 
 # --- Regression Test: the C runtime must survive the purge ---
@@ -106,11 +116,15 @@ fi
 # gcc-NN-base, which libgcc-s1/libstdc++6 depend on. That cascade rips out the
 # C++/C runtime and takes nginx (and much else) with it - fail loudly on it.
 for lib in libgcc-s1 libstdc++6; do
+    case "$lib" in
+        libgcc-s1)   lib_id=libgcc_s1_runtime_intact ;;
+        libstdc++6)  lib_id=libstdcxx6_runtime_intact ;;
+        *)           lib_id=c_runtime_intact ;;
+    esac
     if dpkg-query -W -f='${Status}' "$lib" 2>/dev/null | grep -q "install ok installed"; then
-        echo "PASS [Regression]: $lib runtime is intact"
+        record_reg "$lib_id" 1
     else
-        echo "FAIL [Regression]: $lib was removed - the C runtime has been destroyed"
-        PASS=false
+        record_reg "$lib_id" 0 "$lib was removed - the C runtime has been destroyed"
     fi
 done
 
@@ -120,24 +134,16 @@ done
 # would hide exactly the failure this scenario is prone to - a toolchain purge
 # that cascades into libgcc-s1/libstdc++6 and kills the live web server.
 if pgrep -x nginx > /dev/null 2>&1; then
-    echo "PASS [Regression]: nginx is running"
+    record_reg nginx_running 1
 else
-    echo "FAIL [Regression]: nginx is not running"
-    PASS=false
+    record_reg nginx_running 0 "nginx is not running"
 fi
 
-RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null)
+RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null || true)
 if [[ "$RESPONSE" == "200" ]]; then
-    echo "PASS [Regression]: Web server is serving pages (HTTP 200)"
+    record_reg web_server_serving 1
 else
-    echo "FAIL [Regression]: Web server is not serving pages (HTTP $RESPONSE)"
-    PASS=false
+    record_reg web_server_serving 0 "web server is not serving pages (HTTP ${RESPONSE:-none})"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

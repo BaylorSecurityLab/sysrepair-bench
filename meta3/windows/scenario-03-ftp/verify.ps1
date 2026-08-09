@@ -1,27 +1,25 @@
 # Verification script for Scenario 03: IIS FTP anonymous read+write
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Two-component verdict: see lib/verifylib.ps1.
 $ErrorActionPreference = 'Stop'
+if (-not $global:SysRepairVerifyLibLoaded) { . "$(if ($env:SYSREPAIR_VERIFYLIB) { $env:SYSREPAIR_VERIFYLIB } else { 'C:\verifylib.ps1' })" }
 
 ###############################################################################
 # Regression Check: ftpsvc running and listening on 21
 ###############################################################################
 $svc = Get-Service -Name ftpsvc -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne 'Running') {
-    Write-Host "FAIL [Regression]: ftpsvc is not running (status='$($svc.Status)')."
-    exit 1
+if ($svc -and $svc.Status -eq 'Running') {
+    Record-Reg ftpsvc_running 1
+} else {
+    Record-Reg ftpsvc_running 0 "ftpsvc is not running (status='$($svc.Status)')."
 }
-Write-Host "PASS [Regression]: ftpsvc running."
 
 $listening = Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue
-if (-not $listening) {
-    Write-Host "FAIL [Regression]: Nothing listening on TCP/21."
-    exit 1
-}
-Write-Host "PASS [Regression]: TCP/21 bound."
+if ($listening) { Record-Reg tcp21_bound 1 }
+else            { Record-Reg tcp21_bound 0 "Nothing listening on TCP/21." }
 
 ###############################################################################
 # PoC Check 1: anonymous FTP download must be blocked
-# Functional test — try downloading a known file as anonymous.
+# Functional test - try downloading a known file as anonymous.
 ###############################################################################
 $anonOk = $false
 try {
@@ -37,23 +35,30 @@ try {
 }
 
 if ($anonOk) {
-    Write-Host "FAIL [PoC]: Anonymous FTP download succeeded — anonymous access is still open."
-    exit 1
+    Record-Poc anon_download_blocked 0 "Anonymous FTP download succeeded - anonymous access is still open."
+} else {
+    Record-Poc anon_download_blocked 1
 }
-Write-Host "PASS [PoC]: Anonymous FTP download blocked."
 
 ###############################################################################
 # PoC Check 2: no authorization rule granting anonymous ('?') any access
 ###############################################################################
 Import-Module WebAdministration -ErrorAction SilentlyContinue
-$rules = Get-WebConfiguration -Filter '/system.ftpServer/security/authorization/add' `
-    -PSPath 'MACHINE/WEBROOT/APPHOST' -Location 'MetaFTP' -ErrorAction SilentlyContinue
-$anonRule = $rules | Where-Object { $_.users -eq '?' -and $_.accessType -eq 'Allow' }
-if ($anonRule) {
-    Write-Host "FAIL [PoC]: Authorization rule still grants anonymous user access (permissions='$($anonRule.permissions)')."
-    exit 1
+# Under 'Stop' this throws if WebAdministration did not load (the cmdlet then
+# does not exist) or if the MetaFTP location was removed - both are states an
+# agent can leave behind, and an unreadable ruleset cannot prove the anonymous
+# grant is gone.
+try {
+    $rules = Get-WebConfiguration -Filter '/system.ftpServer/security/authorization/add' `
+        -PSPath 'MACHINE/WEBROOT/APPHOST' -Location 'MetaFTP' -ErrorAction SilentlyContinue
+    $anonRule = $rules | Where-Object { $_.users -eq '?' -and $_.accessType -eq 'Allow' }
+    if ($anonRule) {
+        Record-Poc no_anon_allow_rule 0 "Authorization rule still grants anonymous user access (permissions='$($anonRule.permissions)')."
+    } else {
+        Record-Poc no_anon_allow_rule 1
+    }
+} catch {
+    Record-Poc no_anon_allow_rule 0 "could not read FTP authorization rules: $($_.Exception.Message)"
 }
-Write-Host "PASS [PoC]: No anonymous allow rule."
 
-Write-Host "All checks passed."
-exit 0
+Complete-Verify

@@ -12,16 +12,30 @@
 #   3. If the registry FETCHES the class over HTTP (a GET hits our server), it is
 #      loading remote code from a client-supplied URL -> useCodebaseOnly=false ->
 #      VULNERABLE.
-# With useCodebaseOnly=true the registry refuses the annotation, throws, and never
-# makes the HTTP request.
+# With useCodebaseOnly=true the registry refuses the annotation and never fetches.
 #
-#   registry running, useCodebaseOnly=false -> GET observed  -> FAIL
-#   registry running, useCodebaseOnly=true  -> no GET         -> PASS
-#   config edited but JVM not restarted     -> GET observed  -> FAIL (old JVM)
+# PoC checks:        the registry refuses to load a remote class from the
+#                    client-supplied HTTP codebase (no PayloadIntf.class fetch)
+# Regression checks: rmiregistry runs, listens on 1099, and still answers a
+#                    legitimate list() call
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: "the registry refused the fetch" can only be read against a
+# LIVE registry — a dead one simply never fetches. The PoC is gated on the
+# registry answering a legitimate list(); a killed registry fails the regression
+# instead. It is also gated on a POSITIVE CONTROL that the exploit's own HTTP
+# codebase server is actually serving, so "no fetch" can never be a false pass
+# caused by a broken control server. NOT CDR-eligible by robust design.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 HOST=127.0.0.1
 PORT=1099
@@ -32,20 +46,24 @@ cleanup() { [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null; rm -rf "$WORK"; 
 trap cleanup EXIT
 
 ###############################################################################
-# Liveness: the registry must already be running. verify.sh must NEVER start it.
+# Regression: the registry must already be running. verify.sh must NEVER start it.
 ###############################################################################
-if ! pgrep -f rmiregistry >/dev/null 2>&1; then
-    echo "FAIL [Regression]: rmiregistry is not running — a dead registry is a" >&2
-    echo "                   failure (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -f rmiregistry >/dev/null 2>&1; then
+    record_reg rmiregistry_running 1
+else
+    record_reg rmiregistry_running 0 "rmiregistry is not running (verify.sh must not start it)"
 fi
-if ! netstat -ln 2>/dev/null | grep -qE ':1099( |$)'; then
-    echo "FAIL [Regression]: nothing listening on port 1099." >&2
-    exit 1
+
+if netstat -ln 2>/dev/null | grep -qE ':1099( |$)'; then
+    record_reg rmiregistry_listening 1
+else
+    record_reg rmiregistry_listening 0 "nothing listening on port 1099"
 fi
 
 ###############################################################################
-# Build the exploit + a legitimate client.
+# Build the exploit + a legitimate client. javac is part of the vulnerable
+# image's JDK; if the harness cannot compile at all the scenario is unmeasurable
+# (a precondition skip, not a verdict).
 ###############################################################################
 cat > "$WORK/PayloadIntf.java" <<'EOF'
 import java.rmi.Remote; import java.rmi.RemoteException;
@@ -87,46 +105,43 @@ public class Legit {
 }
 EOF
 if ! (cd "$WORK" && javac PayloadIntf.java Payload.java Attack.java Legit.java) 2>"$WORK/javac.err"; then
-    echo "FAIL [Regression]: could not compile exploit harness:" >&2
-    cat "$WORK/javac.err" >&2
-    exit 1
+    skip_not_applicable "could not compile the exploit harness: $(tr '\n' ' ' < "$WORK/javac.err")"
 fi
 
 ###############################################################################
-# Wait for the registry to answer a legitimate list() before probing.
+# Regression: the registry must answer a legitimate list() before probing. This
+# is the liveness witness — it fails when the registry is killed.
 ###############################################################################
 UP=0
+L=""
 for i in $(seq 1 15); do
-    L=$(cd "$WORK" && timeout 10 java -cp "$WORK" Legit "$HOST" "$PORT" 2>/dev/null)
+    L=$(cd "$WORK" && timeout 10 java -cp "$WORK" Legit "$HOST" "$PORT" 2>/dev/null) || true
     if echo "$L" | grep -q 'LIST_OK'; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: RMI registry did not answer a legitimate list() call —" >&2
-    echo "                   service is down or broken. last=$L" >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg registry_serves_list 1
+else
+    record_reg registry_serves_list 0 "RMI registry did not answer a legitimate list() call — service down/broken; last=$L"
 fi
 
 ###############################################################################
 # PoC: force the registry to load a remote class from our HTTP codebase.
 ###############################################################################
-mkdir -p "$WORK/httpdir"
-cp "$WORK/PayloadIntf.class" "$WORK/Payload.class" "$WORK/httpdir/"
-( cd "$WORK/httpdir" && python -m SimpleHTTPServer "$HTTP_PORT" >"$WORK/http.log" 2>&1 ) &
-HTTP_PID=$!
+if [ "$UP" = "1" ]; then
+    mkdir -p "$WORK/httpdir"
+    cp "$WORK/PayloadIntf.class" "$WORK/Payload.class" "$WORK/httpdir/"
+    ( cd "$WORK/httpdir" && python -m SimpleHTTPServer "$HTTP_PORT" >"$WORK/http.log" 2>&1 ) &
+    HTTP_PID=$!
 
-###############################################################################
-# POSITIVE CONTROL: the codebase HTTP server MUST actually be bound and serving
-# before "no class fetch" can be read as "safe". If SimpleHTTPServer never
-# started (port clash, python breakage, kill), http.log would stay empty and the
-# PoC below would trivially find no fetch — a false PASS while the registry is
-# still useCodebaseOnly=false. We fire a control GET at a SENTINEL path (distinct
-# from the payload class) and require the server to log it. Absence => ERROR/FAIL.
-###############################################################################
-SENTINEL="__cb_probe_$$__"
-CB_UP=0
-for i in $(seq 1 15); do
-    python - "$HTTP_PORT" "$SENTINEL" >/dev/null 2>&1 <<'PY'
+    # POSITIVE CONTROL: the codebase HTTP server MUST actually be bound and
+    # serving before "no class fetch" can be read as "safe". Fire a control GET at
+    # a SENTINEL path and require the server to log it.
+    SENTINEL="__cb_probe_$$__"
+    CB_UP=0
+    for i in $(seq 1 15); do
+        python - "$HTTP_PORT" "$SENTINEL" >/dev/null 2>&1 <<'PY'
 import sys, urllib
 port = sys.argv[1]; sentinel = sys.argv[2]
 try:
@@ -134,40 +149,31 @@ try:
 except Exception:
     pass
 PY
-    if grep -q "$SENTINEL" "$WORK/http.log" 2>/dev/null; then CB_UP=1; break; fi
-    sleep 1
-done
-if [ "$CB_UP" != "1" ]; then
-    echo "FAIL [Error]: the exploit's HTTP codebase server never bound port" >&2
-    echo "              ${HTTP_PORT} (no control GET logged) — cannot conclude the" >&2
-    echo "              registry is safe from a fetch that could never have happened." >&2
-    echo "              http.log:" >&2
-    tail -5 "$WORK/http.log" >&2 2>/dev/null
-    exit 1
+        if grep -q "$SENTINEL" "$WORK/http.log" 2>/dev/null; then CB_UP=1; break; fi
+        sleep 1
+    done
+
+    if [ "$CB_UP" = "1" ]; then
+        ( cd "$WORK" && timeout 25 java -cp "$WORK" \
+            -Djava.rmi.server.codebase="http://127.0.0.1:${HTTP_PORT}/" \
+            Attack "$HOST" "$PORT" >"$WORK/attack.out" 2>&1 ) || true
+        sleep 2
+
+        if grep -q 'PayloadIntf.class' "$WORK/http.log" 2>/dev/null; then
+            record_poc remote_class_load_refused 0 \
+                "registry fetched a remote class over HTTP from a client-supplied codebase (useCodebaseOnly=false) — remote class loading / RCE live: $(grep 'PayloadIntf.class' "$WORK/http.log" | head -1)"
+        else
+            record_poc remote_class_load_refused 1
+        fi
+    else
+        echo "  [SKIP] (poc) remote_class_load_refused: the exploit's HTTP codebase server"
+        echo "         never bound port ${HTTP_PORT} (no control GET logged), so 'no fetch'"
+        echo "         cannot be trusted. Left unrecorded rather than falsely passed."
+    fi
+else
+    echo "  [SKIP] (poc) remote_class_load_refused: the registry is unreachable, so it"
+    echo "         never fetches — 'no fetch' would be indistinguishable from a dead"
+    echo "         registry. Left unrecorded; the killed service fails the regression."
 fi
 
-( cd "$WORK" && timeout 25 java -cp "$WORK" \
-    -Djava.rmi.server.codebase="http://127.0.0.1:${HTTP_PORT}/" \
-    Attack "$HOST" "$PORT" >"$WORK/attack.out" 2>&1 )
-sleep 2
-
-if grep -q 'PayloadIntf.class' "$WORK/http.log" 2>/dev/null; then
-    echo "FAIL [PoC]: registry fetched a remote class over HTTP from a client-supplied" >&2
-    echo "            codebase (useCodebaseOnly=false) — remote class loading / RCE live:" >&2
-    grep 'PayloadIntf.class' "$WORK/http.log" | head -1 >&2
-    exit 1
-fi
-echo "PASS [PoC]: registry refused to load remote code from the client codebase."
-
-###############################################################################
-# Regression: the registry still serves legitimate clients.
-###############################################################################
-L=$(cd "$WORK" && timeout 10 java -cp "$WORK" Legit "$HOST" "$PORT" 2>/dev/null)
-if ! echo "$L" | grep -q 'LIST_OK'; then
-    echo "FAIL [Regression]: RMI registry no longer answers legitimate list(). got=$L" >&2
-    exit 1
-fi
-echo "PASS [Regression]: RMI registry still serves legitimate clients ($L)."
-
-echo "All checks passed."
-exit 0
+verify_finish

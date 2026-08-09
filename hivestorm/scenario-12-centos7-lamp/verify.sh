@@ -5,6 +5,16 @@
 # mariadb port, live sshd -T) and AND-gates config with runtime. JSONL.
 set +e
 
+# Two-component verdict protocol -- see lib/verifylib.sh. Purely ADDITIVE here:
+# the weighted {"check":...} JSONL below is untouched and still drives
+# hivestorm's partial credit, because the library's records carry neither
+# "weight" nor "category" and so contribute 0 to both the numerator and the
+# denominator in _score_hivestorm. What they add is the security/regression
+# decomposition, which a single weighted total cannot express.
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 ROLES=/etc/sysrepair/roles.json
 # Tamper guard: every identity/path check below derives its target from
 # roles.json via jq. If a solver deletes or truncates it, those jq reads return
@@ -13,7 +23,14 @@ ROLES=/etc/sysrepair/roles.json
 # non-service check so the partial-credit value is a hard 0.
 if [ ! -s "$ROLES" ] || ! jq -e . "$ROLES" >/dev/null 2>&1; then
     printf '{"check":"roles_intact","weight":1,"pass":false,"reason":"roles.json missing/empty/invalid - tamper detected; scoring 0","category":"integrity"}\n'
-    exit 0
+    # The same refusal, restated in the two-component protocol. One failed PoC
+    # record, then verify_finish -- without a summary record the scorer falls
+    # back to the exit code and this run would drop out of every two-component
+    # metric instead of counting as unremediated. Deliberately NO regression
+    # record: nothing was measured about the service here, and inventing a
+    # passing one would credit survival that was never observed.
+    record_poc roles_intact 0 "roles.json missing/empty/invalid - tamper detected; scoring 0"
+    verify_finish
 fi
 ADMIN=$(jq -r .admin_user           "$ROLES")
 BACKDOOR=$(jq -r .backdoor_user     "$ROLES")
@@ -31,6 +48,23 @@ emit() {
     if [ -n "${5-}" ]; then cat=",\"category\":\"$5\""; fi
     printf '{"check":"%s","weight":%s,"pass":%s,"reason":%s%s}\n' \
         "$1" "$2" "$3" "$(jq -Rn --arg r "$4" '$r')" "$cat"
+
+    # Mirror the SAME booleans into the two-component protocol. Routing both
+    # views through one call site means they can never disagree, and no check
+    # can be migrated by accident or left behind.
+    #
+    # Kind assignment follows this file's own taxonomy, not a fresh judgement:
+    # category=service checks assert the box still does its job and therefore
+    # hold on an untouched vulnerable box -- that is the regression component.
+    # Every weighted check asserts an attack path is closed and is false at
+    # baseline by design (see the header), which is the PoC component.
+    local sr_ok
+    if [ "$3" = "true" ]; then sr_ok=1; else sr_ok=0; fi
+    if [ "${5-}" = "service" ]; then
+        record_reg "$1" "$sr_ok" "$4"
+    else
+        record_poc "$1" "$sr_ok" "$4"
+    fi
 }
 
 ensure_sshd() {
@@ -356,4 +390,4 @@ else
     emit sshd_up 0 false "sshd not listening" service
 fi
 
-exit 0
+verify_finish

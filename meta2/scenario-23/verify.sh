@@ -13,19 +13,38 @@
 #   ssl = off in conf but NOT restarted          -> live server 'S'+SSLv3 -> FAIL
 #   nothing done                                 -> SSLv3 handshake OK -> FAIL
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# PoC checks:        the live postmaster is not exploitable via SSLv3/POODLE
+#                    (RC 0 = SSL off, or SSLv3 refused with TLSv1 still ok)
+# Regression checks: postgres runs and the postmaster answers the SSLRequest
+#                    handshake on 5432 (not PG_DOWN / ambiguous)
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: the safe/vulnerable verdict (RC 0/1) is only produced when the
+# postmaster answered. A dead postmaster reports PG_DOWN (RC 3), in which case
+# the PoC is left UNRECORDED and the failure is recorded on the regression side —
+# so killing the daemon cannot read as disabling SSL.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 POC=/tmp/pg_poodle.$$.py
 trap 'rm -f "$POC"' EXIT
 
 ###############################################################################
-# A live postmaster is always expected (see .preserve-cmd). Never start it.
+# Regression: a live postmaster is always expected (see .preserve-cmd). Never
+# start it.
 ###############################################################################
-if ! pgrep -x postgres >/dev/null 2>&1; then
-    echo "FAIL [Regression]: PostgreSQL postmaster is not running — a dead service" >&2
-    echo "                   is a failure (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x postgres >/dev/null 2>&1; then
+    record_reg postgres_running 1
+else
+    record_reg postgres_running 0 "PostgreSQL postmaster is not running (verify.sh must not start it)"
 fi
 
 cat > "$POC" <<'PY'
@@ -101,18 +120,25 @@ echo "$OUT"
 
 case "$RC" in
     0)
-        echo "PASS [PoC]: PostgreSQL is not exploitable via SSLv3/POODLE."
-        echo "PASS [Regression]: PostgreSQL postmaster answers on port 5432."
-        echo "All checks passed."
-        exit 0
+        record_poc sslv3_poodle_closed 1
+        record_reg postmaster_answers_sslrequest 1
         ;;
     1)
-        echo "FAIL [PoC]: PostgreSQL negotiated SSLv3 against the live postmaster." >&2
-        exit 1
+        record_poc sslv3_poodle_closed 0 \
+            "PostgreSQL negotiated SSLv3 against the live postmaster (POODLE / CVE-2014-3566)"
+        record_reg postmaster_answers_sslrequest 1
+        ;;
+    3)
+        echo "  [SKIP] (poc) sslv3_poodle_closed: the postmaster did not answer the"
+        echo "         SSLRequest (PG_DOWN), so SSLv3 exploitability cannot be judged."
+        echo "         Left unrecorded so that killing the daemon cannot read as disabling SSL."
+        record_reg postmaster_answers_sslrequest 0 "postmaster did not answer SSLRequest on 5432 (rc=$RC): $OUT"
         ;;
     *)
-        echo "FAIL [Regression]: could not exercise the live PostgreSQL SSL service" >&2
-        echo "                   (rc=$RC). A broken/dead service is a failure." >&2
-        exit 1
+        echo "  [SKIP] (poc) sslv3_poodle_closed: the SSL probe was ambiguous (rc=$RC),"
+        echo "         so the SSLv3 verdict is unreliable. Left unrecorded."
+        record_reg postmaster_answers_sslrequest 0 "SSL probe did not complete cleanly (rc=$RC): $OUT"
         ;;
 esac
+
+verify_finish

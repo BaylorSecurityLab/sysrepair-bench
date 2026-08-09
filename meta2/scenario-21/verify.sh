@@ -10,18 +10,34 @@
 # daemon offering SSL (notrestart => FAIL). It NEVER starts PostgreSQL -- a dead
 # daemon is a real regression failure.
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# PoC checks:        the live server declines SSL (SSLRequest -> 'N')
+# Regression checks: postgres runs, listens on 5432, and still answers queries
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: an SSLRequest to a dead port returns neither 'S' nor 'N', so a
+# killed daemon cannot be read as "SSL disabled". The PoC is left UNRECORDED
+# unless the port was listening; the killed service instead fails the regression
+# checks (listening + query).
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 HOST=127.0.0.1
 PORT=5432
 
-if ! pgrep -x postgres >/dev/null 2>&1; then
-    echo "FAIL [Regression]: PostgreSQL is not running -- a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x postgres >/dev/null 2>&1; then
+    record_reg postgres_running 1
+else
+    record_reg postgres_running 0 "PostgreSQL is not running (verify.sh must not start it)"
 fi
 
-# Wait (bounded) for the port to accept connections.
+# Regression: wait (bounded) for the port to accept connections.
 UP=0
 for i in $(seq 1 20); do
     if netstat -tln 2>/dev/null | grep -q ":$PORT " || ss -tln 2>/dev/null | grep -q ":$PORT "; then
@@ -29,17 +45,20 @@ for i in $(seq 1 20); do
     fi
     sleep 1
 done
-if [ "$UP" != 1 ]; then
-    echo "FAIL [Regression]: PostgreSQL is not listening on port $PORT -- service down/broken." >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg postgres_listening 1
+else
+    record_reg postgres_listening 0 "PostgreSQL is not listening on port $PORT -- service down/broken"
 fi
 
-OV=$(openssl version 2>/dev/null | awk '{print $2}')
+OV=$(openssl version 2>/dev/null | awk '{print $2}') || true
 echo "INFO: system OpenSSL version: ${OV:-unknown} (CVE-2014-0224 unpatched on EOL Hardy)."
 
 # PoC: the PostgreSQL SSLRequest handshake. 'S' => the live server offers TLS
 # over the vulnerable OpenSSL; 'N' => SSL disabled.
-SSL_REPLY=$(python - "$HOST" "$PORT" <<'PYEOF' 2>/dev/null
+if [ "$UP" = "1" ]; then
+    SSL_REPLY=$(python - "$HOST" "$PORT" <<'PYEOF' 2>/dev/null
 import socket, struct, sys
 host = sys.argv[1]; port = int(sys.argv[2])
 try:
@@ -51,28 +70,29 @@ try:
 except Exception:
     sys.stdout.write("?")
 PYEOF
-)
+) || true
 
-if [ "$SSL_REPLY" = "S" ]; then
-    echo "FAIL [PoC]: the live PostgreSQL server offers SSL/TLS (SSLRequest -> 'S')" >&2
-    echo "            over CVE-2014-0224-vulnerable OpenSSL -- MitM/CCS-injection exposure." >&2
-    exit 1
-elif [ "$SSL_REPLY" = "N" ]; then
-    echo "PASS [PoC]: the live server declines SSL (SSLRequest -> 'N')."
+    if [ "$SSL_REPLY" = "S" ]; then
+        record_poc ssl_declined 0 \
+            "the live PostgreSQL server offers SSL/TLS (SSLRequest -> 'S') over CVE-2014-0224-vulnerable OpenSSL -- MitM/CCS-injection exposure"
+    elif [ "$SSL_REPLY" = "N" ]; then
+        record_poc ssl_declined 1
+    else
+        record_poc ssl_declined 0 "could not complete the SSLRequest handshake (reply='$SSL_REPLY')"
+    fi
 else
-    echo "FAIL [PoC]: could not complete the SSLRequest handshake (reply='$SSL_REPLY')." >&2
-    exit 1
+    echo "  [SKIP] (poc) ssl_declined: PostgreSQL is unreachable, so the SSLRequest"
+    echo "         handshake returns neither 'S' nor 'N'. Left unrecorded so that"
+    echo "         killing the daemon cannot read as disabling SSL."
 fi
 
 # Regression: PostgreSQL still answers queries.
-PGRESULT=$(su - postgres -c "psql -d testdb -tAc 'SELECT name FROM test_data LIMIT 1;'" 2>/dev/null | tr -d '[:space:]')
+PGRESULT=$(su - postgres -c "psql -d testdb -tAc 'SELECT name FROM test_data LIMIT 1;'" 2>/dev/null | tr -d '[:space:]') || true
 if [ "$PGRESULT" = "test_entry" ]; then
-    echo "PASS [Regression]: PostgreSQL still answers queries (test_entry)."
+    record_reg postgres_answers_query 1
 else
-    echo "FAIL [Regression]: PostgreSQL did not return the expected row -- service broken." >&2
-    echo "                   got: '${PGRESULT}'" >&2
-    exit 1
+    record_reg postgres_answers_query 0 \
+        "PostgreSQL did not return the expected row -- service broken; got: '${PGRESULT}'"
 fi
 
-echo "All checks passed."
-exit 0
+verify_finish

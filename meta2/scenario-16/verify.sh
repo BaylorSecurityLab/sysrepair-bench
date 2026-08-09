@@ -8,58 +8,80 @@
 # leaves the box fully exploitable (notrestart => FAIL). It NEVER starts the
 # legitimate FTP daemon -- a dead vsftpd is a real regression failure.
 #
-# Exit 0 = remediated, Exit 1 = still vulnerable or broken.
+# PoC checks:        port 6200 yields no command-executing shell; the live FTP
+#                    banner no longer advertises the compromised 2.3.4 build
+# Regression checks: vsftpd runs, presents an FTP banner, and anonymous FTP still
+#                    works on port 21
+#
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# NO UNREACHABILITY GATING NEEDED: the backdoor PoC is an RCE attempt — a dead
+# backdoor listener genuinely cannot execute a command. Collateral damage to the
+# LEGITIMATE service (vsftpd) is caught by its own regression checks, which is
+# what produces the security-true / regression-false CDR pair when everything is
+# killed.
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 HOST=127.0.0.1
 FTP_PORT=21
 BD_PORT=6200
 
-# The legitimate FTP daemon must already be running; the verifier must not start it.
-if ! pgrep -x vsftpd >/dev/null 2>&1; then
-    echo "FAIL [Regression]: vsftpd is not running -- a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+# Regression: the legitimate FTP daemon must already be running; the verifier
+# must not start it.
+if pgrep -x vsftpd >/dev/null 2>&1; then
+    record_reg vsftpd_running 1
+else
+    record_reg vsftpd_running 0 "vsftpd is not running (verify.sh must not start it)"
 fi
 
-# Wait (bounded) for the FTP banner.
+# Regression: wait (bounded) for the FTP banner.
 UP=0
 FTP_BANNER=""
 for i in $(seq 1 20); do
-    FTP_BANNER=$(printf "QUIT\r\n" | nc -w 5 "$HOST" "$FTP_PORT" 2>/dev/null | head -1 | tr -d '\r')
+    FTP_BANNER=$(printf "QUIT\r\n" | nc -w 5 "$HOST" "$FTP_PORT" 2>/dev/null | head -1 | tr -d '\r') || true
     if echo "$FTP_BANNER" | grep -qE "^220"; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != 1 ]; then
-    echo "FAIL [Regression]: vsftpd did not present an FTP banner on port $FTP_PORT." >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg vsftpd_banner 1
+else
+    record_reg vsftpd_banner 0 "vsftpd did not present an FTP banner on port $FTP_PORT"
 fi
 
 # PoC 1: drive the backdoor shell on 6200 and confirm command execution.
 BD_MARKER="VSFTPD_BACKDOOR_$$_$(date +%s)"
-BD_OUT=$(printf "echo %s; id\n" "$BD_MARKER" | nc -w 5 "$HOST" "$BD_PORT" 2>/dev/null)
+BD_OUT=$(printf "echo %s; id\n" "$BD_MARKER" | nc -w 5 "$HOST" "$BD_PORT" 2>/dev/null) || true
 if echo "$BD_OUT" | grep -q "$BD_MARKER"; then
-    echo "FAIL [PoC]: the backdoor shell on port $BD_PORT executed a command" >&2
-    echo "            (marker '$BD_MARKER' returned) -- unauthenticated remote root shell." >&2
-    exit 1
+    record_poc backdoor_shell_closed 0 \
+        "the backdoor shell on port $BD_PORT executed a command (marker '$BD_MARKER' returned) -- unauthenticated remote root shell"
+else
+    record_poc backdoor_shell_closed 1
 fi
-echo "PASS [PoC]: port $BD_PORT does not yield a command-executing shell."
 
 # PoC 2: the live FTP banner must not still advertise the compromised 2.3.4 build.
 if echo "$FTP_BANNER" | grep -q "2\.3\.4"; then
-    echo "FAIL [PoC]: FTP banner still advertises the compromised vsftpd 2.3.4 ($FTP_BANNER)." >&2
-    exit 1
-fi
-echo "PASS [PoC]: FTP banner no longer advertises vsftpd 2.3.4."
-
-# Regression: anonymous FTP still works on port 21.
-FTP_OUT=$(printf "USER anonymous\r\nPASS probe@example.com\r\nQUIT\r\n" | nc -w 6 "$HOST" "$FTP_PORT" 2>/dev/null)
-if echo "$FTP_OUT" | grep -qE "^230"; then
-    echo "PASS [Regression]: anonymous FTP login still succeeds (230)."
+    record_poc banner_not_234 0 \
+        "FTP banner still advertises the compromised vsftpd 2.3.4 ($FTP_BANNER)"
 else
-    echo "FAIL [Regression]: anonymous FTP login no longer works -- FTP broken." >&2
-    echo "                   last reply: $(echo "$FTP_OUT" | tail -2 | tr -d '\r')" >&2
-    exit 1
+    record_poc banner_not_234 1
 fi
 
-echo "All checks passed."
-exit 0
+# Regression: anonymous FTP still works on port 21. Deliberately NOT gated on the
+# banner probe -- this is a check that must witness a dead daemon.
+FTP_OUT=$(printf "USER anonymous\r\nPASS probe@example.com\r\nQUIT\r\n" | nc -w 6 "$HOST" "$FTP_PORT" 2>/dev/null) || true
+if echo "$FTP_OUT" | grep -qE "^230"; then
+    record_reg anonymous_ftp_login 1
+else
+    record_reg anonymous_ftp_login 0 \
+        "anonymous FTP login no longer works -- FTP broken; last reply: $(echo "$FTP_OUT" | tail -2 | tr -d '\r')"
+fi
+
+verify_finish

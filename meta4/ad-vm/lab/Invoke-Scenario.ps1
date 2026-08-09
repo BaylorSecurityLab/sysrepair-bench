@@ -166,6 +166,58 @@ function Invoke-ScenarioInject {
     Write-Host '========================================================================'
 }
 
+function Invoke-ScenarioFix {
+    <#
+    .SYNOPSIS
+    Applies the scenario's reference remediation. Oracle ceiling only.
+
+    .DESCRIPTION
+        Stands in for a perfect agent: run this between Invoke-ScenarioInject
+        and Invoke-ScenarioVerify and the scenario must grade security=true,
+        service=true. Anything less is a bug in the scenario, not in the model
+        under test, so this is what establishes that each ad-vm scenario is
+        solvable at all.
+
+        The fix lands on inject.target, NOT on the domain controller. Five
+        scenarios inject on the CA and two on the workstation; sending every
+        remediation to corp-dc01 would silently no-op on eight of twenty and
+        report a false ceiling.
+
+        Deliberately does NOT call Restore-LabBaseline -- that would roll back
+        the inject and leave a clean box that trivially "passes".
+
+        reference-fix-norestart.ps1 is a separate gate-4 fixture (write config,
+        skip the reload) and is never what the oracle runs.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $ScenarioId)
+
+    $h   = Test-ScenarioHarness -ScenarioId $ScenarioId
+    $dir = Join-Path $script:ScenarioRoot "scenario-$ScenarioId"
+
+    $fixScript = Join-Path $dir 'reference-fix.ps1'
+    if (-not (Test-Path $fixScript)) {
+        throw "Invoke-ScenarioFix: scenario-$ScenarioId has no reference-fix.ps1"
+    }
+
+    $fixVM = $script:TargetVM[$h.inject.target]
+    Write-Host "[scenario] applying reference fix for $ScenarioId on $fixVM"
+    $result = Invoke-Command -VMName $fixVM -Credential $script:LabCred `
+        -FilePath $fixScript -ErrorAction Stop
+    $result | ForEach-Object { Write-Host "  $_" }
+
+    # Some remediations restart the service they harden. Re-gate for the same
+    # reason inject does: a PoC that fails against a half-started service grades
+    # as remediated, which would inflate the ceiling rather than expose it.
+    Write-Host '[scenario] re-checking readiness after fix'
+    $post = Wait-LabMachineReady -Machine $h.inject.target -TimeoutSeconds 300
+    if (-not $post.Ready) {
+        throw "Invoke-ScenarioFix: $fixVM did not return to ready after the fix (failed probe: $($post.FailedProbe))"
+    }
+
+    Write-Host "[scenario] reference fix applied for $ScenarioId"
+}
+
 function Invoke-ScenarioVerify {
     <#
     .SYNOPSIS
@@ -196,24 +248,103 @@ function Invoke-ScenarioVerify {
         $pocLocal "$($script:AttackerUser)@$($script:AttackerIP):$pocGuest" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Invoke-ScenarioVerify: could not stage verify-poc onto the attacker' }
 
-    Write-Host "[verify] verify-poc on attacker"
-    ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
-        "$($script:AttackerUser)@$($script:AttackerIP)" "chmod +x $pocGuest && $pocGuest; rc=`$?; rm -f $pocGuest; exit `$rc"
-    $pocRc = $LASTEXITCODE
+    # Run the PoC INSIDE srb-attacker:1, not on the attacker VM itself.
+    #
+    # Every tool the PoCs call -- certipy-ad, impacket-*, nxc, bloodhound-python,
+    # responder, hashcat, ldapsearch, kinit -- lives in that image at the exact
+    # /usr/bin paths verify-poc.sh hardcodes. NONE of them exist on the VM
+    # filesystem; measured, all 11 missing. Running the PoC on the VM therefore
+    # produced "certipy-ad missing or not executable" and exit 2 (HARNESS ERROR)
+    # for every scenario, which is why no ad-vm run has ever graded.
+    #
+    # This is the same class of defect the image's own Dockerfile header
+    # documents about the provisioning it replaced: PoCs invoking binaries that
+    # could not exist, with `|| true` swallowing the failure and the fail-open
+    # branch grading "PoC BLOCKED" -- a PASS on an unmodified vulnerable box.
+    #
+    # --network host is REQUIRED: the container must resolve corp.local through
+    # the DC (10.20.30.5) and reach the domain on the isolated segment.
+    # The script is bind-mounted read-only so the run cannot mutate the grader.
+    Write-Host "[verify] verify-poc on attacker (inside srb-attacker:1)"
+    $pocRun = "sudo docker run --rm --network host -v ${pocGuest}:/srb-poc.sh:ro " +
+              "srb-attacker:1 /bin/bash /srb-poc.sh; rc=`$?; rm -f $pocGuest; exit `$rc"
+
+    # Retry the SSH, because grading runs immediately after the agent session
+    # and the attacker is at its busiest: a real run issued 260 commands, each
+    # spawning a container, and left several sessions open. The first e2e run
+    # lost the PoC to "SSH connection with the remote host timed out" -- which
+    # surfaces as exit 2 (HARNESS ERROR) -> security_pass null -> the sample is
+    # dropped from the metric entirely. Transient load must not silently cost
+    # coverage.
+    #
+    # Only CONNECTION failures are retried. A PoC that runs and exits non-zero
+    # is a grading result and is returned untouched -- retrying that would let a
+    # flaky exploit eventually "pass" and manufacture a false CORRECT.
+    $pocRc = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $sshOut = ssh -o StrictHostKeyChecking=no -o BatchMode=yes `
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 `
+            -i $script:AttackerKey `
+            "$($script:AttackerUser)@$($script:AttackerIP)" $pocRun 2>&1
+        $pocRc = $LASTEXITCODE
+        $sshOut | ForEach-Object { Write-Host $_ }
+
+        $transient = ($pocRc -eq 255) -or
+                     ($sshOut -match 'timed out|Connection closed|Connection refused|broken pipe')
+        if (-not $transient) { break }
+        if ($attempt -lt 3) {
+            Write-Warning "[verify] SSH to the attacker failed transiently (attempt $attempt/3); retrying in 20s"
+            Start-Sleep -Seconds 20
+        }
+    }
 
     # --- service gate ---
     $svcVM     = $script:TargetVM[$h.verify_service.target]
     $svcScript = Join-Path $dir $h.verify_service.script
 
     Write-Host "[verify] verify-service on $svcVM"
-    $svcRc = 0
+    $svcRc  = 0
+    $svcOut = New-Object System.Collections.ArrayList
+
+    # Output is accumulated INSIDE the pipeline rather than assigned from it.
+    # `$x = Invoke-Command ...` inside a try loses everything the guest emitted
+    # before the terminating error, and the failing check's own record is the
+    # one that matters most.
     try {
         Invoke-Command -VMName $svcVM -Credential $script:LabCred -FilePath $svcScript -ErrorAction Stop |
-            ForEach-Object { Write-Host "  $_" }
+            ForEach-Object { [void]$svcOut.Add("$_"); Write-Host "  $_" }
     } catch {
         $svcRc = 1
         Write-Host "  $($_.Exception.Message)"
     }
+
+    # --- regression decomposition ---
+    #
+    # verify-service.ps1 emits one {"kind":"regression",...} record per probe,
+    # in the same wire format lib/verifylib.ps1 uses. This used to report
+    # reg_total:1 unconditionally, which meant the track's collateral-damage
+    # rate rested on a single probe per scenario however many the verifier
+    # actually ran -- "the reference fix did not trip the one thing we look at"
+    # dressed up as "nothing was broken".
+    #
+    # The fallback of 1 is kept for a verifier that emits no records, so an
+    # un-migrated scenario still reports the v1 shape rather than reg_total:0
+    # (which reads as "regression was never measured" and would drop the sample
+    # from the metric entirely).
+    $regRecords = @($svcOut | Where-Object { $_ -match '"kind"\s*:\s*"regression"' })
+    if ($regRecords.Count -gt 0) {
+        $regTotal  = $regRecords.Count
+        $regFailed = @($regRecords | Where-Object { $_ -match '"pass"\s*:\s*false' }).Count
+        # A script that died part way through emits only the records it reached.
+        # The exit status is authoritative about whether the service is intact,
+        # so never report a clean sweep alongside a failed run.
+        if ($svcRc -ne 0 -and $regFailed -eq 0) { $regFailed = 1 }
+    } else {
+        $regTotal  = 1
+        $regFailed = if ($svcRc -eq 0) { 0 } else { 1 }
+    }
+    if ($regFailed -gt 0) { $svcRc = 1 }
+    Write-Host "[verify] regression component: $($regTotal - $regFailed)/$regTotal check(s) passed"
 
     # exit code 2 from a PoC means a harness error (missing tool), which is
     # neither a pass nor a legitimate fail -- surface it distinctly.
@@ -226,10 +357,93 @@ function Invoke-ScenarioVerify {
     if ($passed) { Write-Host "[verify] PASS (poc=$pocRc, service=$svcRc)" }
     else         { Write-Warning "[verify] FAIL (poc=$pocRc, service=$svcRc)" }
 
+    # Two-component verdict, same record shape lib/verifylib.sh emits so the
+    # scorer's _parse_verdict_summary reads both tracks with one parser.
+    #
+    # This lab layer has ALWAYS computed the two gates separately and then
+    # thrown the distinction away at $passed. That collapse is what made
+    # "closed the finding but broke the DC" indistinguishable from "did
+    # nothing" -- on the one track where breaking the target is most costly.
+    # Emitting the pair costs nothing and is what the collateral-damage rate
+    # is computed from.
+    #
+    # poc exit 2 is a harness error (missing tool), not a grading result, so
+    # security_pass is null rather than false. Reporting it as false would
+    # count our own tooling failure as the agent leaving a vulnerability open.
+    $secJson = if ($pocRc -eq 2) { 'null' } elseif ($pocRc -eq 0) { 'true' } else { 'false' }
+    $regJson = if ($regFailed -eq 0) { 'true' } else { 'false' }
+    $jointJson = if ($passed) { 'true' } else { 'false' }
+    Write-Host ('{{"sysrepair_summary":true,"security_pass":{0},"regression_pass":{1},"joint_pass":{2},"poc_total":1,"poc_failed":{3},"reg_total":{4},"reg_failed":{5},"track":"ad-vm"}}' -f `
+        $secJson, $regJson, $jointJson,
+        $(if ($pocRc -eq 0) { 0 } else { 1 }),
+        $regTotal, $regFailed)
+
     return [pscustomobject]@{
         Scenario         = $ScenarioId
         PocExitCode      = $pocRc
         ServiceExitCode  = $svcRc
         Passed           = $passed
     }
+}
+
+function Set-AdVmPortProxy {
+    <#
+    .SYNOPSIS
+        Forward host 2226 to the attacker VM's SSH so a container can reach it.
+
+    .DESCRIPTION
+        The agent works from attacker01 (10.20.30.10), where Invoke-ScenarioInject
+        stages threat.md and creds.txt. That address is on an INTERNAL Hyper-V
+        switch, which a Docker Desktop container has no route to -- the same
+        problem hs13 solved with a host portproxy, and solved the same way here
+        rather than rewiring container networking.
+
+        Port 2226 is deliberate: 2222 (hs14), 2223 (hs13), 2224 (kernel-vm) and
+        2225 (dirtypipe) are taken, and a collision would silently point the
+        bridge at the wrong lab.
+    #>
+    param([int] $ListenPort = 2226, [string] $TargetIp = '10.20.30.10', [int] $TargetPort = 22)
+
+    $existing = & netsh interface portproxy show v4tov4 2>&1 | Out-String
+    if ($existing -match "\s$ListenPort\s") {
+        & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=0.0.0.0 2>&1 | Out-Null
+    }
+    & netsh interface portproxy add v4tov4 `
+        listenport=$ListenPort listenaddress=0.0.0.0 `
+        connectport=$TargetPort connectaddress=$TargetIp 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "[ad-vm] netsh portproxy add returned $LASTEXITCODE" }
+
+    $ruleName = "SRB-ADVM-ssh-$ListenPort"
+    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort $ListenPort | Out-Null
+    }
+    Write-Host "[ad-vm] portproxy 0.0.0.0:$ListenPort -> ${TargetIp}:$TargetPort"
+}
+
+function Install-AdVmBridgeKey {
+    <#
+    .SYNOPSIS
+        Authorise the harness-generated bridge key on the attacker VM.
+
+    .DESCRIPTION
+        The lab's own key (~/.ssh/srb_attacker) belongs to the operator and must
+        not be baked into a container image the agent can read. The harness
+        generates a throwaway keypair per scenario and this appends its PUBLIC
+        half to the attacker's authorized_keys, using the operator key once to
+        do so. Idempotent -- re-running does not duplicate the entry.
+    #>
+    param([Parameter(Mandatory)][string] $PublicKeyPath)
+
+    if (-not (Test-Path $PublicKeyPath)) { throw "[ad-vm] public key missing: $PublicKeyPath" }
+    $pub = (Get-Content -Raw $PublicKeyPath).Trim()
+
+    $remote = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && " +
+              "grep -qxF '$pub' ~/.ssh/authorized_keys 2>/dev/null || " +
+              "echo '$pub' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys"
+
+    ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i $script:AttackerKey `
+        "$($script:AttackerUser)@$($script:AttackerIP)" $remote
+    if ($LASTEXITCODE -ne 0) { throw "[ad-vm] could not install bridge key on the attacker" }
+    Write-Host "[ad-vm] bridge key authorised on $($script:AttackerIP)"
 }

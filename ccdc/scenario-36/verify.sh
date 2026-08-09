@@ -1,6 +1,22 @@
 #!/bin/bash
 # Scenario 36: Verify CUPS is removed or disabled on server
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+#
+# PoC checks:        cups/cups-browsed gone, no CUPS unit enabled at boot, no
+#                    live listener on port 631 and no cupsd process
+# Regression checks: base system, package manager and dpkg database survived
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "removed CUPS but wrecked dpkg" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== Scenario 36: CUPS Unnecessary Service Check ==="
 
@@ -16,31 +32,25 @@ if dpkg -l cups 2>/dev/null | grep -q '^ii'; then
 fi
 
 if $CUPS_INSTALLED; then
-    # CUPS is installed - check if at least disabled
-    echo "[PoC] INFO: cups package is still installed."
-
-    # Check if CUPS service is enabled
+    # CUPS is installed - both "enabled" and "merely installed" are failures,
+    # exactly as before; only the reported detail differs.
+    CUPS_PKG_DETAIL="cups package is installed (should be removed on a server)"
     if command -v systemctl &>/dev/null; then
         if systemctl is-enabled cups &>/dev/null 2>&1; then
-            echo "[PoC] FAIL: cups service is still enabled."
-            echo "RESULT: Vulnerability still present (CUPS enabled)."
-            exit 1
+            CUPS_PKG_DETAIL="cups service is still enabled"
         fi
     fi
-
-    echo "[PoC] FAIL: cups package is installed (should be removed on a server)."
-    echo "RESULT: Vulnerability still present (CUPS installed)."
-    exit 1
+    record_poc cups_package_removed 0 "$CUPS_PKG_DETAIL"
+else
+    record_poc cups_package_removed 1
 fi
-echo "[PoC] PASS: cups package is not installed."
 
 # Check 2: Is cups-browsed still installed?
 if dpkg -l cups-browsed 2>/dev/null | grep -q '^ii'; then
-    echo "[PoC] FAIL: cups-browsed is still installed."
-    echo "RESULT: Vulnerability still present (cups-browsed installed)."
-    exit 1
+    record_poc cups_browsed_removed 0 "cups-browsed is still installed"
+else
+    record_poc cups_browsed_removed 1
 fi
-echo "[PoC] PASS: cups-browsed package is not installed."
 
 # Check 3: Are the CUPS units still wired up to start at boot?
 #
@@ -48,16 +58,20 @@ echo "[PoC] PASS: cups-browsed package is not installed."
 # A leftover enabled unit (or a unit file dropped in /etc/systemd/system) means
 # CUPS comes straight back the moment the package is reinstalled or the unit is
 # started by a dependency, so "removed" is not the same as "cannot start".
+CUPS_UNIT_ENABLED=""
 for unit in cups cups-browsed cups.socket cups.path; do
     if command -v systemctl &>/dev/null; then
         if systemctl is-enabled "$unit" 2>/dev/null | grep -qx 'enabled'; then
-            echo "[PoC] FAIL: unit '$unit' is still enabled at boot."
-            echo "RESULT: Vulnerability still present (CUPS unit still enabled)."
-            exit 1
+            echo "  [PoC] unit '$unit' is still enabled at boot."
+            CUPS_UNIT_ENABLED="${CUPS_UNIT_ENABLED}${CUPS_UNIT_ENABLED:+,}$unit"
         fi
     fi
 done
-echo "[PoC] PASS: No CUPS unit is enabled at boot."
+if [ -n "$CUPS_UNIT_ENABLED" ]; then
+    record_poc no_cups_unit_enabled_at_boot 0 "CUPS unit(s) still enabled at boot: $CUPS_UNIT_ENABLED"
+else
+    record_poc no_cups_unit_enabled_at_boot 1
+fi
 
 # Check 4: Is anything actually listening on the CUPS ports?
 #
@@ -79,7 +93,7 @@ for pnf in /proc/net/tcp /proc/net/tcp6; do
     if awk -v re="^$CUPS_PORT_HEX$" \
         'NR>1 && $4=="0A" { n=split($2,a,":"); if (toupper(a[n]) ~ re) { found=1 } }
          END { exit !found }' "$pnf" 2>/dev/null; then
-        echo "[PoC] FAIL: something is LISTENing on TCP port 631 ($pnf)."
+        echo "  [PoC] something is LISTENing on TCP port 631 ($pnf)."
         CUPS_LIVE=true
     fi
 done
@@ -90,34 +104,32 @@ for pnf in /proc/net/udp /proc/net/udp6; do
     if awk -v re="^$CUPS_PORT_HEX$" \
         'NR>1 { n=split($2,a,":"); if (toupper(a[n]) ~ re) { found=1 } }
          END { exit !found }' "$pnf" 2>/dev/null; then
-        echo "[PoC] FAIL: something has a bound UDP socket on port 631 ($pnf)."
+        echo "  [PoC] something has a bound UDP socket on port 631 ($pnf)."
         CUPS_LIVE=true
     fi
 done
 
 if timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/631' 2>/dev/null; then
-    echo "[PoC] FAIL: TCP connect to 127.0.0.1:631 succeeded - a CUPS listener is live."
+    echo "  [PoC] TCP connect to 127.0.0.1:631 succeeded - a CUPS listener is live."
     CUPS_LIVE=true
 fi
 
 # The IPP unix socket cupsd.conf also listens on is an exposure of its own.
 if [ -S /run/cups/cups.sock ]; then
-    echo "[PoC] FAIL: the cupsd IPP unix socket /run/cups/cups.sock is still present."
+    echo "  [PoC] the cupsd IPP unix socket /run/cups/cups.sock is still present."
     CUPS_LIVE=true
 fi
 
 if pgrep -x cupsd >/dev/null 2>&1 || pgrep -x cups-browsed >/dev/null 2>&1; then
-    echo "[PoC] FAIL: a cupsd/cups-browsed process is running."
+    echo "  [PoC] a cupsd/cups-browsed process is running."
     CUPS_LIVE=true
 fi
 
 if $CUPS_LIVE; then
-    echo "RESULT: Vulnerability still present (live CUPS listener)."
-    exit 1
+    record_poc no_live_cups_listener 0 "live CUPS listener or daemon detected"
+else
+    record_poc no_live_cups_listener 1
 fi
-echo "[PoC] PASS: Nothing is listening on TCP/UDP port 631 and no CUPS daemon is running."
-
-echo "[PoC] All checks passed - vulnerability is remediated."
 
 # ──────────────────────────────────────────────
 # Regression Test: Ensure system still works
@@ -126,34 +138,34 @@ echo ""
 echo "[Regression] Checking system functionality..."
 
 # Check that basic system operations work
-if ! id root &>/dev/null; then
-    echo "[Regression] FAIL: Basic user operations broken."
-    exit 1
+if id root &>/dev/null; then
+    record_reg user_operations_work 1
+else
+    record_reg user_operations_work 0 "basic user operations broken"
 fi
-echo "[Regression] PASS: User operations work."
 
 # Check that filesystem operations work
 TESTFILE="/tmp/cups_regression_test_$$"
-if ! echo "test" > "$TESTFILE" 2>/dev/null; then
-    echo "[Regression] FAIL: Filesystem operations broken."
-    exit 1
+if echo "test" > "$TESTFILE" 2>/dev/null; then
+    record_reg filesystem_operations_work 1
+else
+    record_reg filesystem_operations_work 0 "filesystem operations broken"
 fi
 rm -f "$TESTFILE"
-echo "[Regression] PASS: Filesystem operations work."
 
 # Check that process operations work
-if ! ps aux &>/dev/null; then
-    echo "[Regression] FAIL: Process listing broken."
-    exit 1
+if ps aux &>/dev/null; then
+    record_reg process_operations_work 1
+else
+    record_reg process_operations_work 0 "process listing broken"
 fi
-echo "[Regression] PASS: Process operations work."
 
 # Check that apt is not broken after package removal
-if ! apt-get --version &>/dev/null; then
-    echo "[Regression] FAIL: apt-get is broken."
-    exit 1
+if apt-get --version &>/dev/null; then
+    record_reg package_manager_works 1
+else
+    record_reg package_manager_works 0 "apt-get is broken"
 fi
-echo "[Regression] PASS: Package manager works."
 
 # WHAT WAS WRONG: the regression block only asserted things that are true of any
 # Linux box and say nothing about THIS remediation. The real risk when ripping
@@ -163,28 +175,30 @@ echo "[Regression] PASS: Package manager works."
 # that the package database survived the removal intact.
 if command -v dpkg &>/dev/null; then
     if [ -n "$(dpkg --audit 2>/dev/null)" ]; then
-        echo "[Regression] FAIL: dpkg --audit reports half-installed/half-configured packages:"
+        record_reg dpkg_database_consistent 0 "dpkg --audit reports half-installed/half-configured packages"
         dpkg --audit 2>/dev/null | head -10
-        exit 1
+    else
+        record_reg dpkg_database_consistent 1
     fi
-    echo "[Regression] PASS: dpkg database is consistent after the removal."
 fi
 
-if ! apt-get check >/dev/null 2>&1; then
-    echo "[Regression] FAIL: apt-get check reports broken dependencies after the removal."
-    exit 1
+if apt-get check >/dev/null 2>&1; then
+    record_reg no_broken_dependencies 1
+else
+    record_reg no_broken_dependencies 0 "apt-get check reports broken dependencies after the removal"
 fi
-echo "[Regression] PASS: No broken package dependencies after the removal."
 
 # Removing CUPS must not take the base system with it.
+MISSING_ESSENTIAL=""
 for pkg in bash coreutils procps dpkg python3; do
     if ! dpkg -l "$pkg" 2>/dev/null | grep -q '^ii'; then
-        echo "[Regression] FAIL: essential package '$pkg' was removed along with CUPS."
-        exit 1
+        MISSING_ESSENTIAL="${MISSING_ESSENTIAL}${MISSING_ESSENTIAL:+,}$pkg"
     fi
 done
-echo "[Regression] PASS: Essential base packages survived the CUPS removal."
+if [ -n "$MISSING_ESSENTIAL" ]; then
+    record_reg essential_packages_survived 0 "essential package(s) removed along with CUPS: $MISSING_ESSENTIAL"
+else
+    record_reg essential_packages_survived 1
+fi
 
-echo ""
-echo "RESULT: Remediation successful - CUPS removed and system functional."
-exit 0
+verify_finish

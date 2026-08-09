@@ -31,14 +31,22 @@ ENV GLASSFISH_HOME=C:\\glassfish4\\glassfish
 
 # --- Ship the genuinely-vulnerable default state ---
 # The stock domain1 admin-keyfile stores the SSHA256 hash of the *empty* password
-# (admin;{SSHA256}...;asadmin). That non-empty hash field would make verify.ps1's
-# PoC-1 (empty-hash check) read as already-remediated even though the password is
-# empty. Overwrite the admin line with the canonical empty-password form so the
-# baseline is honestly vulnerable: empty password + plaintext admin listener.
-# secure-admin is left DISABLED (default), so :4848 stays plaintext HTTP and the
-# %c0%ae traversal probe can reach the admin console.
-RUN Set-Content -Path 'C:\glassfish4\glassfish\domains\domain1\config\admin-keyfile' \
-        -Value 'admin;;asadmin' -Encoding ASCII
+# (admin;{SSHA256}nd85GyUoUi+...;asadmin), and secure-admin is DISABLED by
+# default, so :4848 stays plaintext HTTP. That IS the vulnerable state and it is
+# shipped as-is: `GET http://localhost:4848/management/domain` answers 200 with
+# no credentials at all on this image, while a wrong password answers 401.
+#
+# This step used to overwrite the admin line with 'admin;;asadmin' -- a literally
+# empty hash field -- so that the verifier's PoC could look for an empty field
+# instead of testing the password. GlassFish's FileRealm cannot parse that line:
+# `asadmin start-domain` died with
+#     java.io.IOException: java.lang.IllegalArgumentException: No local string defined
+# and domain1 NEVER STARTED. Measured on the built image: no java process, nothing
+# listening on 4848 or 8080, server.log stopping at the launch record. The
+# regression check (glassfish_http_8080) could therefore never pass on an
+# untouched box, which makes joint_pass unreachable and the scenario unsolvable.
+# Restoring the stock keyfile starts the domain (4848 + 8080 listening, HTTP 200);
+# verify.ps1 now proves the empty password behaviourally instead.
 
 COPY scenario-07-glassfish/entrypoint.ps1 C:/entrypoint.ps1
 

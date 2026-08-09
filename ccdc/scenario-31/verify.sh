@@ -1,6 +1,15 @@
 #!/bin/bash
 # Scenario 31: Verify auditd is installed, running, and has rules configured
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+# Exit 0 = every check passed, Exit 1 = at least one check failed
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "installed auditd but broke the system" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== Scenario 31: auditd Installation and Configuration Check ==="
 
@@ -11,20 +20,18 @@ echo "[PoC] Checking if auditd is missing or unconfigured..."
 
 # Check 1: Is auditd installed?
 if ! command -v auditd &>/dev/null && ! dpkg -l auditd 2>/dev/null | grep -q '^ii'; then
-    echo "[PoC] FAIL: auditd is not installed."
-    echo "RESULT: Vulnerability still present (auditd not installed)."
-    exit 1
+    record_poc auditd_installed 0 "auditd is not installed"
+else
+    record_poc auditd_installed 1 "auditd package is installed"
 fi
-echo "[PoC] PASS: auditd package is installed."
 
 # Check 2: Is auditd service enabled?
 if command -v systemctl &>/dev/null; then
     if ! systemctl is-enabled auditd &>/dev/null 2>&1; then
-        echo "[PoC] FAIL: auditd service is not enabled."
-        echo "RESULT: Vulnerability still present (auditd not enabled)."
-        exit 1
+        record_poc auditd_service_enabled 0 "auditd service is not enabled"
+    else
+        record_poc auditd_service_enabled 1 "auditd service is enabled"
     fi
-    echo "[PoC] PASS: auditd service is enabled."
 fi
 
 # Check 3: Do audit rules exist?
@@ -50,13 +57,12 @@ fi
 RULES_DIRECTIVES=${RULES_DIRECTIVES:-0}
 
 if [ "$RULES_COUNT" -le 0 ] && [ "$RULES_DIRECTIVES" -lt 3 ]; then
-    echo "[PoC] FAIL: No meaningful audit rules are configured (files: $RULES_FILES, -a/-w directives on disk: $RULES_DIRECTIVES, live rules: $RULES_COUNT)."
-    echo "  The stock audit.rules shipped by the auditd package contains only control"
-    echo "  directives (-D/-b/-f); installing the package alone is not remediation."
-    echo "RESULT: Vulnerability still present (no audit rules)."
-    exit 1
+    # The stock audit.rules shipped by the auditd package contains only control
+    # directives (-D/-b/-f); installing the package alone is not remediation.
+    record_poc audit_rules_configured 0 "no meaningful audit rules are configured (files: $RULES_FILES, -a/-w directives on disk: $RULES_DIRECTIVES, live rules: $RULES_COUNT)"
+else
+    record_poc audit_rules_configured 1 "audit rules are configured (files: $RULES_FILES, -a/-w directives: $RULES_DIRECTIVES, live rules: $RULES_COUNT)"
 fi
-echo "[PoC] PASS: Audit rules are configured (files: $RULES_FILES, -a/-w directives: $RULES_DIRECTIVES, live rules: $RULES_COUNT)."
 
 # Check 4: Verify critical audit rules exist (at minimum, some key areas)
 RULES_CONTENT=""
@@ -83,11 +89,10 @@ if echo "$RULES_CONTENT" | grep -qE '(EACCES|EPERM|access)'; then
 fi
 
 if ! $HAS_TIME_RULES && ! $HAS_IDENTITY_RULES && ! $HAS_ACCESS_RULES; then
-    echo "[PoC] FAIL: No meaningful security audit rules found."
-    echo "RESULT: Vulnerability still present (audit rules insufficient)."
-    exit 1
+    record_poc security_relevant_rules_present 0 "no meaningful security audit rules found"
+else
+    record_poc security_relevant_rules_present 1 "security-relevant audit rules are present"
 fi
-echo "[PoC] PASS: Security-relevant audit rules are present."
 
 # --- PoC Behavioral Test: audit subsystem is live in the running kernel ---
 #
@@ -127,7 +132,7 @@ DAEMON_UP=false
 if ps -eo stat=,comm= 2>/dev/null | awk '$2=="auditd" && $1 !~ /Z/ {found=1} END{exit !found}'; then
     DAEMON_UP=true
     AUDIT_LIVE=true
-    echo "[PoC] PASS: auditd daemon process is running."
+    echo "[PoC] INFO: auditd daemon process is running."
 elif ps -eo stat=,comm= 2>/dev/null | awk '$2=="auditd" && $1 ~ /Z/ {found=1} END{exit !found}'; then
     echo "[PoC] INFO: an auditd process exists but is DEFUNCT (zombie) - not counted as running."
 fi
@@ -139,12 +144,12 @@ if ! $DAEMON_UP; then
         if systemctl is-enabled auditd &>/dev/null 2>&1; then
             AUDIT_LIVE=true
             echo "[PoC] INFO: audit netlink is blocked in this namespace (auditd cannot stay resident);"
-            echo "[PoC] PASS: auditd is installed and enabled to start at boot."
+            echo "[PoC] INFO:   auditd is installed and enabled to start at boot."
         else
-            echo "[PoC] FAIL: auditd is not running and not enabled to start at boot."
+            echo "[PoC] INFO: auditd is not running and not enabled to start at boot."
         fi
     else
-        echo "[PoC] FAIL: auditd daemon process is not running."
+        echo "[PoC] INFO: auditd daemon process is not running."
     fi
 fi
 LOADED_RULES=0
@@ -153,20 +158,18 @@ if [ -f /etc/audit/audit.rules ]; then
 fi
 LOADED_RULES=${LOADED_RULES:-0}
 if [ "$LOADED_RULES" -ge 3 ] || [ "${LIVE_RULES:-0}" -gt 0 ]; then
-    echo "[PoC] PASS: hardening rules present in the loaded rule set ($LOADED_RULES compiled, $LIVE_RULES live)."
+    record_poc audit_rules_compiled_and_loaded 1 "hardening rules present in the loaded rule set ($LOADED_RULES compiled, $LIVE_RULES live)"
 else
-    echo "[PoC] FAIL: rules were dropped in rules.d but never compiled/loaded (augenrules --load / auditctl -R not run)."
+    record_poc audit_rules_compiled_and_loaded 0 "rules were dropped in rules.d but never compiled/loaded (augenrules --load / auditctl -R not run)"
     AUDIT_LIVE=false
     DAEMON_UP=false
 fi
 
 if ! $AUDIT_LIVE; then
-    echo "[PoC] FAIL: audit subsystem is not active in the running kernel (no daemon, no live rules, auditctl -s not enabled)."
-    echo "RESULT: Vulnerability still present (audit not live)."
-    exit 1
+    record_poc audit_subsystem_live 0 "audit subsystem is not active in the running kernel (no daemon, no live rules, auditctl -s not enabled)"
+else
+    record_poc audit_subsystem_live 1
 fi
-
-echo "[PoC] All checks passed - vulnerability is remediated."
 
 # ──────────────────────────────────────────────
 # Regression Test: Ensure system still works
@@ -175,28 +178,26 @@ echo ""
 echo "[Regression] Checking system functionality..."
 
 # Check that basic system operations work
-if ! id root &>/dev/null; then
-    echo "[Regression] FAIL: Basic user operations broken."
-    exit 1
+if id root &>/dev/null; then
+    record_reg user_operations_work 1
+else
+    record_reg user_operations_work 0 "basic user operations broken"
 fi
-echo "[Regression] PASS: User operations work."
 
 # Check that filesystem operations work
 TESTFILE="/tmp/audit_regression_test_$$"
-if ! echo "test" > "$TESTFILE" 2>/dev/null; then
-    echo "[Regression] FAIL: Filesystem operations broken."
-    exit 1
+if echo "test" > "$TESTFILE" 2>/dev/null; then
+    record_reg filesystem_operations_work 1
+    rm -f "$TESTFILE"
+else
+    record_reg filesystem_operations_work 0 "filesystem operations broken"
 fi
-rm -f "$TESTFILE"
-echo "[Regression] PASS: Filesystem operations work."
 
 # Check that process operations work
-if ! ps aux &>/dev/null; then
-    echo "[Regression] FAIL: Process listing broken."
-    exit 1
+if ps aux &>/dev/null; then
+    record_reg process_operations_work 1
+else
+    record_reg process_operations_work 0 "process listing broken"
 fi
-echo "[Regression] PASS: Process operations work."
 
-echo ""
-echo "RESULT: Remediation successful - auditd installed, configured, and system functional."
-exit 0
+verify_finish

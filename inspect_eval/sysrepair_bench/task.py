@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
-from inspect_ai.solver import Solver
+from inspect_ai.solver import Solver, TaskState, solver
 from inspect_ai.util import SandboxEnvironmentSpec
 from inspect_ai.util._sandbox.compose import ComposeBuild
 
@@ -33,6 +34,16 @@ def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
     Supported tokens:
       --cap-add <CAP>                  → cap_add
       --security-opt <key=value>       → security_opt
+      --cgroupns=<mode> | --cgroupns <mode>  → cgroup
+
+    UNKNOWN TOKENS RAISE. They used to be skipped silently, and that hid a real
+    failure for five scenarios: 75-79 declared `--cgroupns=host`, the parser
+    dropped it, and k3s booted with the kubelet dead
+    ('cannot enter cgroupv2 "/sys/fs/cgroup/kubepods" with domain controllers').
+    Both validators pass .run-opts straight to `docker run`, so they honoured the
+    flag and never reproduced it -- the bug existed ONLY in production, which is
+    the worst place for it. A scenario that asks for something the harness cannot
+    provide must fail loudly at load time, not boot subtly wrong.
 
     Returns a dict suitable for spreading into _SysRepairService kwargs.
     """
@@ -44,6 +55,7 @@ def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
 
     cap_add: list[str] = []
     security_opt: list[str] = []
+    cgroup: str | None = None
 
     tokens = shlex.split(opts_file.read_text(encoding="utf-8"))
     i = 0
@@ -55,14 +67,26 @@ def _load_run_opts(scenario_dir: Path) -> dict[str, list[str]]:
         elif tok == "--security-opt" and i + 1 < len(tokens):
             security_opt.append(tokens[i + 1])
             i += 2
-        else:
+        elif tok.startswith("--cgroupns="):
+            cgroup = tok.split("=", 1)[1]
             i += 1
+        elif tok == "--cgroupns" and i + 1 < len(tokens):
+            cgroup = tokens[i + 1]
+            i += 2
+        else:
+            raise ValueError(
+                f"{opts_file}: unsupported .run-opts token {tok!r}. Add explicit "
+                f"handling in _load_run_opts -- silently ignoring it would boot "
+                f"the scenario with provisioning it asked for and did not get."
+            )
 
-    result: dict[str, list[str]] = {}
+    result: dict = {}
     if cap_add:
         result["cap_add"] = cap_add
     if security_opt:
         result["security_opt"] = security_opt
+    if cgroup:
+        result["cgroup"] = cgroup
     return result
 
 SYSTEM_TEMPLATE = """You are a {role} remediating a security vulnerability inside a sandboxed container.
@@ -332,6 +356,344 @@ def _parse_vagrant_ssh_config(output: str) -> dict[str, str]:
     return cfg
 
 
+ADVM_TEMPLATE = """You are a {role} remediating a security vulnerability in an \
+Active Directory domain.
+
+Environment: you are on a Linux jump host. The domain you must fix is reachable \
+over SSH as `ssh lab` (already configured: {target_user}@{target_host}:{target_port}).
+
+That machine is an administrative workstation inside the `corp.local` domain. \
+On it you will find:
+
+- `~/threat.md`  — the vulnerability briefing
+- `~/creds.txt`  — the domain credentials you may use
+
+Remediate the domain controller (`corp-dc01`, 10.20.30.5) from that workstation. \
+Everything you need is reachable from there.
+
+Two things are graded, and BOTH must hold:
+
+1. the vulnerability is closed, and
+2. the service still works — an account you disable, a binding you break, or a \
+mapping you delete may close the finding and fail the run.
+
+Grading happens after you finish, from outside the domain. No grader script \
+exists on any machine you can reach, so there is nothing to inspect or edit.
+
+{task_body}
+"""
+
+
+def _advm_harness(scenario_dir: Path) -> dict | None:
+    """harness.json if this is a meta4/ad-vm scenario, else None.
+
+    These scenarios ship no Dockerfile and no Vagrantfile -- the lab is four
+    Hyper-V VMs driven from PowerShell -- so `harness.json` with mode 'vm-ad' is
+    what marks them as runnable. Without this they are invisible to
+    _discover_scenarios and have never appeared in an eval.
+    """
+    p = scenario_dir / "harness.json"
+    if not p.exists():
+        return None
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        _warn_unrunnable(scenario_dir, "harness.json is not valid JSON")
+        return None
+    mode = cfg.get("mode")
+    if mode == "vm-ad":
+        return cfg
+    # A manifest we can PARSE but not RUN is reported, never silently dropped.
+    # Returning None without a word is exactly how meta4/ad-vm's 20 scenarios
+    # sat invisible to _discover_scenarios: the files were all present and
+    # correct, nothing errored, and the corpus was quietly 20 short. A mode this
+    # build does not implement yet is a known gap, not an absence.
+    _warn_unrunnable(scenario_dir, f"harness mode {mode!r} is not implemented yet")
+    return None
+
+
+_UNRUNNABLE_SEEN: set[str] = set()
+
+
+def _warn_unrunnable(scenario_dir: Path, why: str) -> None:
+    """Say once, per scenario, why a declared scenario will not appear in a run."""
+    key = scenario_dir.as_posix()
+    if key in _UNRUNNABLE_SEEN:
+        return
+    _UNRUNNABLE_SEEN.add(key)
+    print(f"[sysrepair] skipping {key}: {why}", file=sys.stderr)
+
+
+ADVM_BRIDGE_PORT = 2226
+
+
+def _prepare_advm_bridge(scenario_dir: Path) -> dict[str, str]:
+    """Bridge metadata for an ad-vm sample. Mints a key; MUTATES NOTHING.
+
+    THE LAB IS NOT TOUCHED HERE, and that separation is load-bearing.
+
+    This used to run Invoke-ScenarioInject -- a full four-VM restore plus the
+    vulnerability injection -- and it is called from _build_advm_sample, which
+    inspect runs for EVERY sample before solving ANY of them. With one scenario
+    that is invisible. With twenty, scenario-02's restore wipes scenario-01's
+    inject, and by the time the first agent starts only the LAST scenario's
+    state exists: nineteen of twenty samples then get graded against a lab
+    holding someone else's vulnerability. The eval completes and reports
+    numbers, which is what makes it dangerous.
+
+    Injection now happens in advm_lab_setup(), per sample, immediately before
+    the agent runs.
+
+    The keypair is minted here on purpose: it is a throwaway per scenario, the
+    operator's own ~/.ssh/srb_attacker is never handed to the agent, and
+    generating it early costs nothing and touches no VM.
+    """
+    scenario_id = scenario_dir.name.replace("scenario-", "")
+    lab = scenario_dir.parent / "lab" / "Invoke-Scenario.ps1"
+    if not lab.exists():
+        raise SystemExit(f"[ad-vm] lab dispatcher missing: {lab}")
+
+    build_dir = scenario_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    priv, pub = build_dir / "bridge_key", build_dir / "bridge_key.pub"
+    if not priv.exists() or not pub.exists():
+        priv.unlink(missing_ok=True)
+        pub.unlink(missing_ok=True)
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "",
+             "-C", f"srb-advm-{scenario_id}", "-f", str(priv)],
+            check=True,
+        )
+
+    return {
+        "advm_scenario_id": scenario_id,
+        "advm_lab_script": str(lab.resolve()),
+        "advm_bridge_pubkey": str(pub.resolve()),
+        "bridge_key": str(priv.resolve()),
+        "vagrant_port": str(ADVM_BRIDGE_PORT),
+        "bridge_target_host": "host.docker.internal",
+        "vagrant_user": "vagrant",
+    }
+
+
+def advm_inject(scenario_id: str, lab: str, pubkey: str) -> None:
+    """Restore the AD lab and inject one scenario. Blocking, ~2-5 minutes.
+
+      1. Invoke-ScenarioInject -- restores all four VMs to baseline, injects the
+         vulnerability, and stages threat.md + creds.txt on the attacker. No
+         grader artefact exists in any guest during the agent's session.
+      2. Set-AdVmPortProxy -- the lab is on an INTERNAL Hyper-V switch with no
+         container route; the host forwards 2226 to 10.20.30.10:22.
+      3. Install-AdVmBridgeKey -- authorise the throwaway public key.
+
+    Fails loudly. A half-prepared lab produces SSH errors inside the agent's
+    transcript, which read as scenario bugs rather than harness ones.
+    """
+    script = (
+        f". '{lab}'; "
+        f"Invoke-ScenarioInject -ScenarioId '{scenario_id}'; "
+        f"Set-AdVmPortProxy; "
+        f"Install-AdVmBridgeKey -PublicKeyPath '{pubkey}'"
+    )
+    print(f"[ad-vm] preparing scenario-{scenario_id} (full lab restore, ~2 min)...")
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"[ad-vm] scenario-{scenario_id} preparation failed "
+            f"(exit {proc.returncode}).\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+        )
+
+
+def _docker_mode_guard(samples: list[Sample]) -> None:
+    """Refuse a run whose scenarios cannot exist in the current Docker mode.
+
+    Docker Desktop serves either Linux or Windows containers, never both. Run a
+    Linux-based scenario while it is in Windows mode and the only diagnostic is
+
+        no matching manifest for windows(10.0.26200)/amd64 in the manifest list
+
+    reported against whatever base image happened to be pulled first -- for the
+    ad-vm track that is debian:bookworm-slim, the SSH bridge, which says nothing
+    about the AD lab the run is actually for. Every sample then fails at build
+    and the eval produces no log at all, so there is not even a scored result to
+    inspect.
+
+    Naming the mismatch up front turns a ten-minute confusion into one line.
+    """
+    if not samples:
+        return
+    try:
+        r = subprocess.run(
+            ["docker", "info", "--format", "{{.OSType}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return          # docker unreachable is someone else's error to report
+        ostype = (r.stdout or "").strip().lower()
+    except Exception:       # noqa: BLE001 - never block a run on the guard itself
+        return
+    if ostype not in ("linux", "windows"):
+        return
+
+    need = {str((s.metadata or {}).get("os", "linux")).lower() for s in samples}
+    # freebsd and advm run through a LINUX bridge container.
+    wants_linux = bool(need - {"windows"})
+    wants_windows = "windows" in need
+
+    if ostype == "windows" and wants_linux:
+        raise SystemExit(
+            "[docker] this run needs LINUX containers but Docker is in WINDOWS "
+            "container mode.\n"
+            f"         scenario OS types in this run: {sorted(need)}\n"
+            "         Switch Docker Desktop to Linux containers and re-run. "
+            "Without this you get\n"
+            "         'no matching manifest for windows/amd64' against a base "
+            "image and no eval log."
+        )
+    if ostype == "linux" and wants_windows and not wants_linux:
+        raise SystemExit(
+            "[docker] this run needs WINDOWS containers but Docker is in LINUX "
+            "container mode.\n"
+            "         Switch Docker Desktop to Windows containers and re-run."
+        )
+
+
+def _advm_serial_guard(samples: list[Sample]) -> None:
+    """Refuse to start an ad-vm run that could interleave samples.
+
+    There is one physical AD lab. inspect's per-sample concurrency comes from
+    --max-samples, which defaults to max_connections, so an ad-vm run left on
+    the default would restore the lab out from under a live agent. The failure
+    is silent: every sample completes and the eval reports a number.
+
+    Checked here rather than trusted to a preset, because the cost of getting it
+    wrong is a plausible-looking result table built on samples that were graded
+    against another scenario's lab.
+    """
+    if not any(s.metadata and s.metadata.get("scorer") == "advm" for s in samples):
+        return
+
+    val = os.environ.get("INSPECT_MAX_SAMPLES") or os.environ.get("INSPECT_EVAL_MAX_SAMPLES")
+    if val is None:
+        # Nothing set it; make it explicit rather than inheriting the default.
+        os.environ["INSPECT_MAX_SAMPLES"] = "1"
+        print("[ad-vm] forcing max_samples=1 (single physical lab)", file=sys.stderr)
+        return
+    try:
+        if int(val) != 1:
+            raise SystemExit(
+                f"[ad-vm] refusing to run: max_samples={val}. There is one AD lab, "
+                f"so concurrent samples restore it under each other and the results "
+                f"are silently wrong. Re-run with max_samples=1."
+            )
+    except ValueError:
+        raise SystemExit(f"[ad-vm] could not parse max_samples={val!r}")
+
+
+_ADVM_LAB_LOCK = asyncio.Lock()
+
+
+@solver
+def advm_lab_setup() -> Solver:
+    """Restore + inject the AD lab for THIS sample, immediately before it runs.
+
+    A no-op for every non-ad-vm sample, so it can sit unconditionally at the
+    head of the chain.
+
+    The lock is not belt-and-braces: there is exactly ONE physical lab, four
+    Hyper-V VMs. Two ad-vm samples in flight at once means the second one's
+    restore tears the first agent's box out from under it mid-session. Holding
+    the lock only across the inject would not be enough either -- the agent then
+    works on the lab, and a second sample injecting during that window is the
+    same bug with a smaller race. So the caller must ALSO keep ad-vm runs to one
+    sample at a time; see _advm_serial_guard, which refuses to start otherwise.
+    """
+    async def solve(state: TaskState, generate):
+        if state.metadata.get("scorer") != "advm":
+            return state
+        scenario_id = state.metadata["advm_scenario_id"]
+        async with _ADVM_LAB_LOCK:
+            await asyncio.to_thread(
+                advm_inject,
+                scenario_id,
+                state.metadata["advm_lab_script"],
+                state.metadata["advm_bridge_pubkey"],
+            )
+        state.metadata["advm_injected"] = True
+        return state
+
+    return solve
+
+
+def _build_advm_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
+    """Sample for a meta4/ad-vm scenario: bridge container in front of the lab."""
+    meta = _prepare_advm_bridge(scenario_dir)
+
+    threat = scenario_dir / "threat.md"
+    task_body = threat.read_text(encoding="utf-8") if (
+        mode == "day1" and threat.exists()
+    ) else (
+        "No briefing is provided. Investigate the domain and remediate whatever "
+        "you find. The vulnerability is real and currently exploitable."
+    )
+
+    prompt = ADVM_TEMPLATE.format(
+        role="Windows / Active Directory administrator",
+        target_user=meta["vagrant_user"],
+        target_host=meta["bridge_target_host"],
+        target_port=meta["vagrant_port"],
+        task_body=task_body,
+    )
+
+    compose_cfg = _SysRepairComposeConfig(
+        services={"default": _SysRepairService(
+            build=ComposeBuild(
+                # ONE image for all 20 scenarios; the per-scenario key is
+                # mounted, not baked, so nothing scenario-specific is in it.
+                context=str((scenario_dir.parent / "bridge").resolve()),
+                dockerfile="Dockerfile",
+            ),
+            init=True,
+            extra_hosts=["host.docker.internal:host-gateway"],
+            volumes=[f"{meta['bridge_key']}:/srb/bridge_key.ro:ro"],
+            entrypoint=[""],
+            # ssh(1) rejects a key whose mode is too open, and a Windows bind
+            # mount presents as 0777 -- so copy it into place with 0600 at boot
+            # rather than trying to fix permissions on the mount itself.
+            command=(
+                "sh -c 'mkdir -p /root/.ssh && cp /srb/bridge_key.ro "
+                "/root/.ssh/id_ed25519 && chmod 600 /root/.ssh/id_ed25519 && "
+                "exec sleep infinity'"
+            ),
+        )}
+    )
+
+    return Sample(
+        id=f"meta4/ad-vm/{scenario_dir.name}",
+        input=prompt,
+        target="remediated",
+        metadata={
+            "scenario_path": str(scenario_dir),
+            "benchmark": "meta4/ad-vm",
+            "scenario": scenario_dir.name,
+            "os": "advm",
+            "scorer": "advm",
+            "advm_scenario_id": meta["advm_scenario_id"],
+            "advm_lab_script": meta["advm_lab_script"],
+            # advm_lab_setup() injects from these at solve time, so the pubkey
+            # has to travel with the SAMPLE -- it is not enough for
+            # _prepare_advm_bridge to return it. A 20-scenario sweep died with
+            # KeyError('advm_bridge_pubkey') on exactly this.
+            "advm_bridge_pubkey": meta["advm_bridge_pubkey"],
+            "category": classify_threat(threat) if threat.exists() else None,
+        },
+        sandbox=SandboxEnvironmentSpec(type="docker", config=compose_cfg),
+    )
+
+
 def _prepare_automatedlab_bridge(scenario_dir: Path, cfg: dict) -> dict[str, str]:
     """Bring up an AutomatedLab VM and hand the bridge the same SSH contract.
 
@@ -590,13 +952,20 @@ def _discover_scenarios(
             p = (REPO_ROOT / s).resolve() if not Path(s).is_absolute() else Path(s)
             if not p.exists():
                 raise FileNotFoundError(f"Scenario not found: {p}")
-            if not (p / "Dockerfile").exists() and not (p / "Vagrantfile").exists():
+            if (not (p / "Dockerfile").exists()
+                    and not (p / "Vagrantfile").exists()
+                    and _advm_harness(p) is None):
                 raise ValueError(
                     f"'{s}' is not a valid scenario (no Dockerfile or Vagrantfile at {p}). "
                     f"If you meant to run every scenario under it, use "
                     f"`benchmarks: [\"{s}\"]` instead of `scenarios:`."
                 )
-            if not ((p / "verify.sh").exists() or (p / "verify.ps1").exists()):
+            # ad-vm grades with verify-poc.sh + verify-service.ps1 driven from
+            # the host, not a single in-sandbox verify.sh -- so this check would
+            # reject a perfectly valid scenario. Third and last site that
+            # assumed the container-suite file layout.
+            if (_advm_harness(p) is None
+                    and not ((p / "verify.sh").exists() or (p / "verify.ps1").exists())):
                 raise ValueError(
                     f"'{s}' is missing verify.sh / verify.ps1 at {p}."
                 )
@@ -612,6 +981,12 @@ def _discover_scenarios(
                     has_verify = (entry / "verify.sh").exists() or (entry / "verify.ps1").exists()
                     has_runner = (entry / "Dockerfile").exists() or (entry / "Vagrantfile").exists()
                     if has_runner and has_verify:
+                        selected.append(entry)
+                    # ad-vm ships neither a Dockerfile nor a Vagrantfile, and its
+                    # graders are verify-poc.sh / verify-service.ps1 rather than
+                    # verify.sh -- so both tests above miss it and all 20
+                    # scenarios were silently invisible to every run.
+                    elif _advm_harness(entry) is not None:
                         selected.append(entry)
 
     if exclude:
@@ -645,6 +1020,8 @@ def _hivestorm_prepare(scenario_dir: Path) -> None:
 
 
 def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
+    if _advm_harness(scenario_dir) is not None:
+        return _build_advm_sample(scenario_dir, mode)
     if _is_vagrant_scenario(scenario_dir):
         return _build_vagrant_sample(scenario_dir, mode)
 
@@ -856,17 +1233,24 @@ def sysrepair_bench(
     if not scenario_dirs:
         raise ValueError("No scenarios matched the given filters.")
     samples = [_build_sample(d, mode=mode) for d in scenario_dirs]
+    _advm_serial_guard(samples)
+    _docker_mode_guard(samples)
 
     solver_msg_limit = message_limit if message_limit > 0 else 1_000_000
     return Task(
         dataset=MemoryDataset(samples=samples, name="sysrepair-bench"),
-        solver=get_solver(
-            solver,
-            message_limit=solver_msg_limit,
-            max_attempts=max_attempts,
-            bash_timeout=bash_timeout,
-            verify_timeout=verify_timeout,
-        ),
+        solver=[
+            # Injects the AD lab for this sample; no-op for everything else.
+            # Must precede the agent -- see advm_lab_setup.
+            advm_lab_setup(),
+            get_solver(
+                solver,
+                message_limit=solver_msg_limit,
+                max_attempts=max_attempts,
+                bash_timeout=bash_timeout,
+                verify_timeout=verify_timeout,
+            ),
+        ],
         scorer=dispatch_scorer(),
         message_limit=message_limit or None,  # 0 = unlimited
         time_limit=time_limit or None,        # 0 = unlimited

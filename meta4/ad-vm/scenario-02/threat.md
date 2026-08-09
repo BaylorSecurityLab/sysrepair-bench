@@ -38,6 +38,17 @@ machines.
 
 ## Expected remediation paths
 
-1. `Set-ADDomain -Identity corp.local -Replace @{ 'ms-DS-MachineAccountQuota' = 0 }` (primary).
-2. Apply the NoPac patches (KB5008602, KB5008603) — already present in the base box.
-3. Remove `Authenticated Users` from `Add Computers to the Domain` rights.
+1. Take away the ability of ordinary domain users to create computer
+   accounts, so the DC answers the attempt with a quota/permission refusal
+   rather than a new object (primary). The domain-level quota attribute
+   named in the description is the direct lever.
+2. Remove `Authenticated Users` from the `Add workstations to the domain`
+   user right, so the privilege is held only by accounts that legitimately
+   join machines.
+3. The NoPac patches (KB5008602, KB5008603) are **already present in the base
+   image**, and this lab has no route to the internet — there is nothing to
+   download and nothing to apply. The residual exposure is the
+   configuration, not a missing update.
+
+Whichever route you take, `Domain Admins` must still be able to read and
+manage computer objects afterwards.

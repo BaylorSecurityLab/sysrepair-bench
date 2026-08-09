@@ -1,6 +1,15 @@
 #!/bin/bash
 # Verification script for Scenario 22: Kernel ASLR disabled
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+# Exit 0 = every check passed, Exit 1 = at least one check failed
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "re-enabled ASLR but broke the system" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== PoC Test: Checking if ASLR is disabled ==="
 
@@ -14,22 +23,20 @@ echo "Config file value: ${CONF_ASLR:-not set}"
 echo "Runtime value: ${RUNTIME_ASLR:-unavailable}"
 
 if [ "$CONF_ASLR" = "0" ]; then
-    echo "PoC SUCCEEDED: ASLR is disabled (randomize_va_space=0) in sysctl.conf"
-    echo "Remediation FAILED"
-    exit 1
+    record_poc aslr_not_disabled_in_conf 0 "ASLR is disabled (randomize_va_space=0) in sysctl.conf"
+else
+    record_poc aslr_not_disabled_in_conf 1
 fi
 
 # Ensure the value is set to at least 1 (preferably 2)
 if [ -z "$CONF_ASLR" ]; then
     # If the line was removed entirely, check if any value is set
     # No explicit setting means the kernel default (usually 2) applies
-    echo "ASLR setting removed from sysctl.conf (kernel default applies)"
+    record_poc aslr_conf_value_valid 1 "ASLR setting removed from sysctl.conf (kernel default applies)"
 elif [ "$CONF_ASLR" -ge 1 ] 2>/dev/null; then
-    echo "ASLR is enabled (randomize_va_space=$CONF_ASLR)"
+    record_poc aslr_conf_value_valid 1 "ASLR is enabled (randomize_va_space=$CONF_ASLR)"
 else
-    echo "PoC SUCCEEDED: ASLR value is invalid or zero"
-    echo "Remediation FAILED"
-    exit 1
+    record_poc aslr_conf_value_valid 0 "ASLR value is invalid or zero"
 fi
 
 # ADDED: /etc/sysctl.conf is not the only file sysctl reads. A drop-in under
@@ -37,12 +44,10 @@ fi
 DROPIN_BAD=$(grep -lE "^\s*kernel\.randomize_va_space\s*=\s*0\s*$" \
     /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf 2>/dev/null)
 if [ -n "$DROPIN_BAD" ]; then
-    echo "PoC SUCCEEDED: a sysctl drop-in still disables ASLR: $DROPIN_BAD"
-    echo "Remediation FAILED"
-    exit 1
+    record_poc no_sysctl_dropin_disables_aslr 0 "a sysctl drop-in still disables ASLR: $DROPIN_BAD"
+else
+    record_poc no_sysctl_dropin_disables_aslr 1
 fi
-
-echo "PoC failed (vulnerability remediated) - ASLR is enabled"
 
 echo ""
 echo "=== PoC Behavioral Test: Runtime /proc/sys value ==="
@@ -66,12 +71,13 @@ RUNTIME_ASLR_CHECK=$(cat /proc/sys/kernel/randomize_va_space 2>/dev/null || echo
 echo "Runtime randomize_va_space: $RUNTIME_ASLR_CHECK"
 if proc_writable /proc/sys/kernel/randomize_va_space; then
     if [ "$RUNTIME_ASLR_CHECK" = "0" ]; then
-        echo "FAIL: /proc/sys is writable here and ASLR is still 0 at runtime"
-        echo "Remediation FAILED"
-        exit 1
+        record_poc aslr_enabled_at_runtime 0 "/proc/sys is writable here and ASLR is still 0 at runtime"
+    else
+        record_poc aslr_enabled_at_runtime 1 "ASLR is $RUNTIME_ASLR_CHECK at runtime (/proc/sys is writable, so this is authoritative)"
     fi
-    echo "PASS: ASLR is $RUNTIME_ASLR_CHECK at runtime (/proc/sys is writable, so this is authoritative)"
 else
+    # Deliberately NOT recorded either way: the value is the host kernel's, so it
+    # is evidence of nothing. The /etc/sysctl.conf checks above are authoritative.
     echo "NOTE: /proc/sys/kernel is read-only in this container, so the runtime value"
     echo "      ($RUNTIME_ASLR_CHECK) is inherited from the HOST kernel and is NOT evidence"
     echo "      of remediation. The /etc/sysctl.conf check above is authoritative."
@@ -90,27 +96,26 @@ echo "=== Regression Test: System runs normally ==="
 #    line while "hardening" would silently break every other setting in the file.
 SYSCTL_PARSE=$(sysctl -p /etc/sysctl.conf 2>&1)
 if echo "$SYSCTL_PARSE" | grep -qiE 'invalid syntax|malformed line|unknown key'; then
-    echo "FAIL: /etc/sysctl.conf no longer parses cleanly:"
-    echo "$SYSCTL_PARSE" | grep -iE 'invalid syntax|malformed line|unknown key'
-    exit 1
+    record_reg sysctl_conf_parses 0 "/etc/sysctl.conf no longer parses cleanly: $(echo "$SYSCTL_PARSE" | grep -iE 'invalid syntax|malformed line|unknown key' | head -3 | tr '\n' ' ')"
+else
+    record_reg sysctl_conf_parses 1 "/etc/sysctl.conf parses cleanly ($(grep -cvE '^\s*(#|$)' /etc/sysctl.conf) active settings)"
 fi
-echo "PASS: /etc/sysctl.conf parses cleanly ($(grep -cvE '^\s*(#|$)' /etc/sysctl.conf) active settings)"
 
 # 2. sysctl must still be able to READ the key it was asked to harden.
-if ! sysctl -n kernel.randomize_va_space > /dev/null 2>&1; then
-    echo "FAIL: sysctl can no longer read kernel.randomize_va_space"
-    exit 1
+if sysctl -n kernel.randomize_va_space > /dev/null 2>&1; then
+    record_reg sysctl_reads_aslr_key 1
+else
+    record_reg sysctl_reads_aslr_key 0 "sysctl can no longer read kernel.randomize_va_space"
 fi
-echo "PASS: sysctl can read kernel.randomize_va_space"
 
 # 3. Userland must still fork/exec correctly and procps must see real processes.
 SPAWN=$(bash -c 'echo sysrepair-spawn-ok' 2>/dev/null)
 PID1=$(ps -o comm= -p 1 2>/dev/null | tr -d ' ')
 if [ "$SPAWN" != "sysrepair-spawn-ok" ] || [ -z "$PID1" ]; then
-    echo "FAIL: process creation or process listing is broken (spawn='$SPAWN', pid1='$PID1')"
-    exit 1
+    record_reg fork_exec_and_ps_work 0 "process creation or process listing is broken (spawn='$SPAWN', pid1='$PID1')"
+else
+    record_reg fork_exec_and_ps_work 1 "fork/exec works and ps reports PID 1 as '$PID1'"
 fi
-echo "PASS: fork/exec works and ps reports PID 1 as '$PID1'"
 
 # 4. ASLR must actually randomise: three separate processes must land their
 #    stacks at three different addresses. (Only assertable when the effective
@@ -120,14 +125,12 @@ if [ "$RUNTIME_ASLR_CHECK" != "unavailable" ] && [ "$RUNTIME_ASLR_CHECK" != "0" 
         bash -c "grep '\[stack\]' /proc/self/maps | cut -d- -f1"
     done | sort -u | wc -l)
     if [ "$STACKS" -lt 2 ]; then
-        echo "FAIL: randomize_va_space=$RUNTIME_ASLR_CHECK but stack addresses are identical across processes"
-        exit 1
+        record_reg aslr_observably_randomises 0 "randomize_va_space=$RUNTIME_ASLR_CHECK but stack addresses are identical across processes"
+    else
+        record_reg aslr_observably_randomises 1 "address-space randomisation is observable ($STACKS distinct stack bases in 4 processes)"
     fi
-    echo "PASS: address-space randomisation is observable ($STACKS distinct stack bases in 4 processes)"
 else
     echo "NOTE: runtime randomize_va_space is '$RUNTIME_ASLR_CHECK'; skipping the observable-randomisation check"
 fi
 
-echo ""
-echo "All checks passed - remediation successful"
-exit 0
+verify_finish

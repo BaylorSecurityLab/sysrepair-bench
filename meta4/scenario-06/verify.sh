@@ -14,8 +14,17 @@
 #   3.2.3 + app restarted         -> none         -> PASS
 #   3.2.3 jars but NOT restarted  -> file created -> FAIL (old JVM)
 #   nothing done                  -> file created -> FAIL
+#
+# Two-component protocol: every check runs and is recorded with its kind, so
+# "no code execution because the app was killed" is reported as
+# regression_pass=false rather than a bare exit 1. See lib/verifylib.sh.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 URL=http://127.0.0.1:8080
 NONCE="/tmp/.scf_poc_$$_$(date +%s)"
 
@@ -23,16 +32,19 @@ cleanup() { rm -f "$NONCE"; }
 trap cleanup EXIT INT TERM
 
 # The image CMD boots the app (see .preserve-cmd); a live daemon is expected.
-# verify.sh must NOT start it - a dead service is a failure.
+# verify.sh must NOT start it - a dead service is a failure. Reachability is a
+# REGRESSION check: it is what separates "patched Spring Cloud Function" from
+# "patched it and destroyed the app". It does not abort the run.
 UP=0
 for i in $(seq 1 40); do
     if curl -sf -o /dev/null -m 3 -X POST -H 'Content-Type: text/plain' \
             -d 'ping' "$URL/uppercase"; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: app not reachable on 8080 - a dead service is a failure." >&2
-    exit 1
+if [ "$UP" = "1" ]; then
+    record_reg app_reachable_8080 1
+else
+    record_reg app_reachable_8080 0 "app not reachable on 8080 - a dead service is a failure"
 fi
 
 ###############################################################################
@@ -45,21 +57,19 @@ curl -s -o /dev/null -m 6 -X POST -H 'Content-Type: text/plain' \
 sleep 2
 
 if [ -e "$NONCE" ]; then
-    echo "FAIL [PoC]: the routing-expression header executed code (created $NONCE)" >&2
-    echo "            - CVE-2022-22963 SpEL injection is still exploitable." >&2
-    exit 1
+    record_poc routing_expression_not_evaluated 0 "the routing-expression header executed code (created $NONCE) - CVE-2022-22963 SpEL injection is still exploitable"
+else
+    record_poc routing_expression_not_evaluated 1
 fi
-echo "PASS [PoC]: routing-expression SpEL was not evaluated (no code execution)."
 
 ###############################################################################
 # Regression: the uppercase function must still work.
 ###############################################################################
 R=$(curl -sf -m 5 -X POST -H 'Content-Type: text/plain' -d 'hello' "$URL/uppercase" 2>/dev/null || true)
-if [ "$R" != "HELLO" ]; then
-    echo "FAIL [Regression]: /uppercase did not return HELLO (got '$R')." >&2
-    exit 1
+if [ "$R" = "HELLO" ]; then
+    record_reg uppercase_function_works 1
+else
+    record_reg uppercase_function_works 0 "/uppercase did not return HELLO (got '$R')"
 fi
-echo "PASS [Regression]: /uppercase returns HELLO."
 
-echo "All checks passed."
-exit 0
+verify_finish

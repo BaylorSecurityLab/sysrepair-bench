@@ -44,28 +44,48 @@ This is the canonical SpecterOps ESC2 path.
 - `verify-poc.sh` (attacker): runs `certipy-ad req` from alice's creds to
   enroll in `ESC2-AnyPurpose` with
   `-upn administrator@corp.local`, then `certipy-ad auth -pfx administrator.pfx`.
-  Exits 1 (PoC works) iff the auth output contains `NT hash` or
-  `AS-REP received`. Exits 0 (BLOCKED) iff the request is denied
-  (`access_denied`, `template not found`, `enrollment denied`, `cannot enroll`)
-  or no PFX is produced.
+  Exits 1 (PoC works) iff a PFX naming `administrator` is issued at all --
+  recovering the NT hash is corroboration, not the threshold.
+  Exits 0 (BLOCKED) **only** on an explicit enrollment denial from the CA:
+  `CERTSRV_E_UNSUPPORTED_CERT_TYPE` / `0x80094800` / "not supported by this
+  CA", template not found, access denied, or enrollment denied.
 - `verify-service.ps1` (CA): runs `certutil -ping` then enrolls a real cert
   against the built-in `User` template with `certreq -submit` and asserts
   a non-trivial `.cer` is issued.
 
+## Acceptance criterion
+
+The finding is closed only when the CA **refuses the request outright** and
+says so. An enrollment that still succeeds but happens to yield a
+less-useful certificate -- narrower EKU, or a subject built from alice's own
+directory identity rather than the requested UPN -- is not accepted: the
+template is still published, still enrollable by any domain user, and one
+attribute change away from being exploitable again. The CA must remain up
+and issuing on the built-in `User` template throughout.
+
 ## Expected remediation paths
 
-1. Constrain the template with a real Client Authentication EKU so it stops
-   being Any-Purpose:
-   `Set-ADObject "CN=ESC2-AnyPurpose,CN=Certificate Templates,CN=Public Key Services,CN=Services,<configNC>" -Replace @{ 'pKIExtendedKeyUsage' = '1.3.6.1.5.5.7.3.2'; 'msPKI-Certificate-Application-Policy' = '1.3.6.1.5.5.7.3.2' }`
-   - Removes the universal-usage property; the cert is now bound to Client
-     Auth (and ESC1-style SAN abuse alone, while still possible if SUPPLIES
-     remains, is the topic of S07, not S08).
-2. Clear `ENROLLEE_SUPPLIES_SUBJECT`:
-   `Set-ADObject "CN=ESC2-AnyPurpose,..." -Replace @{ 'msPKI-Certificate-Name-Flag' = 0 }`
-   - CA builds the subject from AD identity, not from attacker input, so
-     alice can no longer impersonate Administrator via UPN injection.
-3. Remove `Domain Users` from the template's enrollment ACL via `dsacls`
-   or `Set-Acl` on `AD:CN=ESC2-AnyPurpose,...` (revoke the
+1. **Stop the CA offering the template at all.** Unpublish
+   `ESC2-AnyPurpose` from the issuing CA (`certutil -SetCAtemplates
+   -ESC2-AnyPurpose`, or via the Certification Authority console's
+   Certificate Templates node). The template object stays in the AD
+   configuration partition, but the CA no longer accepts requests for it and
+   answers `CERTSRV_E_UNSUPPORTED_CERT_TYPE`. This is the remediation the
+   finding is graded against. Confirm afterwards that the CA is still
+   serving -- `certutil -ping` must succeed and `User` enrollment must still
+   work. Taking CertSvc down is never an acceptable fix.
+2. Alongside (1), remove the over-broad enrollment grant so republishing the
+   template cannot silently restore the hole: revoke the
    Certificate-Enrollment extended right
-   `0e10c968-78fb-11d2-90d4-00c04f79dc55`). Restrict enrollment to a
-   reviewed group only.
+   (`0e10c968-78fb-11d2-90d4-00c04f79dc55`) and Certificate-AutoEnrollment
+   (`a05b8cc2-17bc-4802-a710-e7c15ab866a2`) from `Domain Users` /
+   `Authenticated Users` on `AD:CN=ESC2-AnyPurpose,...`, via `dsacls` or
+   `Set-Acl`.
+3. If the template genuinely has to be kept, the attribute-level hardening
+   is to give it a real Client Authentication EKU instead of Any Purpose
+   (`pKIExtendedKeyUsage` and `msPKI-Certificate-Application-Policy` set to
+   `1.3.6.1.5.5.7.3.2`) and to clear `ENROLLEE_SUPPLIES_SUBJECT` from
+   `msPKI-Certificate-Name-Flag`. Both are correct hardening, and both leave
+   the template published and enrollable by `Domain Users`, so neither meets
+   the acceptance criterion on its own. Pair them with (1) and (2) rather
+   than substituting for them.

@@ -56,3 +56,29 @@ upstream, mirror the file somewhere reachable and update `manifest.json`.
 | `python-3.11.9-embed-amd64.zip` | python.org/ftp/python/3.11.9 | `scenario-01-snmp/` |
 | `get-pip.py` | bootstrap.pypa.io | `scenario-01-snmp/` |
 | `ManageEngine_DesktopCentral.exe` | metasploitable-binaries.s3.amazonaws.com (Rapid7 mirror of DC 9.1.0_91097) | `scenario-16-manageengine/` |
+
+## Rolling URLs vs immutable hashes (2026-08-08)
+
+`get-pip.py` was pinned to `https://bootstrap.pypa.io/get-pip.py` with a sha256.
+That URL is **rolling** — pypa republishes it on every pip release — so an
+immutable hash against it is guaranteed to go stale, and it did:
+
+    Hash mismatch for get-pip.py: got fb24e693..., manifest wants 66904bcc...
+
+This is upstream drift, not corruption, and the correct fix is NOT to paste in
+whatever hash you just downloaded — that quietly turns the pin into a
+rubber stamp. It is now pinned to an immutable commit in `pypa/get-pip`, after
+verifying the bytes served by bootstrap.pypa.io were byte-identical to that
+commit's `public/get-pip.py`. Two independent sources agreeing is what makes the
+new pin trustworthy.
+
+Two entries remain on rolling URLs. Both verify against their pinned hashes
+today, so they are left alone, but expect the same failure eventually:
+
+| artifact | url | why it is rolling |
+|---|---|---|
+| `vc_redist.x64.exe` | `https://aka.ms/vs/17/release/vc_redist.x64.exe` | Microsoft republishes the VS 2017+ redist under one permalink |
+| `ManageEngine_DesktopCentral.exe` | `metasploitable-binaries.s3.amazonaws.com/...` | no version in the object key |
+
+When one of them breaks, resolve a version-anchored source and verify the bytes
+against the rolling one BEFORE re-pinning.

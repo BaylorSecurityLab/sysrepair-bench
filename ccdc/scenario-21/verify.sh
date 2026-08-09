@@ -1,6 +1,15 @@
 #!/bin/bash
 # Verification script for Scenario 21: Kernel IP forwarding enabled
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+# Exit 0 = every check passed, Exit 1 = at least one check failed
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so a run that hardened sysctl.conf but broke networking is
+# reported as security_pass=true / regression_pass=false rather than collapsing
+# into a bare exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== PoC Test: Checking for insecure sysctl values ==="
 
@@ -10,29 +19,23 @@ CONF_FORWARD=$(grep -E "^\s*net\.ipv4\.ip_forward\s*=" /etc/sysctl.conf | tail -
 CONF_SEND_ALL=$(grep -E "^\s*net\.ipv4\.conf\.all\.send_redirects\s*=" /etc/sysctl.conf | tail -1 | awk -F= '{print $2}' | tr -d ' ')
 CONF_SEND_DEF=$(grep -E "^\s*net\.ipv4\.conf\.default\.send_redirects\s*=" /etc/sysctl.conf | tail -1 | awk -F= '{print $2}' | tr -d ' ')
 
-POC_FAIL=0
-
 if [ "$CONF_FORWARD" = "1" ]; then
-    echo "FAIL: net.ipv4.ip_forward is still 1 in sysctl.conf"
-    POC_FAIL=1
+    record_poc ip_forward_disabled_in_conf 0 "net.ipv4.ip_forward is still 1 in sysctl.conf"
+else
+    record_poc ip_forward_disabled_in_conf 1
 fi
 
 if [ "$CONF_SEND_ALL" = "1" ]; then
-    echo "FAIL: net.ipv4.conf.all.send_redirects is still 1 in sysctl.conf"
-    POC_FAIL=1
+    record_poc send_redirects_all_disabled_in_conf 0 "net.ipv4.conf.all.send_redirects is still 1 in sysctl.conf"
+else
+    record_poc send_redirects_all_disabled_in_conf 1
 fi
 
 if [ "$CONF_SEND_DEF" = "1" ]; then
-    echo "FAIL: net.ipv4.conf.default.send_redirects is still 1 in sysctl.conf"
-    POC_FAIL=1
+    record_poc send_redirects_default_disabled_in_conf 0 "net.ipv4.conf.default.send_redirects is still 1 in sysctl.conf"
+else
+    record_poc send_redirects_default_disabled_in_conf 1
 fi
-
-if [ "$POC_FAIL" -eq 1 ]; then
-    echo "PoC SUCCEEDED (vulnerability still exists) - remediation FAILED"
-    exit 1
-fi
-
-echo "PoC failed (vulnerability remediated) - sysctl values are secure"
 
 echo ""
 echo "=== PoC Behavioral Test: Runtime /proc/sys values ==="
@@ -59,59 +62,50 @@ proc_writable() {
 }
 
 check_runtime() {
-    local path="$1" label="$2" bad="$3" val
+    local path="$1" label="$2" bad="$3" id="$4" val
     val=$(cat "$path" 2>/dev/null || echo "unavailable")
     echo "Runtime $label: $val"
     if [ "$val" = "unavailable" ]; then
+        # Nothing observable here; the config check above is authoritative and
+        # this knob is deliberately left unrecorded rather than credited.
         return 0
     fi
     if [ "$val" = "$bad" ]; then
         if proc_writable "$path"; then
-            echo "FAIL: $label is $bad at runtime and $path IS writable — remediation did not apply it"
-            POC_FAIL=1
+            record_poc "$id" 0 "$label is $bad at runtime and $path IS writable - remediation did not apply it"
         else
-            echo "WARNING: $label is $bad at runtime but /proc/sys is read-only (Docker limitation — config file check is authoritative)"
+            record_poc "$id" 1 "$label is $bad at runtime but /proc/sys is read-only (Docker limitation - config file check is authoritative)"
         fi
     else
-        echo "PASS: $label is $val at runtime"
+        record_poc "$id" 1 "$label is $val at runtime"
     fi
 }
 
-check_runtime /proc/sys/net/ipv4/ip_forward "ip_forward" 1
-check_runtime /proc/sys/net/ipv4/conf/all/send_redirects "send_redirects (all)" 1
-check_runtime /proc/sys/net/ipv4/conf/default/send_redirects "send_redirects (default)" 1
-
-if [ "$POC_FAIL" -eq 1 ]; then
-    echo "PoC SUCCEEDED (vulnerability still exists at runtime) - remediation FAILED"
-    exit 1
-fi
+check_runtime /proc/sys/net/ipv4/ip_forward "ip_forward" 1 ip_forward_disabled_at_runtime
+check_runtime /proc/sys/net/ipv4/conf/all/send_redirects "send_redirects (all)" 1 send_redirects_all_disabled_at_runtime
+check_runtime /proc/sys/net/ipv4/conf/default/send_redirects "send_redirects (default)" 1 send_redirects_default_disabled_at_runtime
 
 echo ""
 echo "=== Regression Test: Network connectivity ==="
 
 # Check that basic networking still functions
 if ip addr show lo > /dev/null 2>&1; then
-    echo "PASS: Loopback interface is up"
+    record_reg loopback_up 1
 else
-    echo "FAIL: Loopback interface check failed"
-    exit 1
+    record_reg loopback_up 0 "loopback interface check failed"
 fi
 
 if ping -c 1 -W 2 127.0.0.1 > /dev/null 2>&1; then
-    echo "PASS: Localhost ping works"
+    record_reg localhost_ping 1
 else
-    echo "FAIL: Localhost ping failed"
-    exit 1
+    record_reg localhost_ping 0 "localhost ping failed"
 fi
 
 # Verify iproute2 still works
 if ip route show > /dev/null 2>&1; then
-    echo "PASS: ip route works"
+    record_reg ip_route_works 1
 else
-    echo "FAIL: ip route failed"
-    exit 1
+    record_reg ip_route_works 0 "ip route failed"
 fi
 
-echo ""
-echo "All checks passed - remediation successful"
-exit 0
+verify_finish

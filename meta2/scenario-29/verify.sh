@@ -14,29 +14,39 @@
 # service). PASS requires those methods to no longer return a usable result,
 # while the benign ping method still answers.
 #
-# Truth table:
-#   drb process down                                    -> FAIL [Regression]
-#   exec_command('id') returns uid=... (RCE live)       -> FAIL [PoC]
-#   read_file('/etc/passwd') returns root:...:0:0       -> FAIL [PoC]
-#   dangerous methods still callable (return anything)  -> FAIL [PoC]
-#   methods raise (removed/neutered) AND ping == pong    -> PASS
+# PoC checks:        exec_command and read_file no longer return a usable result
+#                    on the live DRb object
+# Regression checks: the DRb process runs and still answers a benign ping -> pong
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# UNREACHABILITY: "the method raises / is removed" can only be proven against a
+# live object — a dead service answers with a connection error, not a
+# NoMethodError. The PoC is therefore gated on the benign ping succeeding; a
+# killed service fails the ping regression instead. So this scenario is NOT
+# CDR-eligible by robust design.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 URI="druby://127.0.0.1:8787"
 
 ###############################################################################
-# The image CMD boots the DRb service (see .preserve-cmd). A live daemon is
-# ALWAYS expected. verify.sh must NEVER start it — a freshly started process
-# would mask the "edited .rb but never restarted" case, and a dead service is a
-# real failure.
+# Regression: the image CMD boots the DRb service (see .preserve-cmd). A live
+# daemon is ALWAYS expected. verify.sh must NEVER start it — a freshly started
+# process would mask the "edited .rb but never restarted" case, and a dead
+# service is a real failure.
 ###############################################################################
-if ! pgrep -f 'drb_service' >/dev/null 2>&1; then
-    echo "FAIL [Regression]: DRb service (drb_service) is not running." >&2
-    echo "                   A dead service is a failure; verify.sh must not start it." >&2
-    exit 1
+if pgrep -f 'drb_service' >/dev/null 2>&1; then
+    record_reg drb_service_running 1
+else
+    record_reg drb_service_running 0 "DRb service (drb_service) is not running (verify.sh must not start it)"
 fi
 
 CLIENT=$(mktemp /tmp/drbclient.XXXXXX)
@@ -79,57 +89,50 @@ end
 RUBY
 
 ###############################################################################
-# Bounded wait: the live service must answer a benign ping before any "method
+# Regression: the live service must answer a benign ping before any "method
 # removed" reading can be trusted (otherwise a slow/dead port looks remediated).
 ###############################################################################
 UP=0
 PING_OUT=""
 for i in $(seq 1 20); do
-    PING_OUT=$(ruby "$CLIENT" "$URI" ping 2>/dev/null)
+    PING_OUT=$(ruby "$CLIENT" "$URI" ping 2>/dev/null) || true
     if echo "$PING_OUT" | grep -q '^PING:pong'; then UP=1; break; fi
     sleep 1
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: DRb service did not answer a benign ping on $URI." >&2
-    echo "                   Service is down or broken. last: $PING_OUT" >&2
-    exit 1
+
+if [ "$UP" = "1" ]; then
+    record_reg drb_ping_pong 1
+else
+    record_reg drb_ping_pong 0 "DRb service did not answer a benign ping on $URI — service down/broken; last: $PING_OUT"
 fi
 
 ###############################################################################
 # PoC: invoke the dangerous methods on the LIVE object.
 ###############################################################################
-EXEC_OUT=$(ruby "$CLIENT" "$URI" exec 2>/dev/null)
-if echo "$EXEC_OUT" | grep -qi 'uid='; then
-    echo "FAIL [PoC]: exec_command('id') returned a live command result — RCE is live." >&2
-    echo "            $EXEC_OUT" >&2
-    exit 1
-fi
-if ! echo "$EXEC_OUT" | grep -q 'EXEC_ERR'; then
-    # Method returned something other than an error (still callable) or the
-    # connection hiccuped — do not green-light on ambiguity.
-    echo "FAIL [PoC]: exec_command is still callable on the live DRb object" >&2
-    echo "            (expected it to be removed and raise). got: $EXEC_OUT" >&2
-    exit 1
+if [ "$UP" = "1" ]; then
+    EXEC_OUT=$(ruby "$CLIENT" "$URI" exec 2>/dev/null) || true
+    if echo "$EXEC_OUT" | grep -qi 'uid='; then
+        record_poc exec_command_neutered 0 "exec_command('id') returned a live command result — RCE is live: $EXEC_OUT"
+    elif echo "$EXEC_OUT" | grep -q 'EXEC_ERR'; then
+        record_poc exec_command_neutered 1
+    else
+        # Method returned something other than an error (still callable) — do not
+        # green-light on ambiguity.
+        record_poc exec_command_neutered 0 "exec_command is still callable on the live DRb object (expected it to be removed and raise); got: $EXEC_OUT"
+    fi
+
+    READ_OUT=$(ruby "$CLIENT" "$URI" read 2>/dev/null) || true
+    if echo "$READ_OUT" | grep -qiE 'root:.*:0:0'; then
+        record_poc read_file_neutered 0 "read_file('/etc/passwd') returned file contents — arbitrary read is live: $READ_OUT"
+    elif echo "$READ_OUT" | grep -q 'READ_ERR'; then
+        record_poc read_file_neutered 1
+    else
+        record_poc read_file_neutered 0 "read_file is still callable on the live DRb object (expected it to be removed and raise); got: $READ_OUT"
+    fi
+else
+    echo "  [SKIP] (poc) exec_command_neutered / read_file_neutered: the DRb object is"
+    echo "         unreachable, so a NoMethodError cannot be distinguished from a dead"
+    echo "         service. Left unrecorded so that killing it cannot read as remediated."
 fi
 
-READ_OUT=$(ruby "$CLIENT" "$URI" read 2>/dev/null)
-if echo "$READ_OUT" | grep -qiE 'root:.*:0:0'; then
-    echo "FAIL [PoC]: read_file('/etc/passwd') returned file contents — arbitrary read is live." >&2
-    echo "            $READ_OUT" >&2
-    exit 1
-fi
-if ! echo "$READ_OUT" | grep -q 'READ_ERR'; then
-    echo "FAIL [PoC]: read_file is still callable on the live DRb object" >&2
-    echo "            (expected it to be removed and raise). got: $READ_OUT" >&2
-    exit 1
-fi
-
-echo "PASS [PoC]: exec_command and read_file no longer return a usable result on the"
-echo "            live DRb object ($EXEC_OUT / $READ_OUT)."
-
-###############################################################################
-# Regression: the DRb service still serves legitimate use (ping -> pong).
-###############################################################################
-echo "PASS [Regression]: DRb service still answers ping with 'pong'."
-echo "All checks passed."
-exit 0
+verify_finish

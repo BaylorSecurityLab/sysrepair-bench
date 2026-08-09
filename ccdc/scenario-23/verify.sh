@@ -1,6 +1,15 @@
 #!/bin/bash
 # Verification script for Scenario 23: SYN cookies disabled + source routing accepted
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+# Exit 0 = every check passed, Exit 1 = at least one check failed
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so a run that hardened sysctl but broke networking is reported
+# as security_pass=true / regression_pass=false rather than collapsing into a
+# bare exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== PoC Test: Checking for insecure sysctl values ==="
 
@@ -9,21 +18,22 @@ CONF_SYNCOOKIES=$(grep -E "^\s*net\.ipv4\.tcp_syncookies\s*=" /etc/sysctl.conf |
 CONF_SRC_ROUTE_ALL=$(grep -E "^\s*net\.ipv4\.conf\.all\.accept_source_route\s*=" /etc/sysctl.conf | tail -1 | awk -F= '{print $2}' | tr -d ' ')
 CONF_SRC_ROUTE_DEF=$(grep -E "^\s*net\.ipv4\.conf\.default\.accept_source_route\s*=" /etc/sysctl.conf | tail -1 | awk -F= '{print $2}' | tr -d ' ')
 
-POC_FAIL=0
-
 if [ "$CONF_SYNCOOKIES" = "0" ]; then
-    echo "FAIL: tcp_syncookies is still 0 in sysctl.conf"
-    POC_FAIL=1
+    record_poc syncookies_enabled_in_conf 0 "tcp_syncookies is still 0 in sysctl.conf"
+else
+    record_poc syncookies_enabled_in_conf 1
 fi
 
 if [ "$CONF_SRC_ROUTE_ALL" = "1" ]; then
-    echo "FAIL: conf.all.accept_source_route is still 1 in sysctl.conf"
-    POC_FAIL=1
+    record_poc source_route_all_rejected_in_conf 0 "conf.all.accept_source_route is still 1 in sysctl.conf"
+else
+    record_poc source_route_all_rejected_in_conf 1
 fi
 
 if [ "$CONF_SRC_ROUTE_DEF" = "1" ]; then
-    echo "FAIL: conf.default.accept_source_route is still 1 in sysctl.conf"
-    POC_FAIL=1
+    record_poc source_route_default_rejected_in_conf 0 "conf.default.accept_source_route is still 1 in sysctl.conf"
+else
+    record_poc source_route_default_rejected_in_conf 1
 fi
 
 # ADDED: /etc/sysctl.conf is not the only file sysctl reads. A drop-in under
@@ -32,16 +42,10 @@ fi
 DROPIN_BAD=$(grep -lE "^\s*(net\.ipv4\.tcp_syncookies\s*=\s*0|net\.ipv4\.conf\.(all|default)\.accept_source_route\s*=\s*1)\s*$" \
     /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf 2>/dev/null)
 if [ -n "$DROPIN_BAD" ]; then
-    echo "FAIL: a sysctl drop-in still applies an insecure value: $DROPIN_BAD"
-    POC_FAIL=1
+    record_poc no_insecure_sysctl_dropin 0 "a sysctl drop-in still applies an insecure value: $DROPIN_BAD"
+else
+    record_poc no_insecure_sysctl_dropin 1
 fi
-
-if [ "$POC_FAIL" -eq 1 ]; then
-    echo "PoC SUCCEEDED (vulnerability still exists) - remediation FAILED"
-    exit 1
-fi
-
-echo "PoC failed (vulnerability remediated) - sysctl values are secure"
 
 echo ""
 echo "=== PoC Behavioral Test: Runtime /proc/sys values ==="
@@ -66,8 +70,11 @@ proc_writable() {
     return 0
 }
 
-check_runtime() {   # $1 = /proc path, $2 = label, $3 = insecure value
-    local path="$1" label="$2" bad="$3" val
+# $1 = /proc path, $2 = label, $3 = insecure value, $4 = check id
+# The NOTE branches are deliberately left unrecorded: a read-only or absent
+# /proc/sys knob shows the HOST kernel's value, which is evidence of nothing.
+check_runtime() {
+    local path="$1" label="$2" bad="$3" id="$4" val
     val=$(cat "$path" 2>/dev/null || echo "unavailable")
     echo "Runtime $label: $val"
     if [ "$val" = "unavailable" ]; then
@@ -76,10 +83,10 @@ check_runtime() {   # $1 = /proc path, $2 = label, $3 = insecure value
     fi
     if proc_writable "$path"; then
         if [ "$val" = "$bad" ]; then
-            echo "FAIL: /proc/sys is writable here and $label is still the insecure value ($val)"
-            return 1
+            record_poc "$id" 0 "/proc/sys is writable here and $label is still the insecure value ($val)"
+        else
+            record_poc "$id" 1 "$label is $val at runtime (/proc/sys is writable, so this is authoritative)"
         fi
-        echo "PASS: $label is $val at runtime (/proc/sys is writable, so this is authoritative)"
     else
         if [ "$val" = "$bad" ]; then
             echo "NOTE: $label is $val at runtime but /proc/sys is read-only (host kernel value); config file check is authoritative"
@@ -91,49 +98,38 @@ check_runtime() {   # $1 = /proc path, $2 = label, $3 = insecure value
     return 0
 }
 
-check_runtime /proc/sys/net/ipv4/tcp_syncookies                    "tcp_syncookies"                 0 || POC_FAIL=1
-check_runtime /proc/sys/net/ipv4/conf/all/accept_source_route      "accept_source_route (all)"      1 || POC_FAIL=1
-check_runtime /proc/sys/net/ipv4/conf/default/accept_source_route  "accept_source_route (default)"  1 || POC_FAIL=1
-
-if [ "$POC_FAIL" -eq 1 ]; then
-    echo "PoC SUCCEEDED (vulnerability still exists at runtime) - remediation FAILED"
-    exit 1
-fi
+check_runtime /proc/sys/net/ipv4/tcp_syncookies                    "tcp_syncookies"                 0 syncookies_enabled_at_runtime
+check_runtime /proc/sys/net/ipv4/conf/all/accept_source_route      "accept_source_route (all)"      1 source_route_all_rejected_at_runtime
+check_runtime /proc/sys/net/ipv4/conf/default/accept_source_route  "accept_source_route (default)"  1 source_route_default_rejected_at_runtime
 
 echo ""
 echo "=== Regression Test: Network connectivity ==="
 
 if ip addr show lo > /dev/null 2>&1; then
-    echo "PASS: Loopback interface is up"
+    record_reg loopback_up 1
 else
-    echo "FAIL: Loopback interface check failed"
-    exit 1
+    record_reg loopback_up 0 "loopback interface check failed"
 fi
 
 if ping -c 1 -W 2 127.0.0.1 > /dev/null 2>&1; then
-    echo "PASS: Localhost ping works"
+    record_reg localhost_ping 1
 else
-    echo "FAIL: Localhost ping failed"
-    exit 1
+    record_reg localhost_ping 0 "localhost ping failed"
 fi
 
 if ip route show > /dev/null 2>&1; then
-    echo "PASS: Routing table accessible"
+    record_reg routing_table_accessible 1
 else
-    echo "FAIL: Cannot access routing table"
-    exit 1
+    record_reg routing_table_accessible 0 "cannot access routing table"
 fi
 
 # ADDED: hardening that leaves /etc/sysctl.conf unparsable would silently break
 # every other setting in the file on the next boot.
 SYSCTL_PARSE=$(sysctl -p /etc/sysctl.conf 2>&1)
 if echo "$SYSCTL_PARSE" | grep -qiE 'invalid syntax|malformed line|unknown key'; then
-    echo "FAIL: /etc/sysctl.conf no longer parses cleanly:"
-    echo "$SYSCTL_PARSE" | grep -iE 'invalid syntax|malformed line|unknown key'
-    exit 1
+    record_reg sysctl_conf_parses 0 "/etc/sysctl.conf no longer parses cleanly: $(echo "$SYSCTL_PARSE" | grep -iE 'invalid syntax|malformed line|unknown key' | head -3 | tr '\n' ' ')"
+else
+    record_reg sysctl_conf_parses 1 "/etc/sysctl.conf parses cleanly"
 fi
-echo "PASS: /etc/sysctl.conf parses cleanly"
 
-echo ""
-echo "All checks passed - remediation successful"
-exit 0
+verify_finish

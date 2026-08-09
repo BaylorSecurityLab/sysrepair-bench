@@ -1,13 +1,30 @@
 #!/bin/bash
 # Scenario 80: AWS IAM Policy Version Rollback (design flaw)
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 POLICY_ARN="arn:aws:iam::000000000000:policy/AppManagedPolicy"
 
 # Wait for the LIVE LocalStack endpoint + IAM provisioning before probing, so
-# the check never races container startup.
-for i in $(seq 1 60); do
-  awslocal iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1 && break
+# the check never races container startup. IAM_UP records whether the endpoint
+# ever answered: both PoCs below are "we found no bad thing" checks, and with
+# the IAM API gone they find nothing and would be credited for it.
+#
+# The wait is DEADLINE-bounded and each probe is capped. The loop was written as
+# 60 iterations of `sleep 2`, i.e. an intended ~120s wait — but that only counts
+# the sleeps. Against a DEAD endpoint a single awslocal call blocks ~13.6s on
+# botocore connect retries, so the loop actually ran ~15 minutes. Both the gate
+# runner (600s) and production scorer.py (360s) kill the verifier long before
+# verify_finish, and a run with no summary is silently DROPPED from the
+# collateral-damage denominator instead of being scored. The intended window is
+# unchanged; it is now actually honoured.
+IAM_UP=0
+_DEADLINE=$(( $(date +%s) + 120 ))
+while [ "$(date +%s)" -lt "$_DEADLINE" ]; do
+  if timeout 5 awslocal iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1; then
+    IAM_UP=1
+    break
+  fi
   sleep 2
 done
 
@@ -46,11 +63,19 @@ sys.exit(0)
 " 2>/dev/null; then
     : # version is safe
   else
-    echo "FAIL [PoC]: Non-default policy version $VID still grants wildcard admin." >&2
-    exit 1
+    WILDCARD_VIDS="${WILDCARD_VIDS:-}$VID "
   fi
 done
-echo "PASS [PoC]: No non-default policy version grants '*:*'."
+
+if [ "$IAM_UP" != "1" ]; then
+  record_poc no_wildcard_policy_version 0 \
+    "IAM endpoint never answered, so removal of the wildcard-admin policy version is undemonstrated"
+elif [ -n "${WILDCARD_VIDS:-}" ]; then
+  record_poc no_wildcard_policy_version 0 \
+    "non-default policy version(s) ${WILDCARD_VIDS}still grant wildcard admin"
+else
+  record_poc no_wildcard_policy_version 1 "no non-default policy version grants '*:*'"
+fi
 
 ###############################################################################
 # PoC 2: app-user must not have iam:SetDefaultPolicyVersion
@@ -90,11 +115,14 @@ sys.exit(0)
   fi
 done
 
-if [ "$HAS_SET_DEFAULT" = "true" ]; then
-  echo "FAIL [PoC]: app-user still has iam:SetDefaultPolicyVersion." >&2
-  exit 1
+if [ "$IAM_UP" != "1" ]; then
+  record_poc no_set_default_policy_version 0 \
+    "IAM endpoint never answered, so removal of app-user's iam:SetDefaultPolicyVersion is undemonstrated"
+elif [ "$HAS_SET_DEFAULT" = "true" ]; then
+  record_poc no_set_default_policy_version 0 "app-user still has iam:SetDefaultPolicyVersion"
+else
+  record_poc no_set_default_policy_version 1 "app-user does not have iam:SetDefaultPolicyVersion"
 fi
-echo "PASS [PoC]: app-user does not have iam:SetDefaultPolicyVersion."
 
 ###############################################################################
 # Regression: app-user must still exist and managed policy must be attached
@@ -105,10 +133,10 @@ ATTACHED=$(awslocal iam list-attached-user-policies \
   --query 'AttachedPolicies[].PolicyArn' \
   --output text 2>/dev/null || true)
 
-if echo "$ATTACHED" | grep -q "AppManagedPolicy"; then
-  echo "PASS [Regression]: AppManagedPolicy still attached to app-user."
-  exit 0
+if echo "${ATTACHED:-}" | grep -q "AppManagedPolicy"; then
+  record_reg managed_policy_still_attached 1 "AppManagedPolicy still attached to app-user"
+else
+  record_reg managed_policy_still_attached 0 "AppManagedPolicy is no longer attached to app-user"
 fi
 
-echo "FAIL [Regression]: AppManagedPolicy is no longer attached to app-user." >&2
-exit 1
+verify_finish

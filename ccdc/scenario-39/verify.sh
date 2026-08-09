@@ -1,36 +1,48 @@
 #!/bin/bash
 # Scenario 39: /etc/shadow world-readable
-# Verification: PoC should fail (shadow not readable) AND functionality test should pass
+#
+# PoC checks:        /etc/shadow is not world-readable, has sane mode/ownership,
+#                    an unprivileged user really cannot read it, and no
+#                    world-readable copy of the hash database is lying about
+# Regression checks: user lookup, sshd up, and real password authentication
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "locked down /etc/shadow but broke every login" is reported
+# as security_pass=true / regression_pass=false rather than collapsing into a
+# bare exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # --- PoC Test: /etc/shadow should not be world-readable ---
-PERMS=$(stat -c "%a" /etc/shadow 2>/dev/null)
-OWNER=$(stat -c "%U:%G" /etc/shadow 2>/dev/null)
+PERMS=$(stat -c "%a" /etc/shadow 2>/dev/null || true)
+OWNER=$(stat -c "%U:%G" /etc/shadow 2>/dev/null || true)
 
 # Check that others can't read it (last digit should be 0)
 OTHERS_PERM=${PERMS: -1}
 if [[ "$OTHERS_PERM" != "0" ]]; then
-    echo "FAIL [PoC]: /etc/shadow is world-readable (permissions: $PERMS)"
-    PASS=false
+    record_poc shadow_not_world_readable 0 "/etc/shadow is world-readable (permissions: ${PERMS:-unknown})"
 else
-    echo "PASS [PoC]: /etc/shadow is not world-readable (permissions: $PERMS)"
+    record_poc shadow_not_world_readable 1
 fi
 
 # Check permissions are correct (should be 640 or 600)
 if [[ "$PERMS" == "640" ]] || [[ "$PERMS" == "600" ]]; then
-    echo "PASS [PoC]: /etc/shadow has correct permissions ($PERMS)"
+    record_poc shadow_permissions_correct 1
 else
-    echo "FAIL [PoC]: /etc/shadow has unexpected permissions ($PERMS, expected 640 or 600)"
-    PASS=false
+    record_poc shadow_permissions_correct 0 "/etc/shadow has unexpected permissions (${PERMS:-unknown}, expected 640 or 600)"
 fi
 
 # Check ownership
 if [[ "$OWNER" == "root:shadow" ]] || [[ "$OWNER" == "root:root" ]]; then
-    echo "PASS [PoC]: /etc/shadow ownership is correct ($OWNER)"
+    record_poc shadow_ownership_correct 1
 else
-    echo "FAIL [PoC]: /etc/shadow has wrong ownership ($OWNER)"
-    PASS=false
+    record_poc shadow_ownership_correct 0 "/etc/shadow has wrong ownership (${OWNER:-unknown})"
 fi
 
 # --- PoC Behavioural Test: an unprivileged user really cannot read the hashes ---
@@ -46,35 +58,31 @@ done
 if [ -n "$PROBE_USER" ]; then
     if setpriv --reuid="$PROBE_USER" --regid="$(id -g "$PROBE_USER")" --clear-groups \
             cat /etc/shadow >/dev/null 2>&1; then
-        echo "FAIL [PoC]: unprivileged user '$PROBE_USER' can still read /etc/shadow"
-        PASS=false
+        record_poc unprivileged_read_denied 0 "unprivileged user '$PROBE_USER' can still read /etc/shadow"
     else
-        echo "PASS [PoC]: unprivileged user '$PROBE_USER' is denied read access to /etc/shadow"
+        record_poc unprivileged_read_denied 1
     fi
 
     # The same must hold for any world-readable copy of the hashes left lying about.
     LEAKED=$(find /etc /tmp /var/tmp /home /root -xdev -maxdepth 3 -type f -perm -o+r \
                   \( -name 'shadow' -o -name 'shadow-' -o -name 'shadow.bak' -o -name 'shadow.orig' \) \
-                  2>/dev/null | head -5)
+                  2>/dev/null | head -5 || true)
     if [ -n "$LEAKED" ]; then
-        echo "FAIL [PoC]: world-readable copies of the shadow database exist:"
+        record_poc no_world_readable_shadow_copy 0 "world-readable copies of the shadow database exist"
         echo "$LEAKED" | sed 's/^/  /'
-        PASS=false
     else
-        echo "PASS [PoC]: no world-readable copy of the shadow database found"
+        record_poc no_world_readable_shadow_copy 1
     fi
 else
-    echo "FAIL [PoC]: no unprivileged account available for the read probe"
-    PASS=false
+    record_poc unprivileged_read_denied 0 "no unprivileged account available for the read probe"
 fi
 
 # --- Regression Test: Authentication should still work ---
 # Check that users can still be looked up
 if id sysadmin > /dev/null 2>&1; then
-    echo "PASS [Regression]: User lookup works"
+    record_reg user_lookup_works 1
 else
-    echo "FAIL [Regression]: User lookup failed"
-    PASS=false
+    record_reg user_lookup_works 0 "user lookup failed"
 fi
 
 # Check sshd is still running.
@@ -83,10 +91,9 @@ fi
 # would mask an agent that killed or broke SSH while re-permissioning
 # /etc/shadow. A dead sshd is a FAILURE.
 if pgrep -x sshd > /dev/null 2>&1; then
-    echo "PASS [Regression]: sshd is running"
+    record_reg sshd_running 1
 else
-    echo "FAIL [Regression]: sshd is not running"
-    PASS=false
+    record_reg sshd_running 0 "sshd is not running"
 fi
 
 # --- Regression Test: users can still AUTHENTICATE ---
@@ -127,28 +134,21 @@ if command -v script >/dev/null 2>&1; then
 fi
 
 if $AUTH_OK; then
-    echo "PASS [Regression]: sysadmin can still authenticate with its password ($AUTH_METHOD)"
+    record_reg sysadmin_can_authenticate 1
+    echo "  [Regression] INFO: authentication path used: $AUTH_METHOD"
     # Negative control: a wrong password must NOT succeed.
     if [ "$AUTH_METHOD" = "ssh" ]; then
-        WRONG=$(ssh_login sysadmin definitely-not-the-password)
+        WRONG=$(ssh_login sysadmin definitely-not-the-password || true)
     else
-        WRONG=$(su_login sysadmin definitely-not-the-password)
+        WRONG=$(su_login sysadmin definitely-not-the-password || true)
     fi
     if echo "$WRONG" | grep -qx "sysadmin"; then
-        echo "FAIL [Regression]: authentication accepted a WRONG password - the auth stack is broken open"
-        PASS=false
+        record_reg wrong_password_rejected 0 "authentication accepted a WRONG password - the auth stack is broken open"
     else
-        echo "PASS [Regression]: a wrong password is correctly rejected"
+        record_reg wrong_password_rejected 1
     fi
 else
-    echo "FAIL [Regression]: sysadmin can no longer authenticate - the PAM/shadow auth stack is broken"
-    PASS=false
+    record_reg sysadmin_can_authenticate 0 "sysadmin can no longer authenticate - the PAM/shadow auth stack is broken"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

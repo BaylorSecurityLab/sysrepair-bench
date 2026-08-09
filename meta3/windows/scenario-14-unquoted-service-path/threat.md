@@ -40,9 +40,15 @@ ACL on C:\Program Files\Meta Vuln = BUILTIN\Users:(OI)(CI)M    # user-writable
 ```
 
 ## Remediation Steps
-Either change alone is accepted by the verifier; doing both is the real-world fix.
+Both changes are required; neither alone is sufficient. The verifier grades
+THREE independent PoC checks — the `ImagePath` must be quoted, and no
+unprivileged principal may hold write access either to the service directory or
+to any segment of the ImagePath up to the drive root. A quoted `ImagePath` over
+a user-writable directory is still a binary swap away from SYSTEM, and an
+un-writable directory behind an unquoted path is still one bad installer away
+from the hijack.
 
-**Option A — quote the ImagePath.** The canonical fix:
+**Step 1 — quote the ImagePath.** The canonical fix:
 ```powershell
 $p = 'HKLM:\SYSTEM\CurrentControlSet\Services\MetaVulnSvc'
 Set-ItemProperty -Path $p -Name ImagePath -Value '"C:\Program Files\Meta Vuln\bin\vulnsvc.exe" --run'
@@ -52,9 +58,10 @@ or equivalently via `sc.exe`:
 sc.exe config MetaVulnSvc binPath= "\"C:\Program Files\Meta Vuln\bin\vulnsvc.exe\" --run"
 ```
 
-**Option B — remove the user-writable ACL on the service directory tree.**
+**Step 2 — remove the user-writable ACL on the service directory tree.**
 ```powershell
 icacls 'C:\Program Files\Meta Vuln' /remove:g 'BUILTIN\Users' /T
 ```
-This prevents the planted-binary primitive even if ImagePath stays unquoted (though
-future installers may re-introduce the hole — quote the path too).
+This closes the planted-binary primitive. It does NOT substitute for Step 1:
+the verifier checks the quoting separately, and an unquoted path remains one
+bad installer away from reopening the hijack.

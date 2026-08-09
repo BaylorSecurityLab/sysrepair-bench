@@ -124,11 +124,23 @@ $wdigest = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 New-Item -Path $wdigest -Force | Out-Null
 Set-ItemProperty -Path $wdigest -Name 'UseLogonCredential' -Value 1 -Type DWord
 
-# ---- Krbtgt password age marker (seed writes a "stale" LastPasswordSet) -----
-# We can't actually rewind LastPasswordSet on krbtgt; instead drop a decoy
-# marker file the verifier reads.
-Set-Content -Path C:\ProgramData\sysrepair\krbtgt-stale.marker `
-            -Value "planted by seed.ps1 - krbtgt rotation pending"
+# ---- Krbtgt: NOTHING IS PLANTED, AND THAT IS THE POINT ----------------------
+# krbtgt's LastPasswordSet is written when the forest is created and cannot be
+# rewound, so this used to drop a decoy marker file for verify.ps1 to grade.
+# That made the check measure the marker instead of the account: rotating
+# krbtgt for real did not remove the file (so the correct action still failed)
+# and deleting the file rotated nothing (so a no-op still passed).
+#
+# The stale password is therefore left as the seed finds it -- genuinely stale,
+# because the forest was built long before this run -- and verify.ps1 grades the
+# rotation against the baseline.timestamp fence written immediately below.
+# Nothing needs to be seeded for that to work.
+#
+# Removed rather than ignored: a re-seed over an already-seeded DC would
+# otherwise leave the old decoy sitting in the verifier's state directory,
+# where it is a misleading artefact for both the agent and the next reader.
+Remove-Item -Path C:\ProgramData\sysrepair\krbtgt-stale.marker `
+            -Force -ErrorAction SilentlyContinue
 
 # ---- baseline timestamp --------------------------------------------------
 # Fence planted AFTER every seed write so verify.ps1 can distinguish

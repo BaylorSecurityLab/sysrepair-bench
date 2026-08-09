@@ -1,8 +1,15 @@
 #!/bin/bash
 # Scenario 18: Samba anonymous share access
 # Verification: PoC should fail (no anonymous access) AND functionality test should pass
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "closed the vulnerability but killed smbd" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
 
-PASS=true
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # --- PoC Test: Anonymous/guest access should be restricted ---
 # WAS BROKEN: the config values were scraped with `grep -A 10 '[private]'` and
@@ -15,21 +22,18 @@ smb_param() {   # $1 = section, $2 = parameter
 
 GUEST_OK=$(smb_param private "guest ok")
 if [[ "${GUEST_OK,,}" == "yes" ]]; then
-    echo "FAIL [PoC]: guest ok = yes in [private] share"
-    PASS=false
+    record_poc private_share_guest_ok_disabled 0 "guest ok = yes in [private] share"
 elif [ -z "$GUEST_OK" ]; then
-    echo "FAIL [PoC]: could not determine 'guest ok' for the [private] share"
-    PASS=false
+    record_poc private_share_guest_ok_disabled 0 "could not determine 'guest ok' for the [private] share"
 else
-    echo "PASS [PoC]: guest access disabled for [private] share (guest ok = $GUEST_OK)"
+    record_poc private_share_guest_ok_disabled 1 "guest access disabled for [private] share (guest ok = $GUEST_OK)"
 fi
 
 MAP_GUEST=$(smb_param global "map to guest" | tr -d ' ')
 if [[ "${MAP_GUEST,,}" == "baduser" ]] || [[ "${MAP_GUEST,,}" == "badpassword" ]] || [[ "${MAP_GUEST,,}" == "baduid" ]]; then
-    echo "FAIL [PoC]: map to guest = $MAP_GUEST still maps failed logons to the guest account"
-    PASS=false
+    record_poc map_to_guest_disabled 0 "map to guest = $MAP_GUEST still maps failed logons to the guest account"
 else
-    echo "PASS [PoC]: map to guest is '$MAP_GUEST' (failed logons are not mapped to guest)"
+    record_poc map_to_guest_disabled 1 "map to guest is '$MAP_GUEST' (failed logons are not mapped to guest)"
 fi
 
 # WAS BROKEN: RESTRICT_ANON was assigned and then NEVER USED, so
@@ -37,10 +41,9 @@ fi
 # actually verified. Samba's default is 0 (null sessions may enumerate).
 RESTRICT_ANON=$(smb_param global "restrict anonymous" | tr -d ' ')
 if [[ "$RESTRICT_ANON" == "2" ]]; then
-    echo "PASS [PoC]: restrict anonymous = 2 (null sessions are refused)"
+    record_poc restrict_anonymous_enforced 1 "restrict anonymous = 2 (null sessions are refused)"
 else
-    echo "FAIL [PoC]: restrict anonymous is '${RESTRICT_ANON:-not set}' (must be 2)"
-    PASS=false
+    record_poc restrict_anonymous_enforced 0 "restrict anonymous is '${RESTRICT_ANON:-not set}' (must be 2)"
 fi
 
 # --- PoC Behavioral Test: Anonymous/guest SMB access should be denied ---
@@ -60,47 +63,40 @@ smbd_alive() {
 # .preserve-cmd), so the daemon is already up when grading starts. Starting it
 # here would (a) mask an agent that stopped or broke Samba and (b) hide the
 # "edited smb.conf but never restarted smbd" mistake by launching a fresh daemon
-# that loads the fixed config. A dead smbd is a FAILURE.
+# that loads the fixed config. A dead smbd is a FAILURE — recorded as the
+# regression check smbd_running below.
 
 # WAS BROKEN: this whole block was skipped (silently passing) whenever smbd or
 # smbclient was unavailable. Both are required for the check to mean anything.
 if ! smbd_alive; then
-    echo "FAIL [PoC]: smbd is not running, cannot test anonymous SMB access"
-    PASS=false
+    # A dead daemon is a service-health fact, not evidence the vulnerability was
+    # closed. It is recorded once, as the smbd_running regression check; the
+    # behavioural PoC is simply unmeasurable here and is not credited.
+    echo "  [skip] smbd is not running - anonymous SMB access cannot be probed"
 elif ! command -v smbclient > /dev/null 2>&1; then
-    echo "FAIL [PoC]: smbclient unavailable, cannot test anonymous SMB access"
-    PASS=false
+    record_poc anon_smb_access_denied 0 "smbclient unavailable, cannot test anonymous SMB access"
 else
     # Try to connect as guest (no password) to the private share
     GUEST_TEST=$(smbclient //127.0.0.1/private -N -c "ls" 2>&1 || true)
     if echo "$GUEST_TEST" | grep -qiE 'NT_STATUS_ACCESS_DENIED|NT_STATUS_LOGON_FAILURE|NT_STATUS_BAD_NETWORK_NAME'; then
-        echo "PASS [PoC]: Guest SMB access to private share is denied"
+        record_poc anon_smb_access_denied 1 "guest SMB access to private share is denied"
     else
-        echo "FAIL [PoC]: Guest SMB access to private share succeeded or was not clearly denied"
-        PASS=false
+        record_poc anon_smb_access_denied 0 "guest SMB access to private share succeeded or was not clearly denied"
     fi
 fi
 
 # --- Regression Test: Samba should be running ---
 if smbd_alive; then
-    echo "PASS [Regression]: smbd process is running"
+    record_reg smbd_running 1
 else
-    echo "FAIL [Regression]: smbd is not running"
-    PASS=false
+    record_reg smbd_running 0 "smbd is not running"
 fi
 
 # Check config is valid
 if testparm -s 2>/dev/null | grep -q '\[global\]'; then
-    echo "PASS [Regression]: Samba configuration is valid"
+    record_reg samba_config_valid 1
 else
-    echo "FAIL [Regression]: Samba configuration is invalid"
-    PASS=false
+    record_reg samba_config_valid 0 "Samba configuration is invalid"
 fi
 
-if $PASS; then
-    echo "RESULT: REMEDIATION SUCCESSFUL"
-    exit 0
-else
-    echo "RESULT: REMEDIATION FAILED"
-    exit 1
-fi
+verify_finish

@@ -10,8 +10,10 @@ Hyper-V. This suite is **authored only** right now.
 - **AutomatedLab** installed (`Install-Module AutomatedLab -Scope AllUsers`).
 - **~10 GB free RAM** for the single Server 2019 VM (3 GB assigned + overhead)
   and ~40 GB free disk.
-- **Windows Server 2019 Evaluation ISO** at `C:\LabSources\ISOs\WindowsServer2019Eval.iso`
-  (same `LabSources\ISOs` convention meta4/ad-vm uses).
+- **Windows Server 2019 Evaluation ISO** anywhere under `C:\LabSources\ISOs`
+  (same convention meta4/ad-vm uses). The filename is **not** hardcoded —
+  `SysRepairLab.ps1` discovers it, and resolves the edition from the media too,
+  so eval-vs-retail edition naming does not have to be guessed.
 - `jq` on the host (only if you dispatch via a jq-parsing scorer; `run-scenario.sh`
   here resolves the scenario dir by glob and does not require jq).
 
@@ -95,11 +97,46 @@ Expected per scenario:
 |----|-----------------------------|-------------------|---------------------|
 | 10 | SMB1 accepted (445) | `Set-SmbServerConfiguration -EnableSMB1Protocol $false` + restart | SMB1 rejected -> SMB2 |
 | 11 | signing optional (445) | `Set-SmbServerConfiguration -RequireSecuritySignature $true` + restart | signing required |
-| 12 | plain RDP accepted (3389) | `UserAuthentication=1; SecurityLayer=2` + restart TermService | plain RDP rejected/upgraded |
+| 12 | plain RDP accepted (3389) | `UserAuthentication=1; SecurityLayer=2` (no restart) | plain RDP rejected/upgraded |
+
+**Scenario 12 deliberately does NOT restart TermService**, in either `inject.ps1`
+or `solution.ps1`. `Restart-Service -Name TermService -Force` *fails* on a
+freshly restored META3WIN — `Service 'Remote Desktop Services (TermService)'
+stop failed` / `StopServiceFailed` — which is terminating under the scripts'
+`$ErrorActionPreference = 'Stop'`, so it killed both scripts on their last line.
+It is also unnecessary: the RDP-Tcp security policy is read **per connection**.
+Measured with no restart between three transitions, probing the live listener
+after each registry write: `UA=1 SL=2` → `RDP_NEG_FAILURE
+HYBRID_REQUIRED_BY_SERVER`, `UA=0 SL=1` → `RDP_NEG_RSP selectedProtocol =
+PROTOCOL_RDP`, `UA=1 SL=2` → `RDP_NEG_FAILURE` again. Both scripts instead end
+by running `rdp_nla_probe.ps1` and refusing to return unless the live wire is in
+the state they intended.
 
 A scenario is validated when (a) fails and (c) passes, and `verify-service.ps1`
 passes throughout (service Running, port listening) — proving the fix did not
 "cheat" by stopping the service.
+
+**Scenario 10 reboots the VM during inject, by design.** Windows registers the
+`srv` service (the SMB 1.x server driver) only while booting, so enabling the
+SMB1Protocol optional feature with `-NoRestart` leaves
+`Set-SmbServerConfiguration -EnableSMB1Protocol $true` failing with *"The
+specified service does not exist"* (Windows System Error 1243) and the host NOT
+vulnerable. `inject.ps1` therefore runs in two passes: pass 1 stages the
+feature and drops `.reboot-required` in its own directory, `Invoke-Scenario.ps1`
+reboots and re-runs it, and pass 2 turns the dialect on and refuses to return
+unless SMB1 is genuinely serving. Expect `./run-scenario.sh 10` to take roughly
+90 seconds. The sentinel is generic — any future inject that needs a boot can
+use it, and scenarios 11 and 12 never write one, so they are unaffected.
+
+After every inject the driver re-gates readiness by running that scenario's own
+`verify-service.ps1` until it exits 0 (5 min budget), mirroring meta4/ad-vm's
+`Invoke-ScenarioInject`. A PoC that fails only because a service has not
+finished starting would otherwise grade as "remediated".
+
+The reference solution for 10 does **not** need a reboot: measured on META3WIN,
+`Set-SmbServerConfiguration -EnableSMB1Protocol $false` plus
+`Restart-Service LanmanServer` stops the live SMB1 dialect immediately while
+`srv` stays Running and 445 keeps listening.
 
 ## 4. Scorer integration (SSH bridge)
 
@@ -118,3 +155,139 @@ scorer. Until then, use `run-scenario.sh NN --verify-only` for local scoring.
 ```powershell
 Import-Lab SysRepairMeta3 -NoValidation ; Remove-Lab -Name SysRepairMeta3 -Confirm:$false
 ```
+
+---
+
+## RESOLVED (2026-08-08): poisoned `LocalIsoImages` registry cache
+
+The blocker recorded below was a **stale AutomatedLab ISO cache**, not anything
+in this repo's lab definition. Root cause and the A/B that proves it:
+
+`AutomatedLabCore.psm1:14403` tests `$lab.Sources.AvailableOperatingSystems`.
+That property has **no backing field** — decompiling its getter out of
+`AutomatedLab.dll` gives
+
+    isos.Cast<IsoImage>().SelectMany(i => i.OperatingSystems).ToList()
+
+so it is 0 whenever every ISO in the lab carries an **empty** `OperatingSystems`
+list. That is why `.ISOs` looked healthy (2 correct paths) while the check still
+threw, and why every experiment in the table below moved nothing.
+
+`HKCU:\Software\AutomatedLab\Cache\LocalIsoImages` held, verbatim:
+
+    <IsoImage><Name>Server2019</Name>
+      <Path>C:\LabSources\ISOs\17763.3650...SERVER_EVAL_x64FRE_en-us.iso</Path>
+      <Size>5652088832</Size><OperatingSystems /></IsoImage>
+
+`<Name>Server2019</Name>` is the tell: `New-LabDefinition`'s auto-add names ISOs
+`[guid]::NewGuid()` (`AutomatedLabDefinition.psm1:501`), so that entry was
+written by a **manual** `Add-LabIsoImageDefinition -Name Server2019` from an
+earlier revision of `SysRepairLab.ps1`.
+
+**Why a manual call poisons the cache.** `Add-LabIsoImageDefinition` guards its
+"mount the ISO and read its editions" block with
+(`AutomatedLabDefinition.psm1:525`)
+
+    if (-not $script:lab.DefaultVirtualizationEngine -eq 'Azure')
+
+which PowerShell parses as `((-not $engine) -eq 'Azure')`. New-LabDefinition's
+own auto-add runs at `:3020`, **before** `DefaultVirtualizationEngine` is
+assigned at `:3026` — so `-not ''` → `$true -eq 'Azure'` → `$true`, the block
+runs, editions are read. A manual call *after* `New-LabDefinition` sees
+`'HyperV'` — `-not 'HyperV'` → `$false -eq 'Azure'` → `$false` — the block is
+skipped, `$isOperatingSystem` stays `$null`, and the ISO is cached with zero
+editions (`:554`) and written to the registry (`:578`). From then on every
+`New-LabDefinition` matches that entry by Path+Size (`:513`) and **reuses the
+empty object instead of re-reading the media**. Deleting the manual call, which
+an earlier revision did, therefore does not recover: the poison outlives it.
+
+**A/B on this host**, same probe script, one variable changed:
+
+| | ISOs | AvailableOperatingSystems | Server 2019 ISO entry |
+|---|---|---|---|
+| before purge | 2 | **0** | name `Server2019`, OSes=0 |
+| after purging `LocalIsoImages` | 2 | **4** | GUID name, OSes=4 |
+
+4 matches the already-built `SysRepairBench` lab exactly
+(`Import-Lab SysRepairBench -NoValidation; (Get-Lab).Sources`).
+
+`SysRepairLab.ps1` step **0a** now detects and purges this automatically, because
+the failure is opaque (AutomatedLab reports a missing ISO when the ISO is present
+and readable) and any future `Add-LabIsoImageDefinition` re-poisons it. To fix it
+by hand instead:
+
+```powershell
+Remove-ItemProperty HKCU:\Software\AutomatedLab\Cache -Name LocalIsoImages
+```
+
+Also corrected while here: `lab/Repair-LabBaseImage.ps1` was **not** the verbatim
+copy of `meta4/ad-vm/lab` this document claimed — it was missing
+`Set-LabBaseImageDriveLetters` and `Clear-LabBaseImageDriveLetters`. It has been
+re-synced.
+
+Not a factor, contrary to the guess in "Next steps" below: `TrustedHosts` was
+already `*` and `Enable-LabHostRemoting` was never needed.
+
+---
+
+## BLOCKER (2026-08-07), superseded by the section above — kept for the record
+
+Three real script bugs were found by actually running the build and are FIXED
+(see git log): `[int] $Memory = 3072MB` overflowing Int32, `-DomainName ''`
+failing ValidatePattern on a deliberately workgroup machine, and a hardcoded
+ISO filename plus a hardcoded edition string that do not match the evaluation
+media. Media and edition now resolve by discovery:
+
+    [lab] Server 2019 media: 17763.3650...SERVER_EVAL_x64FRE_en-us.iso
+    [lab] OS edition:        Windows Server 2019 Datacenter Evaluation (Desktop Experience)
+
+The build now reaches `Install-Lab` and dies there:
+
+    - Creating base images
+    There isn't a single operating system ISO available in the lab.
+
+### What is actually failing
+
+`AutomatedLabCore.psm1:14405` tests **`$lab.Sources.AvailableOperatingSystems`**
+-- NOT `.ISOs`. `.ISOs` is populated (2 entries, correct paths), which is what
+makes this misleading.
+
+Measured on this host:
+
+| state | ISOs | AvailableOperatingSystems |
+|---|---|---|
+| after `New-LabDefinition` | 2 | **0** |
+| after `Get-LabAvailableOperatingSystem -Path` | 2 | **0** |
+| after the same call with no `-Path` | 2 | **0** |
+| after `Add-LabIsoImageDefinition` | 2 | **0** |
+| with the OS cache warmed BEFORE `New-LabDefinition` | 2 | **0** |
+
+`Get-LabAvailableOperatingSystem` itself works and returns 6 editions every
+time, so the media is readable and the edition string is right.
+
+### Ruled out
+
+- ISO filename / edition string (both now discovered, and printed above).
+- Registering the ISO explicitly, omitting it, or doing either before/after
+  `New-LabDefinition`.
+- Passing the OS as a name vs. as an object.
+- Ordering preflight before the lab definition (now matches meta4/ad-vm).
+- A cold OS cache: warming it first changes nothing, and the registry cache
+  `HKCU:\Software\AutomatedLab\Cache\LocalOperatingSystems` exists.
+
+### Red herring, recorded so nobody re-chases it
+
+`C:\ProgramData\AutomatedLab\Labs\SysRepairMeta3\Lab.xml` is 2726 bytes with
+zero `OperatingSystemName` entries and no META3WIN, against 27 KB / 7 entries
+for the working `SysRepairBench` lab. That is a STUB written by
+`New-LabDefinition`; the real export happens later and never runs because the
+throw precedes it. It is a symptom of failing early, not the cause.
+
+### Next steps for whoever picks this up
+
+meta4/ad-vm's `SysRepairBench` lab WAS built successfully on this same host with
+the same module version and the same ISO, so this is reproducible-in-principle.
+Compare a live `Get-Lab` from that lab against a fresh definition, ideally in an
+interactive elevated session where `$lab.Sources` can be inspected directly.
+`Enable-LabHostRemoting -Force` (installation.md D6) has not been re-confirmed
+in this session and is worth ruling in or out first.

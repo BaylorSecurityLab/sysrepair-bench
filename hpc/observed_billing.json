@@ -1,0 +1,7 @@
+[
+  {"job": "20924437", "alloc_tres": "billing=12000,cpu=48,gres/gpu:h200=4,gres/gpu=4,mem=1000G,node=1"},
+  {"job": "20924438", "alloc_tres": "billing=24086,cpu=96,gres/gpu:h200=8,gres/gpu=8,mem=2055420M,node=1"},
+  {"job": "20924956", "alloc_tres": "billing=12000,cpu=48,gres/gpu:h200=4,gres/gpu=4,mem=1000G,node=1"},
+  {"job": "20933330", "alloc_tres": "billing=12000,cpu=48,gres/gpu:h200=4,gres/gpu=4,mem=1000G,node=1"},
+  {"job": "20941437", "alloc_tres": "billing=15000,cpu=60,gres/gpu:h200=5,gres/gpu=5,mem=1200G,node=1"}
+]

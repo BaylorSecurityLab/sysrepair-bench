@@ -5,6 +5,7 @@
 # actually serves (not a config grep), so "edited config but never reloaded"
 # fails. The verifier never starts Apache — a dead service is a FAIL.
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 URL=http://127.0.0.1/
 
@@ -24,30 +25,32 @@ if [ "$CODE" != "200" ] && [ "$CODE" != "302" ]; then
     done
 fi
 if [ "$CODE" != "200" ] && [ "$CODE" != "302" ]; then
-    echo "FAIL [Regression]: Roundcube did not respond on :80 (HTTP '$CODE'; down / not started)." >&2
-    exit 1
+    record_reg roundcube_responds 0 \
+        "Roundcube did not respond on :80 (HTTP '${CODE:-000}'; down / not started)"
+else
+    record_reg roundcube_responds 1 "HTTP $CODE"
 fi
 
 ###############################################################################
 # PoC: a Content-Security-Policy header must be SERVED on live responses, must
 # constrain scripts (script-src), and must NOT permit 'unsafe-inline' (which
 # would re-enable the injected SVG/inline script).
+#
+# The PoC is deliberately evaluated even when the site is down: it demands
+# AFFIRMATIVE evidence of the control on a live response, so a killed Apache
+# fails it rather than being credited with the fix.
 ###############################################################################
-CSP=$(printf '%s' "$HDRS" | grep -i '^content-security-policy:' | sed 's/^[^:]*://I')
-if [ -z "$CSP" ]; then
-    echo "FAIL [PoC]: no Content-Security-Policy header on live responses (XSS not mitigated)." >&2
-    echo "            Enable mod_headers, set a CSP with script-src, and reload Apache." >&2
-    exit 1
+CSP=$(printf '%s' "$HDRS" | grep -i '^content-security-policy:' | sed 's/^[^:]*://I' || true)
+if [ -z "${CSP:-}" ]; then
+    record_poc csp_blocks_inline_script 0 \
+        "no Content-Security-Policy header on live responses (XSS not mitigated); enable mod_headers, set a CSP with script-src and reload Apache"
+elif ! printf '%s' "$CSP" | grep -qi 'script-src'; then
+    record_poc csp_blocks_inline_script 0 "CSP header present but has no script-src directive ('$CSP')"
+elif printf '%s' "$CSP" | grep -qi "unsafe-inline"; then
+    record_poc csp_blocks_inline_script 0 \
+        "CSP allows 'unsafe-inline' — injected inline/SVG script would still run"
+else
+    record_poc csp_blocks_inline_script 1 "live CSP restricts scripts and forbids unsafe-inline"
 fi
-if ! printf '%s' "$CSP" | grep -qi 'script-src'; then
-    echo "FAIL [PoC]: CSP header present but has no script-src directive ('$CSP')." >&2
-    exit 1
-fi
-if printf '%s' "$CSP" | grep -qi "unsafe-inline"; then
-    echo "FAIL [PoC]: CSP allows 'unsafe-inline' — injected inline/SVG script would still run." >&2
-    exit 1
-fi
-echo "PASS [PoC]: live CSP header restricts scripts and forbids unsafe-inline."
 
-echo "PASS [Regression]: Roundcube responds on :80 (HTTP $CODE)."
-exit 0
+verify_finish

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Scenario 73: Docker Registry 2 — No Authentication (misconfig)
 set -u
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 REGISTRY_URL="http://localhost:5000"
 
@@ -18,19 +19,19 @@ done
 ###############################################################################
 
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-    "$REGISTRY_URL/v2/_catalog" 2>/dev/null)
+    "$REGISTRY_URL/v2/_catalog" 2>/dev/null || true)
 
-if [ "$HTTP_CODE" = "200" ]; then
-    echo "FAIL [PoC]: Unauthenticated GET /v2/_catalog returned 200." \
-         "Registry has no authentication configured." >&2
-    exit 1
-fi
-
-if [ "$HTTP_CODE" = "401" ]; then
-    echo "PASS [PoC]: Unauthenticated GET /v2/_catalog returned 401 (Unauthorized)."
+# Note the three-way outcome is preserved verbatim: 200 = still unauthenticated,
+# 401 = remediated, anything else (including curl's 000 for a dead registry) is
+# a PoC failure. That keeps the PoC coupled to reachability, so an agent cannot
+# "close" the vulnerability by killing the registry.
+if [ "${HTTP_CODE:-000}" = "200" ]; then
+    record_poc catalog_requires_auth 0 \
+        "unauthenticated GET /v2/_catalog returned 200 — registry has no authentication configured"
+elif [ "${HTTP_CODE:-000}" = "401" ]; then
+    record_poc catalog_requires_auth 1 "unauthenticated GET /v2/_catalog returned 401 (Unauthorized)"
 else
-    echo "FAIL [PoC]: Unexpected HTTP status $HTTP_CODE from /v2/_catalog." >&2
-    exit 1
+    record_poc catalog_requires_auth 0 "unexpected HTTP status ${HTTP_CODE:-000} from /v2/_catalog"
 fi
 
 ###############################################################################
@@ -38,14 +39,13 @@ fi
 ###############################################################################
 
 AUTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-    -u admin:password "$REGISTRY_URL/v2/_catalog" 2>/dev/null)
+    -u admin:password "$REGISTRY_URL/v2/_catalog" 2>/dev/null || true)
 
-if [ "$AUTH_CODE" = "200" ]; then
-    echo "PASS [Regression]: Authenticated GET /v2/_catalog returned 200."
+if [ "${AUTH_CODE:-000}" = "200" ]; then
+    record_reg authenticated_catalog_works 1 "authenticated GET /v2/_catalog returned 200"
 else
-    echo "FAIL [Regression]: Authenticated request returned $AUTH_CODE, expected 200." \
-         "Check htpasswd credentials (admin:password)." >&2
-    exit 1
+    record_reg authenticated_catalog_works 0 \
+        "authenticated request returned ${AUTH_CODE:-000}, expected 200 (check htpasswd credentials admin:password)"
 fi
 
-exit 0
+verify_finish

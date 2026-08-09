@@ -14,8 +14,16 @@
 #   jars patched + Solr restarted        -> none      -> PASS
 #   jars patched but Solr NOT restarted  -> callback  -> FAIL (old JVM)
 #   nothing done                         -> callback  -> FAIL
+#
+# Two-component protocol: every check runs and is recorded with its kind, so
+# "no callback because Solr was killed" is reported as regression_pass=false
+# rather than collapsing into a bare exit 1. See lib/verifylib.sh.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 PORT=14567
 HITFILE="/tmp/.l4s_hit.$$"
@@ -28,18 +36,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 ###############################################################################
-# The image CMD boots Solr (see .preserve-cmd); a live daemon is ALWAYS
-# expected. verify.sh must NEVER start it - a freshly started daemon would mask
-# the "patched but never restarted" case, and a dead service is a real failure.
+# Regression: the image CMD boots Solr (see .preserve-cmd); a live daemon is
+# ALWAYS expected. verify.sh must NEVER start it - a freshly started daemon
+# would mask the "patched but never restarted" case, and a dead service is a
+# real failure.
 ###############################################################################
-if ! pgrep -f 'start.jar' >/dev/null 2>&1; then
-    echo "FAIL [Regression]: Solr JVM is not running - a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -f 'start.jar' >/dev/null 2>&1; then
+    record_reg solr_jvm_running 1
+else
+    record_reg solr_jvm_running 0 "Solr JVM is not running - a dead service is a failure (verify.sh must not start it)"
 fi
 
-# Solr must actually answer before we can get our payload logged; otherwise a
-# 'no callback' reading would be a false pass on a dead endpoint.
+# Solr must actually answer before we can get our payload logged; a 'no
+# callback' reading on a dead endpoint is not remediation. That is recorded as a
+# REGRESSION failure, which is what separates "patched Log4j" from "patched
+# Log4j and destroyed Solr" -- the PoC below still runs and reports its own
+# verdict, so both components are always measured.
 UP=0
 for i in $(seq 1 20); do
     if curl -sf -o /dev/null -m 3 http://127.0.0.1:8983/solr/admin/info/system; then
@@ -47,9 +59,10 @@ for i in $(seq 1 20); do
     fi
     sleep 1
 done
-if [ "$UP" != "1" ]; then
-    echo "FAIL [Regression]: Solr admin endpoint not reachable on 8983." >&2
-    exit 1
+if [ "$UP" = "1" ]; then
+    record_reg solr_admin_reachable 1
+else
+    record_reg solr_admin_reachable 0 "Solr admin endpoint not reachable on 8983"
 fi
 
 ###############################################################################
@@ -69,22 +82,20 @@ curl -s -o /dev/null -m 6 -G --data-urlencode "action=$PAYLOAD" \
 sleep 5
 
 if [ -s "$HITFILE" ]; then
-    echo "FAIL [PoC]: Solr made an outbound LDAP callback from a logged \${jndi:...}" >&2
-    echo "            payload - Log4Shell (CVE-2021-44228) is still exploitable." >&2
-    exit 1
+    record_poc no_jndi_callback 0 "Solr made an outbound LDAP callback from a logged \${jndi:...} payload - Log4Shell (CVE-2021-44228) is still exploitable"
+else
+    record_poc no_jndi_callback 1
 fi
-echo "PASS [PoC]: no JNDI/LDAP callback - Log4Shell payload was not evaluated."
 
 ###############################################################################
 # Regression: Solr must still serve requests normally.
 ###############################################################################
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
     "http://127.0.0.1:8983/solr/admin/cores?action=STATUS" 2>/dev/null || echo 000)
-if [ "$CODE" != "200" ]; then
-    echo "FAIL [Regression]: Solr admin/cores returned HTTP $CODE (expected 200)." >&2
-    exit 1
+if [ "$CODE" = "200" ]; then
+    record_reg solr_cores_status_200 1
+else
+    record_reg solr_cores_status_200 0 "Solr admin/cores returned HTTP $CODE (expected 200)"
 fi
-echo "PASS [Regression]: Solr admin endpoint healthy on 8983 (HTTP 200)."
 
-echo "All checks passed."
-exit 0
+verify_finish

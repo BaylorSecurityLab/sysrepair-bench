@@ -47,32 +47,53 @@ and a 2022-era hardening guide flagged it as an issue.
 
 ## Verification
 
-- `verify-poc.sh` (attacker): probes `http://corp-ca01.corp.local/certsrv/`
-  with `curl --ntlm -u 'corp\alice:Password1!'`. Exits 1 (PoC works) iff
-  the CA returns HTTP 200 plus the Microsoft Active Directory Certificate
-  Services HTML banner -- that response means NTLM-over-HTTP succeeded
-  and the relay surface is live. Exits 0 (BLOCKED) iff the response is
-  404 (Web Enrollment uninstalled), 000/connection-refused, 401/403
-  (NTLM rejected -- EPA or HTTPS-required), or the body advertises
-  Extended Protection / HSTS.
+- `verify-poc.sh` (attacker): issues a plain **unauthenticated** GET to
+  `http://corp-ca01.corp.local/certsrv/` and reads the response status and
+  headers. Exits 1 (PoC works) iff the endpoint answers over cleartext HTTP
+  with a `WWW-Authenticate: NTLM` / `Negotiate` challenge -- offering NTLM
+  over an unprotected transport IS the relay surface, and no authentication
+  needs to be completed to observe it. Exits 0 (BLOCKED) iff `/certsrv`
+  returns 404 (the application no longer exists) or answers without
+  advertising NTLM/Negotiate over HTTP.
+  **An unreachable endpoint is not a pass**: a connection refused or a
+  timeout is graded INCONCLUSIVE and fails, because a host that is merely
+  down is not a host that was hardened.
 - `verify-service.ps1` (CA): runs `certutil -ping` then enrolls a real
   cert against the built-in `User` template via the RPC/DCOM enrollment
   interface (`certreq -submit`) and asserts a non-trivial `.cer` is
   issued. The Web Enrollment HTTP front-end is not exercised; only the
   underlying CA service is.
 
+## Acceptance criterion
+
+The remediation must be observable from the network by an unauthenticated
+client: after the fix, `/certsrv` must either **not exist** or **not offer
+NTLM/Negotiate over cleartext HTTP**, while `corp-ca01` stays up and the CA
+service keeps issuing. A fix that only changes how a *completed* NTLM
+exchange is validated leaves the cleartext challenge on the wire and does
+not satisfy this.
+
 ## Expected remediation paths
 
-1. Uninstall the Web Enrollment role entirely (primary fix, no relay
+1. **Uninstall the Web Enrollment role entirely** (primary fix, no relay
    surface remains): `Uninstall-WindowsFeature ADCS-Web-Enrollment`. The
    underlying CA service stays up; only the HTTP front-end goes away.
-2. Require HTTPS-only on `/certsrv` via IIS bindings and remove the HTTP
-   binding (or redirect HTTP-to-HTTPS with a 301). NTLM relay tooling
-   cannot bind to TLS without the channel-binding token.
-3. Enable Extended Protection for Authentication on the `/certsrv`
+   `/certsrv` then 404s, which satisfies the acceptance criterion directly.
+   Web Enrollment is explicitly *not* part of the service contract above.
+2. Enable Extended Protection for Authentication on the `/certsrv`
    virtual directory:
    `Set-WebConfigurationProperty -Filter
    '/system.webServer/security/authentication/windowsAuthentication/extendedProtection'
    -Location 'Default Web Site/certsrv' -Name 'tokenChecking' -Value
-   'Require'`. With EPA required, the NTLM blob is bound to the TLS
-   channel and the relay fails.
+   'Require'`. EPA binds the NTLM blob to the TLS channel and is correct
+   hardening where Web Enrollment must be kept -- but an EPA-hardened
+   endpoint still answers HTTP and still advertises NTLM, so on its own it
+   does not meet the acceptance criterion. If you keep the role, EPA must be
+   combined with removing the NTLM/Negotiate challenge from the cleartext
+   HTTP path.
+3. Moving `/certsrv` to HTTPS-only is sound practice in general, but it does
+   not resolve this finding as stated. Deleting the HTTP binding makes the
+   endpoint unreachable rather than demonstrably hardened, and a redirect
+   answers with a 3xx that carries no authentication challenge either way --
+   neither outcome is evidence that the cleartext NTLM surface was removed.
+   Treat it as defence in depth alongside (1), not as a substitute for it.

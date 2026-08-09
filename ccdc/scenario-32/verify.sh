@@ -1,6 +1,15 @@
 #!/bin/bash
 # Scenario 32: Verify AppArmor is installed and enforcing profiles
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+# Exit 0 = every check passed, Exit 1 = at least one check failed
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "enforced AppArmor but broke the system" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== Scenario 32: AppArmor Enforcement Check ==="
 
@@ -11,20 +20,18 @@ echo "[PoC] Checking if AppArmor is not enforcing..."
 
 # Check 1: Is AppArmor installed?
 if ! command -v aa-status &>/dev/null; then
-    echo "[PoC] FAIL: AppArmor utilities not installed."
-    echo "RESULT: Vulnerability still present (apparmor-utils missing)."
-    exit 1
+    record_poc apparmor_utils_installed 0 "AppArmor utilities not installed"
+else
+    record_poc apparmor_utils_installed 1 "AppArmor utilities are installed"
 fi
-echo "[PoC] PASS: AppArmor utilities are installed."
 
 # Check 2: Is AppArmor service enabled?
 if command -v systemctl &>/dev/null; then
     if ! systemctl is-enabled apparmor &>/dev/null 2>&1; then
-        echo "[PoC] FAIL: AppArmor service is not enabled."
-        echo "RESULT: Vulnerability still present (apparmor not enabled)."
-        exit 1
+        record_poc apparmor_service_enabled 0 "AppArmor service is not enabled"
+    else
+        record_poc apparmor_service_enabled 1 "AppArmor service is enabled"
     fi
-    echo "[PoC] PASS: AppArmor service is enabled."
 fi
 
 # Check 3: Are the shipped profiles actually in enforce mode?
@@ -87,24 +94,22 @@ fi
 # Guard against "remediating" by deleting the policy instead of enforcing it.
 # The image ships ~147 profiles; enforcing MAC never means throwing policy away.
 if [ "$TOTAL_PROFILES" -lt 10 ]; then
-    echo "[PoC] FAIL: Only $TOTAL_PROFILES AppArmor profile(s) present (source: ${MODE_SOURCE:-none})."
-    echo "[PoC]       Profiles were removed rather than switched to enforce mode."
-    echo "RESULT: Vulnerability still present (AppArmor policy missing)."
-    exit 1
+    record_poc apparmor_policy_retained 0 "only $TOTAL_PROFILES AppArmor profile(s) present (source: ${MODE_SOURCE:-none}) - profiles were removed rather than switched to enforce mode"
+else
+    record_poc apparmor_policy_retained 1 "$TOTAL_PROFILES AppArmor profile(s) present (source: $MODE_SOURCE)"
 fi
 
 if [ "$COMPLAIN_COUNT" -gt 0 ]; then
-    echo "[PoC] FAIL: $COMPLAIN_COUNT of $TOTAL_PROFILES AppArmor profile(s) are still in complain mode (source: $MODE_SOURCE)."
-    echo "[PoC]       Complain mode only logs; it does not confine anything."
-    exit 1
+    record_poc no_profiles_in_complain_mode 0 "$COMPLAIN_COUNT of $TOTAL_PROFILES AppArmor profile(s) are still in complain mode (source: $MODE_SOURCE) - complain mode only logs, it does not confine anything"
+else
+    record_poc no_profiles_in_complain_mode 1
 fi
 
 if [ "$ENFORCE_COUNT" -le 0 ]; then
-    echo "[PoC] FAIL: No AppArmor profiles are in enforce mode."
-    echo "RESULT: Vulnerability still present (no enforced profiles)."
-    exit 1
+    record_poc profiles_in_enforce_mode 0 "no AppArmor profiles are in enforce mode"
+else
+    record_poc profiles_in_enforce_mode 1 "$ENFORCE_COUNT/$TOTAL_PROFILES AppArmor profile(s) in enforce mode (source: $MODE_SOURCE)"
 fi
-echo "[PoC] PASS: $ENFORCE_COUNT/$TOTAL_PROFILES AppArmor profile(s) in enforce mode (source: $MODE_SOURCE)."
 
 # Check 4: Ensure the intentional-weakness marker is removed or overridden
 if [ -f /etc/apparmor/apparmor_status.conf ]; then
@@ -113,8 +118,6 @@ if [ -f /etc/apparmor/apparmor_status.conf ]; then
     fi
 fi
 
-echo "[PoC] All checks passed - vulnerability is remediated."
-
 # ──────────────────────────────────────────────
 # Regression Test: Ensure system still works
 # ──────────────────────────────────────────────
@@ -122,34 +125,34 @@ echo ""
 echo "[Regression] Checking system functionality..."
 
 # Check that basic system operations work
-if ! id root &>/dev/null; then
-    echo "[Regression] FAIL: Basic user operations broken."
-    exit 1
+if id root &>/dev/null; then
+    record_reg user_operations_work 1
+else
+    record_reg user_operations_work 0 "basic user operations broken"
 fi
-echo "[Regression] PASS: User operations work."
 
 # Check that filesystem operations work
 TESTFILE="/tmp/apparmor_regression_test_$$"
-if ! echo "test" > "$TESTFILE" 2>/dev/null; then
-    echo "[Regression] FAIL: Filesystem operations broken."
-    exit 1
+if echo "test" > "$TESTFILE" 2>/dev/null; then
+    record_reg filesystem_operations_work 1
+    rm -f "$TESTFILE"
+else
+    record_reg filesystem_operations_work 0 "filesystem operations broken"
 fi
-rm -f "$TESTFILE"
-echo "[Regression] PASS: Filesystem operations work."
 
 # Check that process operations work
-if ! ps aux &>/dev/null; then
-    echo "[Regression] FAIL: Process listing broken."
-    exit 1
+if ps aux &>/dev/null; then
+    record_reg process_operations_work 1
+else
+    record_reg process_operations_work 0 "process listing broken"
 fi
-echo "[Regression] PASS: Process operations work."
 
 # Check that AppArmor itself is not breaking things
-if ! ls /etc/ &>/dev/null; then
-    echo "[Regression] FAIL: Directory listing broken (possible AppArmor over-restriction)."
-    exit 1
+if ls /etc/ &>/dev/null; then
+    record_reg directory_listing_works 1 "AppArmor enforcement does not break normal operations"
+else
+    record_reg directory_listing_works 0 "directory listing broken (possible AppArmor over-restriction)"
 fi
-echo "[Regression] PASS: AppArmor enforcement does not break normal operations."
 
 # The usual way to flip a profile out of complain mode is to edit its flags=()
 # list with sed. A sloppy edit silently corrupts the policy, which would leave
@@ -167,17 +170,15 @@ if command -v apparmor_parser &>/dev/null; then
         PARSE_CHECKED=$((PARSE_CHECKED + 1))
         if ! apparmor_parser -Q "$profile" >/dev/null 2>&1; then
             [ "$PARSE_FAILED" -lt 5 ] && \
-                echo "[Regression] FAIL: AppArmor profile $profile no longer parses."
+                echo "[Regression] note: AppArmor profile $profile no longer parses."
             PARSE_FAILED=$((PARSE_FAILED + 1))
         fi
     done
     if [ "$PARSE_FAILED" -gt 0 ]; then
-        echo "[Regression] FAIL: $PARSE_FAILED of $PARSE_CHECKED profiles are syntactically broken."
-        exit 1
+        record_reg apparmor_profiles_parse 0 "$PARSE_FAILED of $PARSE_CHECKED profiles are syntactically broken"
+    else
+        record_reg apparmor_profiles_parse 1 "$PARSE_CHECKED AppArmor profiles still parse cleanly"
     fi
-    echo "[Regression] PASS: $PARSE_CHECKED AppArmor profiles still parse cleanly."
 fi
 
-echo ""
-echo "RESULT: Remediation successful - AppArmor enforcing and system functional."
-exit 0
+verify_finish

@@ -7,39 +7,46 @@
 # TCP connection to 127.0.0.1:513 (rlogin/login) and demands EXPLICIT evidence:
 #   * a completed TCP connect (xinetd hands off to in.rlogind) == LIVE   -> FAIL
 #   * an EXPLICIT ECONNREFUSED == the listener is gone                    -> fix
-# Empty / ambiguous probe output is NEVER treated as a verdict: it is a
-# regression failure (we could not determine the port state), not a pass. The
-# probe tool (python2.5, shipped in the base image) is checked for up front so a
-# missing interpreter can never be silently coerced into a "refused -> PASS".
+# Empty / ambiguous probe output is NEVER treated as a verdict.
 #
-# Truth table:
-#   sshd (secure alternative) down / not answering -> FAIL [Regression]
-#   port 513 connect succeeds (rlogind reachable)   -> FAIL [PoC]
-#   port 513 ECONNREFUSED, sshd handshake ok        -> PASS
-#   probe tool missing / only errors (no verdict)   -> FAIL [Regression]
+# PoC checks:        port 513 explicitly refuses connections (rlogin disabled)
+# Regression checks: sshd — the secure alternative — runs and completes a real
+#                    SSH handshake on port 22
 #
-# Exit 0 = remediated (PASS), Exit 1 = still vulnerable or broken (FAIL)
+# Exit 0 = every check passed, Exit 1 = at least one failed, Exit 42 = N/A.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early. See lib/verifylib.sh.
+#
+# NO UNREACHABILITY COUPLING HERE, deliberately. The PoC is an EXPOSURE-removal
+# check — "is port 513 gone?" — and a killed rlogin genuinely IS gone (refused),
+# a real close. Collateral damage is caught by the regression component, which
+# grades a DIFFERENT service (sshd). That lets this scenario express a
+# security-true / regression-false pair.
 
 set -u
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
+
 TARGET_PORT=513
 
 ###############################################################################
-# The secure alternative (sshd) must be up. verify.sh must NEVER start it — a
-# dead alternative is a real failure.
+# Regression: the secure alternative (sshd) must be up. verify.sh must NEVER
+# start it — a dead alternative is a real failure.
 ###############################################################################
-if ! pgrep -x sshd >/dev/null 2>&1; then
-    echo "FAIL [Regression]: sshd is not running (secure alternative down)." >&2
-    echo "                   verify.sh must not start it." >&2
-    exit 1
+if pgrep -x sshd >/dev/null 2>&1; then
+    record_reg sshd_running 1
+else
+    record_reg sshd_running 0 "sshd is not running — secure alternative down (verify.sh must not start it)"
 fi
 
 # The connect probe relies on python2.5 (present in the base image). If it is
-# absent we CANNOT decide the port state — that is a regression failure, never a
-# silent "refused -> PASS".
+# genuinely absent the port state cannot be determined, so this is a precondition
+# skip rather than a guessed verdict.
 if ! command -v python2.5 >/dev/null 2>&1; then
-    echo "FAIL [Regression]: python2.5 (TCP probe tool) is not available — cannot" >&2
-    echo "                   determine port $TARGET_PORT state; refusing to guess." >&2
-    exit 1
+    skip_not_applicable "python2.5 (TCP probe tool) is not available; cannot determine port $TARGET_PORT state"
 fi
 
 PROBE=$(mktemp /tmp/rprobe.XXXXXX)
@@ -49,9 +56,6 @@ trap 'rm -f "$PROBE"' EXIT
 #   exit 0  -> "CONNECTED"  : TCP connect() succeeded (xinetd hands off rlogind)
 #   exit 2  -> "REFUSED"    : ECONNREFUSED (no listener)
 #   exit 3  -> "ERROR:..."  : any other outcome (timeout, unreachable, ...)
-# in.rlogind waits for the client's null-terminated strings before replying, so
-# a successful connect (with the minimal rlogin opening pushed) is the exposure,
-# regardless of whether data comes back.
 cat > "$PROBE" <<'PY'
 import socket, sys, errno
 try:
@@ -59,7 +63,6 @@ try:
     s.settimeout(5)
     s.connect(("127.0.0.1", 513))
 except socket.error, e:
-    # python2.5's socket.error keeps the errno in args[0], not always .errno
     err = getattr(e, "errno", None)
     if err is None and getattr(e, "args", None):
         err = e.args[0]
@@ -71,8 +74,6 @@ except socket.error, e:
 except Exception, e:
     print "ERROR:%s" % (e,)
     sys.exit(3)
-# Speak the minimal rlogin opening so xinetd actually hands off to in.rlogind
-# and the connection is not merely a transient accept.
 try:
     s.settimeout(5)
     s.sendall("\x00")
@@ -94,9 +95,8 @@ PY
 ###############################################################################
 # PoC: probe rlogin on port 513. Require EXPLICIT evidence. A completed connect
 # at ANY iteration == vulnerable. We only conclude "refused" when we actually
-# observed ECONNREFUSED; if every attempt errored we FAIL as a regression (no
-# verdict) rather than passing on emptiness. Bounded retry absorbs a transient
-# during xinetd reload.
+# observed ECONNREFUSED; if every attempt errored we record a regression failure
+# (no verdict) rather than passing on emptiness.
 ###############################################################################
 saw_connected=0
 saw_refused=0
@@ -114,39 +114,37 @@ for i in $(seq 1 8); do
 done
 
 if [ "$saw_connected" = "1" ]; then
-    echo "FAIL [PoC]: rlogind accepted a TCP connection on 127.0.0.1:$TARGET_PORT" >&2
-    echo "            (probe: $LAST) — cleartext rlogin service is live." >&2
-    exit 1
+    record_poc rlogin_disabled 0 \
+        "rlogind accepted a TCP connection on 127.0.0.1:$TARGET_PORT (probe: $LAST) — cleartext rlogin service is live"
+elif [ "$saw_refused" = "1" ]; then
+    record_poc rlogin_disabled 1
+else
+    echo "  [SKIP] (poc) rlogin_disabled: could not obtain an explicit"
+    echo "         connection-refused from port $TARGET_PORT (last: $LAST). Ambiguous"
+    echo "         probe output is not a verdict; recorded as a regression instead."
+    record_reg rlogin_probe_conclusive 0 \
+        "could not determine port $TARGET_PORT state — every probe errored (last: $LAST)"
 fi
-if [ "$saw_refused" != "1" ]; then
-    echo "FAIL [Regression]: could not obtain an explicit connection-refused from" >&2
-    echo "                   port $TARGET_PORT (last: $LAST). Empty/ambiguous probe" >&2
-    echo "                   output is not treated as a pass." >&2
-    exit 1
-fi
-echo "PASS [PoC]: port $TARGET_PORT explicitly refuses connections — rlogin is disabled."
 
 ###############################################################################
 # Regression: sshd must complete a real handshake (not just have a socket open).
-# A bricked sshd that no longer negotiates must NOT pass. We drive an SSH client
-# with PreferredAuthentications=none; reaching the auth stage proves KEX
-# completed against a live daemon.
 ###############################################################################
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5 -o PreferredAuthentications=none"
 SSH_UP=0
+SOUT=""
 for i in $(seq 1 10); do
-    SOUT=$(ssh $SSH_OPTS root@127.0.0.1 true 2>&1)
+    SOUT=$(ssh $SSH_OPTS root@127.0.0.1 true 2>&1) || true
     if echo "$SOUT" | grep -qiE "permission denied|denied \(|password|authenticated"; then
         SSH_UP=1; break
     fi
     sleep 1
 done
-if [ "$SSH_UP" != "1" ]; then
-    echo "FAIL [Regression]: sshd did not complete an SSH handshake on port 22" >&2
-    echo "                   (secure alternative down/broken). last: $SOUT" >&2
-    exit 1
-fi
-echo "PASS [Regression]: sshd completes a real SSH handshake on port 22."
 
-echo "All checks passed."
-exit 0
+if [ "$SSH_UP" = "1" ]; then
+    record_reg sshd_handshake 1
+else
+    record_reg sshd_handshake 0 \
+        "sshd did not complete an SSH handshake on port 22 (secure alternative down/broken); last: $SOUT"
+fi
+
+verify_finish

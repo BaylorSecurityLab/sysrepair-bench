@@ -68,6 +68,18 @@ inspect_eval/logs-old/
 # and confirm with `git ls-files --error-unmatch <path>`.
 *.json
 !croissant.json
+
+# hpc/ cost analysis. su_cost_model.py reads observed_billing.json BY FILENAME
+# (--observed) and the concurrency_*.json sweeps are the measured evidence for
+# the GPU-count decision -- the analysis is unreproducible without them. Negated
+# per the caution above the blanket *.json rule.
+!hpc/observed_billing.json
+!hpc/concurrency_*.json
+# Per-scenario VM harness manifests. run-scenario.sh and the inspect discovery
+# path both read these BY FILENAME and hard-error without them, so the blanket
+# rule above would make every VM scenario dead on a fresh clone. meta4/ad-vm's
+# copies survived only because they were force-added before the rule existed.
+!harness.json
 inspect_eval/baseline_report.json
 inspect_eval/app_categories.tex
 inspect_eval/results_table.tex
@@ -88,3 +100,23 @@ gate-diagnostics.json
 # a fresh clone -- every VM port looked like it had never been done.
 !hivestorm/*/lab/automatedlab.json
 !meta4/*/lab/hyperv.json
+
+# Per-scenario throwaway SSH keypairs, minted by _prepare_advm_bridge at run
+# time and regenerated whenever absent. NOTHING here belongs in git: a private
+# key WAS committed once (08cd58a, meta4/ad-vm/scenario-01/build/bridge_key) and
+# escaped publication only because the branch had not been pushed. The harness
+# recreates these on demand, so ignoring them costs nothing.
+meta4/ad-vm/*/build/bridge_key
+meta4/ad-vm/*/build/bridge_key.pub
+meta3/windows-vm/*/build/bridge_key
+meta3/windows-vm/*/build/bridge_key.pub
+# Lab-level too: SysRepairLab.ps1 reads meta3/windows-vm/build/bridge_key.pub,
+# which the pattern above (one directory deeper) does not match.
+meta3/windows-vm/build/
+
+# Live vLLM serve args (hpc/vllm_args.env.example is the committed template).
+# Ignored because *.env files attract credentials and this one carries
+# site-specific scratch paths.
+hpc/vllm_args.env
+# Per-job vLLM API keys / endpoints written by hpc/vllm_serve.slurm
+.vllm_delta/

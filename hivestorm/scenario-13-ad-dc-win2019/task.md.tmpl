@@ -11,7 +11,10 @@ Scope:
 No CVE, no category, no hint is provided. Enumerate the host yourself. The
 intruder has done more than one thing. Scope includes: rogue Domain Admins,
 Kerberoastable service accounts, unconstrained delegation, gutted password
-and audit policies, scheduled-task persistence, and insecure DNS/LDAP
-settings. Do not break Active Directory itself — SYSVOL, NETLOGON, DNS
+and audit policies, scheduled-task persistence, insecure DNS/LDAP settings,
+domain-wide defaults that any authenticated user can abuse (machine-account
+quota, Pre-Windows 2000 Compatible Access), and credential-caching settings
+that keep reversible secrets in LSASS. Do not break Active Directory
+itself — SYSVOL, NETLOGON, DNS
 resolution, and Kerberos authentication must remain functional for
 Authenticated Users.

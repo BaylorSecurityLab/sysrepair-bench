@@ -1,6 +1,22 @@
 #!/bin/bash
 # Scenario 37: Verify Avahi/mDNS daemon is removed or disabled
-# Exit 0 = remediation successful, Exit 1 = remediation failed
+#
+# PoC checks:        no avahi-daemon process, nothing bound to UDP/5353, the
+#                    unit cannot start at boot, mDNS is out of the NSS path
+# Regression checks: ordinary name resolution through NSS still works
+#
+# Exit 0 = every check passed          (remediated, service intact)
+# Exit 1 = at least one check failed
+# Exit 42 = precondition does not hold on this host
+#
+# Two-component protocol: each check is recorded with its kind and NOTHING
+# aborts early, so "killed avahi but broke DNS" is reported as
+# security_pass=true / regression_pass=false rather than collapsing into a bare
+# exit 1. See lib/verifylib.sh.
+
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 echo "=== Scenario 37: Avahi/mDNS Daemon Check ==="
 
@@ -56,19 +72,17 @@ if grep -qiE '^hosts:.*mdns' /etc/nsswitch.conf 2>/dev/null; then
 fi
 
 if $AVAHI_RUNNING; then
-    echo "[PoC] FAIL: an avahi-daemon process is running."
-    echo "RESULT: Vulnerability still present (avahi-daemon running)."
-    exit 1
+    record_poc avahi_daemon_not_running 0 "an avahi-daemon process is running"
+else
+    record_poc avahi_daemon_not_running 1
 fi
-echo "[PoC] PASS: no avahi-daemon process is running."
 
 if $MDNS_BOUND; then
-    echo "[PoC] FAIL: a socket is still bound to UDP port 5353 (mDNS)."
+    record_poc mdns_port_5353_unbound 0 "a socket is still bound to UDP port 5353 (mDNS)"
     awk 'NR>1 { split($2, a, ":"); if (toupper(a[2]) == "14E9") print "  " $0 }' /proc/net/udp /proc/net/udp6 2>/dev/null
-    echo "RESULT: Vulnerability still present (port 5353 open)."
-    exit 1
+else
+    record_poc mdns_port_5353_unbound 1
 fi
-echo "[PoC] PASS: nothing is bound to UDP port 5353."
 
 if $AVAHI_INSTALLED; then
     echo "[PoC] INFO: avahi-daemon package is still installed (disable-in-place path)."
@@ -89,24 +103,20 @@ if $AVAHI_INSTALLED; then
         ENABLED=true
     fi
     if $ENABLED; then
-        echo "[PoC] FAIL: avahi-daemon is still enabled and would start at boot."
-        echo "RESULT: Vulnerability still present (avahi-daemon enabled)."
-        exit 1
+        record_poc avahi_cannot_start_at_boot 0 "avahi-daemon is still enabled and would start at boot"
+    else
+        record_poc avahi_cannot_start_at_boot 1
     fi
-    echo "[PoC] PASS: avahi-daemon is stopped and disabled (will not start at boot)."
 else
-    echo "[PoC] PASS: avahi-daemon package is not installed."
+    record_poc avahi_cannot_start_at_boot 1
 fi
 
 if $MDNS_NSS; then
-    echo "[PoC] FAIL: /etc/nsswitch.conf still routes host lookups through mDNS:"
-    grep -iE '^hosts:' /etc/nsswitch.conf
-    echo "RESULT: Vulnerability still present (mDNS name resolution still active)."
-    exit 1
+    record_poc mdns_out_of_nss_path 0 "/etc/nsswitch.conf still routes host lookups through mDNS"
+    grep -iE '^hosts:' /etc/nsswitch.conf 2>/dev/null
+else
+    record_poc mdns_out_of_nss_path 1
 fi
-echo "[PoC] PASS: host lookups no longer go through mDNS."
-
-echo "[PoC] All checks passed - vulnerability is remediated."
 
 # ──────────────────────────────────────────────
 # Regression Test: Ensure DNS resolution still works
@@ -115,11 +125,11 @@ echo ""
 echo "[Regression] Checking system functionality..."
 
 # Check that basic system operations work
-if ! id root &>/dev/null; then
-    echo "[Regression] FAIL: Basic user operations broken."
-    exit 1
+if id root &>/dev/null; then
+    record_reg user_operations_work 1
+else
+    record_reg user_operations_work 0 "basic user operations broken"
 fi
-echo "[Regression] PASS: User operations work."
 
 # Check that standard DNS resolution works (not mDNS).
 # WAS WEAK: `host`/`dig` were preferred and every failure was downgraded to a
@@ -130,12 +140,10 @@ echo "[Regression] PASS: User operations work."
 DNS_WORKS=false
 if getent hosts ubuntu.com &>/dev/null 2>&1 || getent ahosts archive.ubuntu.com &>/dev/null 2>&1; then
     DNS_WORKS=true
-    echo "[Regression] PASS: DNS resolution works through NSS (getent)."
 else
     sleep 3
     if getent hosts ubuntu.com &>/dev/null 2>&1 || getent ahosts archive.ubuntu.com &>/dev/null 2>&1; then
         DNS_WORKS=true
-        echo "[Regression] PASS: DNS resolution works through NSS (getent, after retry)."
     fi
 fi
 
@@ -144,38 +152,36 @@ if command -v host &>/dev/null && host ubuntu.com &>/dev/null 2>&1; then
     echo "[Regression] INFO: direct resolver query also works (host)."
 fi
 
-if ! $DNS_WORKS; then
-    echo "[Regression] FAIL: name resolution is broken - no resolver path returns an address."
+if $DNS_WORKS; then
+    record_reg nss_name_resolution_works 1
+else
+    record_reg nss_name_resolution_works 0 "name resolution is broken - no resolver path returns an address"
     grep -iE '^hosts:' /etc/nsswitch.conf 2>/dev/null
-    exit 1
 fi
 
 # Check that /etc/nsswitch.conf is not broken
 if [ -f /etc/nsswitch.conf ]; then
     if grep -q "^hosts:" /etc/nsswitch.conf; then
-        echo "[Regression] PASS: /etc/nsswitch.conf has hosts entry."
+        record_reg nsswitch_hosts_entry_present 1
     else
-        echo "[Regression] FAIL: /etc/nsswitch.conf is missing hosts entry."
-        exit 1
+        record_reg nsswitch_hosts_entry_present 0 "/etc/nsswitch.conf is missing hosts entry"
     fi
 fi
 
 # Check that filesystem operations work
 TESTFILE="/tmp/avahi_regression_test_$$"
-if ! echo "test" > "$TESTFILE" 2>/dev/null; then
-    echo "[Regression] FAIL: Filesystem operations broken."
-    exit 1
+if echo "test" > "$TESTFILE" 2>/dev/null; then
+    record_reg filesystem_operations_work 1
+else
+    record_reg filesystem_operations_work 0 "filesystem operations broken"
 fi
 rm -f "$TESTFILE"
-echo "[Regression] PASS: Filesystem operations work."
 
 # Check that process operations work
-if ! ps aux &>/dev/null; then
-    echo "[Regression] FAIL: Process listing broken."
-    exit 1
+if ps aux &>/dev/null; then
+    record_reg process_operations_work 1
+else
+    record_reg process_operations_work 0 "process listing broken"
 fi
-echo "[Regression] PASS: Process operations work."
 
-echo ""
-echo "RESULT: Remediation successful - Avahi removed and DNS resolution functional."
-exit 0
+verify_finish

@@ -8,47 +8,56 @@
 # therefore: (1) dnssec-validation is configured to 'auto'/'yes' and NOT 'no',
 # and (2) the resolver is genuinely LIVE (named running and answering). We do NOT
 # fake a runtime DNSSEC probe. See threat.md.
+#
+# Two-component protocol: every check is recorded with its kind and NOTHING
+# aborts early, so "enabled DNSSEC validation but killed named" is reported as
+# security_pass / regression_pass rather than a bare exit 1. See lib/verifylib.sh.
 set -u
+# The guard is load-bearing: under the harness scorer.py has already inlined the
+# library and set this, so the agent-writable /tmp path is never read.
+[ -n "${_SYSREPAIR_VERIFYLIB_LOADED:-}" ] || . "${SYSREPAIR_VERIFYLIB:-/tmp/verifylib.sh}"
 
 # named is booted by the image CMD (see .preserve-cmd). verify.sh must NEVER
 # start it: a dead daemon is a genuine failure.
-if ! pgrep -x named >/dev/null 2>&1; then
-    echo "FAIL [Regression]: named is not running - a dead service is a failure" >&2
-    echo "                   (verify.sh must not start it)." >&2
-    exit 1
+if pgrep -x named >/dev/null 2>&1; then
+    record_reg named_running 1
+else
+    record_reg named_running 0 \
+        "named is not running - a dead service is a failure (verify.sh must not start it)"
 fi
 
 ###############################################################################
 # Config check: dnssec-validation must not be 'no'. Anchored to the options file
 # (no grep -r) so the file path cannot contaminate the token match.
 ###############################################################################
-DV_LINE=$(grep -E 'dnssec-validation' /etc/bind/named.conf.options 2>/dev/null)
+DV_LINE=$(grep -E 'dnssec-validation' /etc/bind/named.conf.options 2>/dev/null || true)
 if [ -z "$DV_LINE" ]; then
-    echo "FAIL [PoC]: no dnssec-validation directive found in named.conf.options." >&2
-    exit 1
-fi
-if echo "$DV_LINE" | grep -qw 'no'; then
-    echo "FAIL [PoC]: dnssec-validation is still set to 'no'." >&2
-    exit 1
-fi
-if echo "$DV_LINE" | grep -qwE 'auto|yes'; then
-    echo "PASS [PoC]: dnssec-validation is set to 'auto' or 'yes'."
+    record_poc dnssec_validation_enabled 0 "no dnssec-validation directive found in named.conf.options"
+elif echo "$DV_LINE" | grep -qw 'no'; then
+    record_poc dnssec_validation_enabled 0 "dnssec-validation is still set to 'no'"
+elif echo "$DV_LINE" | grep -qwE 'auto|yes'; then
+    record_poc dnssec_validation_enabled 1 "dnssec-validation is set to 'auto' or 'yes'"
 else
-    echo "FAIL [PoC]: dnssec-validation is not set to 'auto' or 'yes'." >&2
-    exit 1
+    record_poc dnssec_validation_enabled 0 "dnssec-validation is not set to 'auto' or 'yes'"
 fi
 
 ###############################################################################
-# Liveness + Regression: the resolver must be live and local.test must resolve.
+# Regression: the resolver must be live and local.test must resolve.
 ###############################################################################
 i=0
+RESOLVED=0
 while [ "$i" -lt 10 ]; do
-    R=$(dig +short @127.0.0.1 local.test A 2>/dev/null)
+    R=$(dig +short @127.0.0.1 local.test A 2>/dev/null || true)
     if [ "$R" = "10.0.0.1" ]; then
-        echo "PASS [Regression]: named is live and local.test resolves to 10.0.0.1."
-        exit 0
+        RESOLVED=1
+        break
     fi
     i=$((i + 1)); sleep 2
 done
-echo "FAIL [Regression]: local.test did not resolve to 10.0.0.1 after remediation." >&2
-exit 1
+if [ "$RESOLVED" -eq 1 ]; then
+    record_reg local_test_resolves 1 "named is live and local.test resolves to 10.0.0.1"
+else
+    record_reg local_test_resolves 0 "local.test did not resolve to 10.0.0.1"
+fi
+
+verify_finish

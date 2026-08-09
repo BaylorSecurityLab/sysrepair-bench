@@ -45,33 +45,53 @@ compromise from any standard user account.
      is already broken (BLOCKED, exit 0).
   2. `certipy-ad req -template 'ESC3-User' -on-behalf-of 'CORP\Administrator'
      -pfx alice.pfx` to coerce an Administrator PFX, then
-     `certipy-ad auth -pfx administrator.pfx`. Exits 1 (PoC works) iff the
-     auth output contains `NT hash` or `AS-REP received`. Exits 0 (BLOCKED)
-     iff the on-behalf-of issuance is denied
-     (`access_denied`, `enrollment denied`, `invalid signature`) or no
-     Administrator PFX is produced.
+     `certipy-ad auth -pfx administrator.pfx`. Exits 1 (PoC works) iff a PFX
+     naming `administrator` is issued at all -- recovering the NT hash is
+     corroboration, not the threshold. Exits 0 (BLOCKED) **only** on an
+     explicit denial (`access_denied`, `enrollment denied`, `invalid
+     signature`).
+- **Holding the agent certificate is itself the finding.** If step 1 still
+  succeeds, alice is one call away from impersonation and the chain counts
+  as present: an unexplained failure at step 2 with an agent cert already in
+  hand is graded FAIL, not blocked.
 - `verify-service.ps1` (CA): runs `certutil -ping` then enrolls a real cert
   against the built-in `User` template with `certreq -submit` and asserts
   a non-trivial `.cer` is issued.
 
+## Acceptance criterion
+
+The finding is closed only when the CA **refuses the request outright** and
+says so -- ideally at step 1, so alice never obtains an enrollment-agent
+certificate in the first place. The recognised denial is the CA declining to
+serve the template: `CERTSRV_E_UNSUPPORTED_CERT_TYPE` / `0x80094800` / "not
+supported by this CA", template not found, access denied, or enrollment
+denied. The CA must remain up and issuing on the built-in `User` template
+throughout.
+
 ## Expected remediation paths
 
-1. Restrict the Enrollment Agent template's enrollment ACL to only authorized
-   PKI admin groups (not `Domain Users`):
-   `Set-Acl AD:CN=ESC3-Agent,...` to revoke the Certificate-Enrollment
-   extended right (`0e10c968-78fb-11d2-90d4-00c04f79dc55`) for the
-   `Domain Users` SID. Without enrol on `ESC3-Agent`, alice cannot mint
-   the agent cert in step 1.
-2. Disable enroll-on-behalf-of on the user template by clearing
-   `msPKI-RA-Application-Policies` and setting `msPKI-RA-Signature = 0` on
-   `ESC3-User`:
-   `Set-ADObject "CN=ESC3-User,..." -Clear msPKI-RA-Application-Policies -Replace @{ 'msPKI-RA-Signature' = 0 }`
-   - Removes the RA-signature requirement so step 2 of the chain is
-     structurally impossible.
-3. Configure CA-side Enrollment Agent restrictions to whitelist only specific
-   agents and target templates:
-   `certutil -setreg policy\EnrollmentAgentRights <SDDL>` then
-   `Restart-Service CertSvc`. The SDDL grants the Enrollment Agent right only
-   to a named PKI-admin SID against a named target template, preventing
-   alice (even if she has an agent cert) from invoking on-behalf-of against
-   `ESC3-User`.
+1. **Stop the CA offering both halves of the chain.** Unpublish
+   `ESC3-Agent` *and* `ESC3-User` from the issuing CA (`certutil
+   -SetCAtemplates -ESC3-Agent`, likewise for `ESC3-User`, or via the
+   Certification Authority console). Removing only one leaves the other
+   still enrollable by any domain user, and a partial fix should not pass.
+   This is the remediation the finding is graded against. Confirm afterwards
+   that the CA is still serving -- `certutil -ping` must succeed and `User`
+   enrollment must still work. Taking CertSvc down is never an acceptable
+   fix.
+2. Alongside (1), strip the over-broad enrollment grant from both template
+   objects so republishing cannot silently restore the chain: revoke the
+   Certificate-Enrollment extended right
+   (`0e10c968-78fb-11d2-90d4-00c04f79dc55`) and Certificate-AutoEnrollment
+   (`a05b8cc2-17bc-4802-a710-e7c15ab866a2`) from `Domain Users` /
+   `Authenticated Users` on `AD:CN=ESC3-Agent,...` and
+   `AD:CN=ESC3-User,...`.
+3. Attribute- and CA-level hardening is the right shape for templates you
+   intend to keep: clearing `msPKI-RA-Application-Policies` and setting
+   `msPKI-RA-Signature = 0` on `ESC3-User` removes the on-behalf-of
+   requirement, and `certutil -setreg policy\EnrollmentAgentRights <SDDL>`
+   plus a CertSvc restart restricts the Enrollment Agent right to named
+   principals and target templates. Both are worth doing -- but each leaves
+   `ESC3-Agent` published and enrollable, so the agent certificate is still
+   mintable and the acceptance criterion is not met. Pair them with (1) and
+   (2) rather than substituting for them.
