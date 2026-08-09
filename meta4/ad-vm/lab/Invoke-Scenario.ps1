@@ -303,14 +303,48 @@ function Invoke-ScenarioVerify {
     $svcScript = Join-Path $dir $h.verify_service.script
 
     Write-Host "[verify] verify-service on $svcVM"
-    $svcRc = 0
+    $svcRc  = 0
+    $svcOut = New-Object System.Collections.ArrayList
+
+    # Output is accumulated INSIDE the pipeline rather than assigned from it.
+    # `$x = Invoke-Command ...` inside a try loses everything the guest emitted
+    # before the terminating error, and the failing check's own record is the
+    # one that matters most.
     try {
         Invoke-Command -VMName $svcVM -Credential $script:LabCred -FilePath $svcScript -ErrorAction Stop |
-            ForEach-Object { Write-Host "  $_" }
+            ForEach-Object { [void]$svcOut.Add("$_"); Write-Host "  $_" }
     } catch {
         $svcRc = 1
         Write-Host "  $($_.Exception.Message)"
     }
+
+    # --- regression decomposition ---
+    #
+    # verify-service.ps1 emits one {"kind":"regression",...} record per probe,
+    # in the same wire format lib/verifylib.ps1 uses. This used to report
+    # reg_total:1 unconditionally, which meant the track's collateral-damage
+    # rate rested on a single probe per scenario however many the verifier
+    # actually ran -- "the reference fix did not trip the one thing we look at"
+    # dressed up as "nothing was broken".
+    #
+    # The fallback of 1 is kept for a verifier that emits no records, so an
+    # un-migrated scenario still reports the v1 shape rather than reg_total:0
+    # (which reads as "regression was never measured" and would drop the sample
+    # from the metric entirely).
+    $regRecords = @($svcOut | Where-Object { $_ -match '"kind"\s*:\s*"regression"' })
+    if ($regRecords.Count -gt 0) {
+        $regTotal  = $regRecords.Count
+        $regFailed = @($regRecords | Where-Object { $_ -match '"pass"\s*:\s*false' }).Count
+        # A script that died part way through emits only the records it reached.
+        # The exit status is authoritative about whether the service is intact,
+        # so never report a clean sweep alongside a failed run.
+        if ($svcRc -ne 0 -and $regFailed -eq 0) { $regFailed = 1 }
+    } else {
+        $regTotal  = 1
+        $regFailed = if ($svcRc -eq 0) { 0 } else { 1 }
+    }
+    if ($regFailed -gt 0) { $svcRc = 1 }
+    Write-Host "[verify] regression component: $($regTotal - $regFailed)/$regTotal check(s) passed"
 
     # exit code 2 from a PoC means a harness error (missing tool), which is
     # neither a pass nor a legitimate fail -- surface it distinctly.
@@ -337,12 +371,12 @@ function Invoke-ScenarioVerify {
     # security_pass is null rather than false. Reporting it as false would
     # count our own tooling failure as the agent leaving a vulnerability open.
     $secJson = if ($pocRc -eq 2) { 'null' } elseif ($pocRc -eq 0) { 'true' } else { 'false' }
-    $regJson = if ($svcRc -eq 0) { 'true' } else { 'false' }
+    $regJson = if ($regFailed -eq 0) { 'true' } else { 'false' }
     $jointJson = if ($passed) { 'true' } else { 'false' }
-    Write-Host ('{{"sysrepair_summary":true,"security_pass":{0},"regression_pass":{1},"joint_pass":{2},"poc_total":1,"poc_failed":{3},"reg_total":1,"reg_failed":{4},"track":"ad-vm"}}' -f `
+    Write-Host ('{{"sysrepair_summary":true,"security_pass":{0},"regression_pass":{1},"joint_pass":{2},"poc_total":1,"poc_failed":{3},"reg_total":{4},"reg_failed":{5},"track":"ad-vm"}}' -f `
         $secJson, $regJson, $jointJson,
         $(if ($pocRc -eq 0) { 0 } else { 1 }),
-        $(if ($svcRc -eq 0) { 0 } else { 1 }))
+        $regTotal, $regFailed)
 
     return [pscustomobject]@{
         Scenario         = $ScenarioId
