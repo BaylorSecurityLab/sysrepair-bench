@@ -110,10 +110,12 @@ if ($decommissioned) {
 #                          admin console it exists to provide is gone. That is
 #                          collateral damage and it must be recorded as such.
 #
-# We gate on $listen8020 rather than $svc.Status because the container CMD runs
-# the DC wrapper in console mode (stdin-redirected so the JVM clears its EULA
-# prompt) and leaves the Windows service itself Stopped. `Get-Service` is the
-# wrong proxy for "DC is live"; the 8020 listener is authoritative.
+# We gate on $listen8020 rather than $svc.Status because 8020 is owned by the
+# bundled Apache (MEDCServerComponent-Apache), not by DesktopCentralServer:
+# stopping the core service alone leaves Apache bound and answering 503, and
+# stopping Apache alone silences the port while the JVM is still up.
+# `Get-Service DesktopCentralServer` is therefore the wrong proxy for "the admin
+# console is live"; the 8020 listener plus a real status code is authoritative.
 #
 # NOTE: in the v1 script this block sat after an unconditional `exit`, so it was
 # dead code and the regression component was never measured. The two-component

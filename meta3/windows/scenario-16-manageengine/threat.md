@@ -17,23 +17,22 @@ without canonicalization or authentication. An attacker supplies a `connectionId
 containing path-traversal segments and a `.jsp` body; the servlet writes the file to
 a directory served by the bundled Tomcat and the JSP is executed on next request.
 
-This image ships build **9.1.0_91097**, two builds behind the fix (91100), and
-leaves the admin console on 8020/TCP plus the agent listener on 8040/TCP bound to
-`0.0.0.0`.
+The Rapid7 mirror this image installs from serves a version-less object; what it
+actually lays down reports `buildnumber=91084` in `conf\product.conf`, sixteen builds
+behind the fix (91100). The admin console is left on 8020/TCP bound to `0.0.0.0`.
 
 ## Affected Service
 - **Install root:** `C:\ManageEngine\DesktopCentral_Server` (bundled Tomcat + PostgreSQL)
 - **Services:** `DesktopCentralServer`, `MEDCServerComponent-Apache`,
   `MEDC Server Component - Notification Server`
-- **How it is actually running here:** the `DesktopCentralServer` Windows service is
-  registered but left **Stopped**. Desktop Central 9.1.0_91097 prompts for its licence
-  agreement on every launch and reads the answer from `System.in`, which a service start
-  (null stdin) can never satisfy, so the product is instead launched in **console mode**
-  by `C:\dc-run.bat` — a detached child process running
-  `bin\DCService.bat -c` with stdin redirected from a file. `Get-Service` is therefore the
-  wrong way to ask whether Desktop Central is live; the listener on 8020 is authoritative,
-  and `Stop-Service DesktopCentralServer` will not stop what is running.
-- **Ports:** 8020/TCP (admin UI), 8040/TCP (agent channel)
+- **How it is actually running here:** all three services are ordinary Windows services,
+  started by the container's CMD and left Running. `DesktopCentralServer` is the Tanuki
+  wrapper plus the product JVM; `MEDCServerComponent-Apache` is the front-end httpd that
+  owns **8020** and reverse-proxies to the JVM. Stopping the core service alone leaves
+  Apache answering 8020 with a 503, which is not a decommission -- the listener, not the
+  service state, is what is graded.
+- **Ports:** 8020/TCP (admin UI, via the bundled Apache), 8027/TCP (notification
+  server). The 8040/TCP agent channel is not bound in this build.
 - **Vulnerable endpoint:** `POST /agent/connection/download/FileUploadServlet?connectionId=...`
   (also reachable as `POST /fileupload?connectionId=...`)
 
@@ -76,12 +75,12 @@ upgrade, or removal. Exactly one of the following two must be achieved.
    - nothing is listening on **8020/TCP**, and
    - nothing is listening on **8040/TCP**.
 
-   Because the product is running as a detached console-mode child rather than as the
-   service (see *Affected Service* above), stopping and disabling the service alone will
-   not silence either port — you must also terminate the running wrapper/JVM and prevent
-   `C:\dc-run.bat` from bringing it back. Do not stop at 8020: the 8040 agent channel is
-   served by a separate component and a host with 8040 still up has not been
-   decommissioned. There are no firewall rules to remove — the host firewall is off.
+   Desktop Central is three cooperating services (see *Affected Service* above) and the
+   one named `DesktopCentralServer` is not the one holding 8020. Stopping it alone leaves
+   `MEDCServerComponent-Apache` bound to 8020 and answering 503, so the port is still
+   open and the box is still not decommissioned -- stop and disable every ManageEngine
+   service, and make sure no listener is left on 8020 or on the 8040 agent channel.
+   There are no firewall rules to remove -- the host firewall is off.
 
    Decommissioning removes the product, not the machine: `sshd` (22) and `WinRM` (5985)
    are the operator's access to this host and must still be Running when you are done.

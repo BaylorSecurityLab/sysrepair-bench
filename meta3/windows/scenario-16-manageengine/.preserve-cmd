@@ -3,12 +3,17 @@
 # The harness runs the image CMD so services actually boot. The CMD is
 # PID-1-safe:
 #   * sshd + WinRM are started first;
-#   * the ManageEngine Apache + Notification Server components are started via
-#     Start-Service, and dc-run.bat is launched in the BACKGROUND via
-#     Start-Process -NoNewWindow, so none of them is PID 1;
+#   * all three ManageEngine services (Apache, Notification Server and
+#     DesktopCentralServer) are started via Start-Service, so none of them is
+#     PID 1;
 #   * PID 1 is an idle `while ($true) { Start-Sleep 60 }` loop.
 #
+# Desktop Central's licence agreement is answered once at BUILD time (see the
+# Dockerfile and dc-register.bat), so DesktopCentralServer is an ordinary
+# Windows service here: Start-Service brings it up and Stop-Service takes it
+# down. There is no detached console-mode wrapper to hunt for.
+#
 # Consequence for solutions: ManageEngine Desktop Central is ALREADY RUNNING
-# with the vulnerable config, so a fix must restart the affected component
-# (safe now - it is not PID 1) for the live checks to pass. Restarting a
-# service can never kill the container.
+# with the vulnerable config, so a fix must restart or stop the affected
+# component (safe now - it is not PID 1) for the live checks to pass.
+# Restarting or stopping a service can never kill the container.
