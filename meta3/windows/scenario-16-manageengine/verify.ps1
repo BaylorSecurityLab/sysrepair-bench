@@ -60,36 +60,104 @@ if ($decommissioned) {
     }
 
     ###########################################################################
-    # Behavioral check: the FileUploadServlet must no longer accept traversal.
-    # A patched build responds 401/403/404 or a traversal-rejection 400;
-    # a 2xx on the crafted path that ALSO lands the file means the vulnerability
-    # is still present.
+    # Behavioral check: fire the real CVE-2015-8249 request and see whether the
+    # traversal lands on disk.
+    #
+    # THE REQUEST SHAPE IS READ OUT OF THE DEPLOYED APPLICATION, NOT GUESSED.
+    # webapps\DesktopCentral\WEB-INF\web.xml maps
+    #   <url-pattern>/fileupload</url-pattern>
+    # to com.adventnet.sym.webclient.common.FileUploadServlet (in
+    # lib\AdventNetDesktopCentral.jar). Its doPost reads FIVE parameters with
+    # getParameter -- connectionId, resourceId, action, computerName, customerId
+    # -- and customerId goes straight through Long.parseLong, so a request that
+    # omits it dies of NumberFormatException before anything is written. That is
+    # why a connectionId-only probe returns 200 and lands nothing: the servlet
+    # never got as far as the file. getFileFolderPath() produces a path ONLY when
+    # action equalsIgnoreCase "rds_file_upload"; getAbsoluteFileName() then builds
+    #   <serverDataDir(customerId)>\rds\scr-rec\<user>-<computerName>-<connectionId>.7z
+    # with no canonicalisation of connectionId -- the vulnerability -- and
+    # downLoadFile() copies request.getInputStream() into it verbatim. The body is
+    # never parsed as multipart, so MIME framing is pointless; the raw bytes we
+    # POST are the bytes on disk.
+    #
+    # Depth matters. "<user>-<computerName>-" is glued onto the front of
+    # connectionId, so its first "../" only cancels that prefix component. Six of
+    # them are needed to climb scr-rec -> rds -> <customerId> -> server-data ->
+    # webapps\DesktopCentral. Four (what the v1 probe used, and what a naive
+    # reading of the CVE suggests) lands inside server-data and hits a directory
+    # that does not exist, which the servlet swallows.
+    #
+    # FAIL-OPEN IS THE DEFECT THIS BLOCK EXISTS TO AVOID. "the servlet refused the
+    # traversal" and "nothing answered" are OPPOSITE conclusions, and a timeout, a
+    # reset, or a 503 from the bundled Apache sitting in front of a dead JVM
+    # cannot tell them apart -- the v1 probe treated all of them as a pass, which
+    # is why it stayed green through the entire period the product's JVM was down.
+    # So a CONTROL upload goes first: same servlet, same five parameters, a
+    # connectionId with no traversal in it. It is expected to succeed both before
+    # and after remediation (build 91100 rejects traversal in connectionId, not
+    # ordinary uploads), and it lands in the legitimate scr-rec folder. If the
+    # control does not land, this host is not answering and the traversal result
+    # is not evidence of anything -- recorded as a FAIL, never as a pass.
     ###########################################################################
-    $behaviorOk = $true
-    $behaviorDetail = ''
-    $boundary = [System.Guid]::NewGuid().ToString()
-    $probeName = "verify_" + [System.Guid]::NewGuid().ToString("N") + ".jsp"
-    $body = "--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"$probeName`"`r`nContent-Type: application/octet-stream`r`n`r`n<% out.println(`"VULN-VERIFY`"); %>`r`n--$boundary--`r`n"
-    $url = 'http://localhost:8020/fileupload?connectionId=../../../../webapps/DesktopCentral/' + $probeName
-    try {
-        $resp = Invoke-WebRequest -Uri $url -Method POST -Body $body `
-            -ContentType "multipart/form-data; boundary=$boundary" -UseBasicParsing `
-            -TimeoutSec 8 -ErrorAction SilentlyContinue
-        if ($resp -and $resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
-            # Check if the file was actually written -- some patched versions return 200
-            # but silently drop traversal attempts. Only a full exploit writes the file.
-            $wroteFile = Test-Path "C:\ManageEngine\DesktopCentral_Server\webapps\DesktopCentral\$probeName"
-            if ($wroteFile) {
-                $behaviorOk = $false
-                $behaviorDetail = "FileUploadServlet accepted traversal upload (HTTP $($resp.StatusCode), file written)."
-                Remove-Item "C:\ManageEngine\DesktopCentral_Server\webapps\DesktopCentral\$probeName" -ErrorAction SilentlyContinue
-            }
+    $behaviorOk = $false
+    $probeTag = 'srb' + [System.Guid]::NewGuid().ToString('N').Substring(0, 12)
+    $webRoot = Join-Path $dcRoot 'webapps\DesktopCentral'
+    $scrRec = Join-Path $webRoot 'server-data'
+    $travTarget = Join-Path $webRoot "$probeTag.7z"
+    $travCid = '../../../../../../' + $probeTag
+    $ctlCid = 'ctl' + $probeTag
+    $probeBody = [System.Text.Encoding]::ASCII.GetBytes("sysrepair-verify $probeTag")
+
+    function Invoke-DcUpload {
+        param([string]$ConnectionId)
+        $qs = 'connectionId=' + [uri]::EscapeDataString($ConnectionId) +
+              '&resourceId=1&action=rds_file_upload&computerName=' + $probeTag +
+              '&customerId=1'
+        try {
+            $req = [System.Net.WebRequest]::Create("http://localhost:8020/fileupload?$qs")
+            $req.Method = 'POST'
+            $req.ContentType = 'application/octet-stream'
+            $req.Timeout = 45000
+            $req.ReadWriteTimeout = 45000
+            $req.ContentLength = $probeBody.Length
+            $rs = $req.GetRequestStream()
+            $rs.Write($probeBody, 0, $probeBody.Length)
+            $rs.Close()
+            $rp = $req.GetResponse()
+            $code = [int]$rp.StatusCode
+            $rp.Close()
+            return "HTTP $code"
+        } catch [System.Net.WebException] {
+            if ($_.Exception.Response) { return "HTTP $([int]$_.Exception.Response.StatusCode)" }
+            return "no answer: $($_.Exception.Message)"
+        } catch {
+            return "no answer: $($_.Exception.Message)"
         }
-    } catch {
-        # Non-2xx = servlet rejected (404/400/403), or connection failed
     }
+
+    $ctlStatus = Invoke-DcUpload $ctlCid
+    $ctlHits = @(Get-ChildItem $scrRec -Recurse -Filter "*$ctlCid*" -ErrorAction SilentlyContinue)
+    $ctlLanded = ($ctlHits.Count -gt 0)
+
+    $travStatus = Invoke-DcUpload $travCid
+    $travLanded = [bool](Test-Path $travTarget -ErrorAction SilentlyContinue)
+
+    if ($travLanded) {
+        $behaviorDetail = "FileUploadServlet wrote $travTarget from POST /fileupload?connectionId=$travCid&resourceId=1&action=rds_file_upload&computerName=$probeTag&customerId=1 ($travStatus) -- the CVE-2015-8249 traversal is still open."
+    } elseif (-not $ctlLanded) {
+        $behaviorDetail = "UNMEASURABLE, recorded as a failure: the control upload (connectionId=$ctlCid, no traversal, $ctlStatus) never landed under $scrRec, so Desktop Central's upload servlet is not answering. The traversal upload ($travStatus) not landing therefore proves nothing -- a refusal from a dead service is not a fix."
+    } else {
+        $behaviorOk = $true
+        $behaviorDetail = "the control upload landed under $scrRec ($ctlStatus), proving the servlet is live and writing, but the same request with connectionId=$travCid ($travStatus) did not reach $travTarget."
+    }
+
+    foreach ($stale in $ctlHits) {
+        Remove-Item $stale.FullName -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item $travTarget -Force -ErrorAction SilentlyContinue
+
     if ($behaviorOk) {
-        Record-Poc dc_fileupload_traversal_rejected 1 "FileUploadServlet no longer accepts CVE-2015-8249 traversal."
+        Record-Poc dc_fileupload_traversal_rejected 1 $behaviorDetail
     } else {
         Record-Poc dc_fileupload_traversal_rejected 0 $behaviorDetail
     }

