@@ -47,6 +47,7 @@ from pathlib import Path
 import dotenv
 import yaml
 from inspect_ai import eval as inspect_eval
+from inspect_ai import eval_set as inspect_eval_set
 
 from .task import sysrepair_bench
 
@@ -724,6 +725,7 @@ def _run_preset(runs_path: Path, preset_name: str, *,
 
     total = len(models) * len(solvers) * len(modes) * len(seeds_list)
     i = 0
+    es_incomplete = False   # eval_set mode: any (model,mode,k) not fully done
     try:
       for model in models:
         for solver_name in solvers:
@@ -736,19 +738,47 @@ def _run_preset(runs_path: Path, preset_name: str, *,
                         f"mode={mode}", tag,
                     ]))
                     print(f"\n=== [{i}/{total}] {label} ===")
-                    inspect_eval(
-                        sysrepair_bench(
-                            solver=solver_name,
-                            mode=mode,
-                            max_attempts=k,
-                            **task_common,
-                        ),
-                        model=model,
-                        **eval_kwargs,
+                    task = sysrepair_bench(
+                        solver=solver_name,
+                        mode=mode,
+                        max_attempts=k,
+                        **task_common,
                     )
+                    if os.environ.get("SR_EVAL_SET") == "1":
+                        # Resumable across invocations: eval_set tracks completion
+                        # in a stable per-(preset,mode,k) log_dir, so re-running
+                        # (e.g. after a quota-window reset) skips finished samples.
+                        # Builds Tasks in-process, so no standalone task.py load
+                        # (avoids the eval_retry relative-import failure).
+                        es_dir = f"./logs_es/{preset_name}_{mode}_k{k}"
+                        es_kwargs = {kk: vv for kk, vv in eval_kwargs.items()
+                                     if kk != "log_dir"}
+                        print(f"[eval_set] log_dir={es_dir} (resumable)")
+                        es_ret = inspect_eval_set(
+                            [task],
+                            model=model,
+                            log_dir=es_dir,
+                            retry_attempts=0,
+                            **es_kwargs,
+                        )
+                        # eval_set returns (success: bool, logs). Track whether
+                        # every sample completed so the caller can tell "done"
+                        # from "partial / hit quota wall" via the exit code.
+                        ok = es_ret[0] if isinstance(es_ret, tuple) else bool(es_ret)
+                        if not ok:
+                            es_incomplete = True
+                    else:
+                        inspect_eval(
+                            task,
+                            model=model,
+                            **eval_kwargs,
+                        )
     finally:
         watchdog_stop.set()
         hang_stop.set()
+    if es_incomplete:
+        # Signal "not fully complete" to the driver (quota-paced resume loop).
+        raise SystemExit(3)
 
 
 def main(argv: list[str] | None = None) -> None:
