@@ -16,3 +16,22 @@ container (matching every other agent's affordances).
 AUTH: needs an interactive `kimi` login on the host first (populates
 `~/.kimi-code/{config.toml,device_id,credentials/,oauth}`); the runner docker-cp's
 a throwaway copy into each container. Credentials are never committed.
+
+## The `kimi` binary (required, not committed)
+
+`runner-img/Dockerfile` does `COPY bin/kimi /usr/local/bin/kimi`, but the vendor
+CLI binary is intentionally NOT in this repo (it is a third-party binary and would
+bloat the tree). Before building the runner image you must drop a **Linux** `kimi`
+binary at `scripts/kimi-eval/bin/kimi` (the runner is `FROM ubuntu:22.04`, so a
+Windows install will not work). Obtain it from the Moonshot/kimi-code distribution
+for Linux. Without it, `docker build` fails at the COPY with no other hint.
+
+## Architectural constraint (Docker mode)
+
+The runner is a Linux container and `srx` reaches the target via HTTP to an
+exec-agent on port 9000 inside the TARGET scenario container. This works only when
+runner and target are both Linux containers (meta2, vulnhub, ccdc, meta3/ubuntu,
+meta4, ad-vm). It CANNOT drive the `meta3/windows` track (Windows containers):
+runner and target would need opposite Docker Desktop modes simultaneously, which one
+engine cannot do. Windows-container scenarios need a second engine/host or a
+host-native runner rework.
