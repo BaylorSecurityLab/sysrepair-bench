@@ -1,0 +1,13 @@
+#!/bin/bash
+# srx 'CMD' -> run one bash -lc command in the target container via the exec-agent.
+# Mirrors the harness bash tool, including the dead-container FATAL surface
+# (solvers.py:81) so the model stops retrying when it has killed the sandbox.
+out=$(curl -s -m 195 --data-binary "$*" -D /tmp/_h "http://${SCX_HOST}:9000/" 2>/dev/null)
+cc=$?
+if [ "$cc" -ne 0 ] || ! grep -qi '^X-RC:' /tmp/_h 2>/dev/null; then
+  echo "[FATAL: sandbox container is not running — all further commands will fail. Stop and finish now.]"
+  exit 1
+fi
+rc=$(grep -i '^X-RC:' /tmp/_h | tr -dc '0-9'); rc=${rc:-0}
+printf '%s\n' "$out"
+exit "$rc"
