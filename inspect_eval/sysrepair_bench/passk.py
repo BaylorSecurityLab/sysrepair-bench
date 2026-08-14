@@ -165,19 +165,31 @@ def _chen_pass_at_k(n: int, c: int, k: int) -> float | None:
 
 
 def _prefix_pass_at(outcomes: list[bool], k: int) -> float | None:
-    """pass@k for ONE episode's sequential attempts: did any of the first k pass?
+    """Cumulative pass@k for ONE episode's sequential attempts: was it solved
+    within the first k submit attempts (seeds)?
 
     This is the estimator the within-episode curve needs. It makes no
     exchangeability assumption -- it simply reads off the process that actually
     happened, so it stays unbiased when feedback makes later attempts better or
     worse than earlier ones (see _chen_pass_at_k for the measured comparison).
 
-    Returns None when fewer than k attempts were observed, so a truncated
-    episode does not masquerade as a failure at higher k.
+    The retry harness STOPS at the first passing attempt, so a solved episode
+    records fewer than k outcomes. Such an episode is a *pass* for every k at or
+    above its first passing attempt -- it must NOT be dropped at higher k (that
+    was a bug that collapsed the k=5 denominator to the few hardest episodes and
+    understated pass@k). We therefore key off the first passing attempt:
+
+      * passed at attempt m  -> 1.0 for k>=m, 0.0 for k<m (counted at every k)
+      * never passed, >=k attempts observed -> 0.0 (a genuine failure at k)
+      * never passed, <k attempts observed  -> None (truncated failure: unknown
+        whether more attempts would have passed; do not count as a failure)
     """
-    if k > len(outcomes):
-        return None
-    return 1.0 if any(outcomes[:k]) else 0.0
+    first = next((i + 1 for i, o in enumerate(outcomes) if o), None)
+    if first is not None:
+        return 1.0 if first <= k else 0.0
+    if len(outcomes) >= k:
+        return 0.0
+    return None
 
 
 def _is_not_applicable_sample(sample) -> bool:
