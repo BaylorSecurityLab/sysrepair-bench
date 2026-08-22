@@ -35,6 +35,77 @@ from inspect_ai.tool import ToolDef, bash, text_editor, think, tool
 from inspect_ai.util import sandbox, store
 
 from .rate_limiter import get_rate_limiter
+import re as _re
+
+
+def _extract_json_obj(completion: str) -> dict:
+    """Robustly extract the first JSON object from an LLM completion.
+
+    Thinking models (e.g. MiniMax-M2.7) wrap JSON in <think>...</think> and/or
+    prose, and may use upper-case ```JSON fences. The old
+    ``strip("`") + startswith("json")`` logic silently yielded {} on all of
+    these -> empty plan/commands -> a guaranteed 0% for plan_and_solve/lats.
+
+    We must NOT mutate string *contents*: the benchmark's payloads are shell
+    commands full of braces and backticks (e.g. ``grep '}' f``, ``echo ```json``),
+    so a naive brace-counter or a global fence-regex corrupts them. Instead we
+    lean on json's own string-aware scanner: (1) strip <think>; (2) try
+    json.loads on the whole cleaned text; (3) else strip WHOLE-LINE fences only;
+    (4) else raw_decode-scan from each '{', skipping candidates that fail (this
+    also picks the real object over an echoed schema). Returns {} if none parse.
+    """
+    if not completion:
+        return {}
+    text = _re.sub(r"(?is)<think>.*?</think>", "", completion).strip()
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict) and obj:
+            return obj
+    except Exception:
+        pass
+    stripped = _re.sub(r"(?im)^[ \t]*```[a-z]*[ \t]*$", "", text).strip()
+    if stripped != text:
+        try:
+            obj = json.loads(stripped)
+            if isinstance(obj, dict) and obj:
+                return obj
+        except Exception:
+            pass
+    dec = json.JSONDecoder()
+    i = 0
+    while True:
+        j = stripped.find("{", i)
+        if j == -1:
+            return {}
+        try:
+            obj, end = dec.raw_decode(stripped, j)
+            if isinstance(obj, dict) and obj:
+                return obj
+            i = end
+        except Exception:
+            i = j + 1
+
+
+def _extract_command(completion: str) -> str:
+    """Extract a raw shell command from a model reply (the PS retry path).
+
+    Same reasoning-model blind spot as the JSON parse: a <think> block or a
+    ```lang fence would otherwise become the "corrected command" and execute as
+    shell, silently biasing plan_and_solve downward. Strips think blocks +
+    whole-line fences + a leading language word (bash/sh/shell/powershell/pwsh);
+    never touches command contents.
+    """
+    if not completion:
+        return ""
+    text = _re.sub(r"(?is)<think>.*?</think>", "", completion).strip()
+    text = _re.sub(r"(?im)^[ \t]*```[a-z]*[ \t]*$", "", text).strip()
+    text = text.strip("`").strip()
+    low = text.lower()
+    for pref in ("powershell", "pwsh", "bash", "shell", "sh"):
+        if low.startswith(pref + "\n"):
+            text = text[len(pref):].lstrip("\n").strip()
+            break
+    return text.strip()
 
 
 async def _rate_limited_generate(generate: Generate, state: TaskState) -> TaskState:
@@ -940,13 +1011,7 @@ def plan_and_solve_solver(
             ],
             config=GenerateConfig(response_schema=None),
         )
-        try:
-            raw = plan_resp.completion.strip().strip("`")
-            if raw.startswith("json"):
-                raw = raw[4:].strip()
-            plan = json.loads(raw).get("steps", [])
-        except Exception:
-            plan = []
+        plan = _extract_json_obj(plan_resp.completion or "").get("steps", []) or []
         state.metadata["plan"] = plan
 
         executed = 0
@@ -991,9 +1056,7 @@ def plan_and_solve_solver(
                         ChatMessageUser(content=fix_prompt),
                     ]
                 )
-                cmd = (fix_resp.completion or "").strip().strip("`")
-                if cmd.startswith("bash\n"):
-                    cmd = cmd[5:]
+                cmd = _extract_command(fix_resp.completion or "")
 
         # No per-step grading: one attempt = plan -> execute the whole plan ->
         # one grade at the episode boundary (applied by _with_attempts). The
@@ -1095,13 +1158,7 @@ def lats_solver(
                     ChatMessageUser(content=prompt),
                 ]
             )
-            try:
-                raw = (resp.completion or "").strip().strip("`")
-                if raw.startswith("json"):
-                    raw = raw[4:].strip()
-                cmds = json.loads(raw).get("commands", [])[:num_expansions]
-            except Exception:
-                cmds = []
+            cmds = (_extract_json_obj(resp.completion or "").get("commands", []) or [])[:num_expansions]
             for c in cmds:
                 if isinstance(c, str) and c.strip():
                     n.children.append(_Node(c.strip(), n, n.depth + 1))
@@ -1146,13 +1203,15 @@ def lats_solver(
                         ChatMessageUser(content=score_prompt),
                     ]
                 )
-                raw = (resp.completion or "").strip().strip("`")
-                if raw.startswith("json"):
-                    raw = raw[4:].strip()
-                obj = json.loads(raw)
-                score = max(0.0, min(1.0, float(obj.get("score", 0.3))))
-                if obj.get("fatal"):
-                    n.fatal = True
+                obj = _extract_json_obj(resp.completion or "")
+                if obj:
+                    # Parse OK: preserve the original 0.3 default + fatal read
+                    # (semantics-preserving; only the parse became robust).
+                    score = max(0.0, min(1.0, float(obj.get("score", 0.3))))
+                    if obj.get("fatal"):
+                        n.fatal = True
+                else:
+                    score = 0.5 if n.exit_code == 0 else 0.1
             except Exception:
                 score = 0.5 if n.exit_code == 0 else 0.1
             return score, False
