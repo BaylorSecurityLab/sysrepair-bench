@@ -1,0 +1,60 @@
+# Qwen3.5-9B FULL-SUITE, no cascade (user decision 2026-08-27).
+#
+# Model is served on DELTA (Slurm + Apptainer, 1x A40) and reached through an SSH
+# tunnel: 127.0.0.1:8001 -> <node>:<port>. Delta serves TOKENS ONLY -- the Docker
+# sandboxes still run on this VM, so this eval adds local container load even
+# though the GPU is remote. Delta login nodes must never run compute.
+#
+# api_key is PER-JOB: vllm_serve.slurm mints a fresh key each job into
+# ~/.vllm_delta/conn_<jobid>.env on Delta. Re-read it and update this file on
+# every re-serve, or every request 401s.
+#
+# Coverage: meta2 is ALREADY complete full-suite in both conditions
+# (logs_es/qwen9b_meta2_day1_day1_k5 and qwen9b_meta2_zeroday_zero_day_k5,
+# n=120 = 40 scenarios x 3 epochs each). Only the other four Linux suites remain.
+#
+# message_limit: 0 EXPLICIT -- omitting it inherits task.py's default of 40, which
+# ends episodes before the k=5 submit attempts materialise and corrupts pass@k.
+# Verify from the .eval header (eval.task_args), never from this file.
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  qwen9b_fs_day1:
+    model: openai/qwen3.5-9b
+    base_url: http://localhost:8001/v1
+    api_key: 44543ab353aa44f5667a3dd4a8ab435c54e828c76b96a6d7
+    benchmarks: [vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 4
+    modes: [day1]
+
+  qwen9b_fs_zeroday:
+    model: openai/qwen3.5-9b
+    base_url: http://localhost:8001/v1
+    api_key: 44543ab353aa44f5667a3dd4a8ab435c54e828c76b96a6d7
+    benchmarks: [vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 4
+    modes: [zero_day]

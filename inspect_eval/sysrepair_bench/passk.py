@@ -164,7 +164,9 @@ def _chen_pass_at_k(n: int, c: int, k: int) -> float | None:
     return 1.0 - (math.comb(n - c, k) / math.comb(n, k))
 
 
-def _prefix_pass_at(outcomes: list[bool], k: int) -> float | None:
+def _prefix_pass_at(
+    outcomes: list[bool], k: int, unresolved: str = "fail"
+) -> float | None:
     """Cumulative pass@k for ONE episode's sequential attempts: was it solved
     within the first k submit attempts (seeds)?
 
@@ -181,15 +183,32 @@ def _prefix_pass_at(outcomes: list[bool], k: int) -> float | None:
 
       * passed at attempt m  -> 1.0 for k>=m, 0.0 for k<m (counted at every k)
       * never passed, >=k attempts observed -> 0.0 (a genuine failure at k)
-      * never passed, <k attempts observed  -> None (truncated failure: unknown
-        whether more attempts would have passed; do not count as a failure)
+      * never passed, <k attempts observed  -> UNRESOLVED, see policy below.
+
+    Unresolved (a.k.a. "truncated") episodes
+    ----------------------------------------
+    These ran out of harness budget -- message_limit, time_limit, working_limit
+    -- before making k graded submissions, and never passed. Two policies:
+
+      unresolved="fail" (DEFAULT) -> 0.0. The system did not repair the host
+        within the budget it was given, which is a non-solve under the operating
+        protocol we actually ran. Keeps the denominator FIXED across k, so no
+        denominator drift can hide a collapse.
+
+      unresolved="drop" -> None (the historical behaviour). Treats the outcome as
+        unknown. DANGEROUS: truncation correlates with failure (an agent that
+        flails burns its budget), so dropping deletes failures and inflates
+        pass@k. Measured on a misconfigured 27B black-box run where NO episode
+        reached k=5, "drop" reported pass@5 = 100.0% (26/26) against an honest
+        21.7% (26/120). Retained only for reproducing pre-2026-08-27 numbers.
     """
     first = next((i + 1 for i, o in enumerate(outcomes) if o), None)
     if first is not None:
+        # Success is absorbing: passed within k stays passed for every larger k.
         return 1.0 if first <= k else 0.0
     if len(outcomes) >= k:
         return 0.0
-    return None
+    return 0.0 if unresolved == "fail" else None
 
 
 def _is_not_applicable_sample(sample) -> bool:
@@ -209,12 +228,28 @@ def _mean(vals: list[float]) -> float:
 
 
 def _sem(vals: list[float]) -> float:
-    """Standard error of the mean over per-scenario estimates.
+    """Standard error of the mean over per-EPISODE estimates. DIAGNOSTIC ONLY.
 
-    Deliberately NOT the binomial sqrt(p(1-p)/n): the Chen estimate is a
-    continuous value per scenario, not a Bernoulli draw, so the binomial form
-    understates the spread. This is scenario-sampling error only -- see
-    stats.py for the clustered bootstrap that belongs in the paper.
+    *** NOT A CONFIDENCE INTERVAL. NEVER PASTE THIS INTO THE PAPER. ***
+
+    The list this receives is one value per EPISODE (scenario x epoch), not per
+    scenario -- ``_collect`` appends once per episode. Episodes of the same
+    scenario are repeated measurements of one problem instance, not independent
+    replicates, so treating them as n independent draws pseudo-replicates the
+    sample and makes this interval far too narrow: measured at ~1.9x too narrow
+    against a scenario-clustered interval on a real cell.
+
+    (An earlier version of this docstring said "per-scenario estimates", which
+    is what invites the error -- someone reads it, believes the clustering is
+    already handled, and pastes the +/- into a table.)
+
+    Deliberately NOT the binomial sqrt(p(1-p)/n) either: the Chen estimate is a
+    continuous value, not a Bernoulli draw, so the binomial form understates the
+    spread further.
+
+    The interval that belongs in the paper is the scenario-clustered bootstrap
+    in ``stats.py::bootstrap_ci``, reached through the committed entry point
+    ``panelB/analyze_cells.py``.
     """
     n = len(vals)
     if n < 2:
@@ -224,7 +259,7 @@ def _sem(vals: list[float]) -> float:
     return math.sqrt(var / n)
 
 
-def _collect(log_dir: Path, by: str):
+def _collect(log_dir: Path, by: str, unresolved: str = "fail"):
     """Return (cells, ks, rows, cols, notes).
 
     cells: {(model, col, j): [correct, total]}
@@ -236,7 +271,21 @@ def _collect(log_dir: Path, by: str):
     uncapped: set[str] = set()
     skipped_hivestorm = 0
 
-    for info in list_eval_logs(str(log_dir)):
+    # DEDUP (added 2026-08-27). eval_set writes a fresh .eval on every resume,
+    # so a single logical run leaves several overlapping files in one dir and the
+    # same (scenario, epoch) episode appears in more than one of them. Appending
+    # blindly multiply-counts episodes: qwen4b_zd_heavy_zero_day has five .eval
+    # files reporting n = 530/527/403/255/120 for ONE run. That inflates the
+    # denominator and, worse, pseudo-replicates the clustered bootstrap so the
+    # CIs come out too narrow.
+    #
+    # Fix: key every episode on (model, solver, mode, benchmark, scenario, epoch)
+    # and KEEP-LAST, matching fold_raw's rule. list_eval_logs is sorted by name;
+    # log filenames are ISO timestamps, so name order == chronological order and
+    # the newest resume legitimately supersedes the earlier partial.
+    episodes: dict[tuple, tuple] = {}
+
+    for info in sorted(list_eval_logs(str(log_dir)), key=lambda i: str(i.name)):
         log = read_eval_log(info.name, header_only=False)
         model = log.eval.model or "unknown-model"
         task_args = log.eval.task_args or {}
@@ -275,11 +324,23 @@ def _collect(log_dir: Path, by: str):
             outcomes = _attempt_outcomes(sample)
             if not outcomes:
                 continue
-            for j in range(1, k + 1):
-                est = _prefix_pass_at(outcomes, j)
-                if est is None:
-                    continue
-                cells[(model, col, j)].append(est)
+
+            ep_key = (
+                model,
+                solver,
+                mode,
+                benchmark,
+                meta.get("scenario_id") or str(sample.id),
+                getattr(sample, "epoch", None),
+            )
+            episodes[ep_key] = (model, col, k, outcomes)  # keep-last
+
+    for model, col, k, outcomes in episodes.values():
+        for j in range(1, k + 1):
+            est = _prefix_pass_at(outcomes, j, unresolved)
+            if est is None:
+                continue
+            cells[(model, col, j)].append(est)
 
     return cells, sorted(ks), sorted(rows), sorted(cols), uncapped, skipped_hivestorm
 
@@ -326,13 +387,19 @@ def main() -> None:
     p.add_argument("log_dir", help="Directory containing .eval log files")
     p.add_argument("--by", choices=["solver", "benchmark"], default="solver",
                    help="Column grouping (default: solver)")
+    p.add_argument("--unresolved", choices=["fail", "drop"], default="fail",
+                   help="Episodes that never passed and made <k graded attempts "
+                        "(budget exhausted). 'fail' (default) counts them as "
+                        "non-solves and keeps n fixed across k. 'drop' is the "
+                        "pre-2026-08-27 behaviour and INFLATES pass@k -- it is "
+                        "retained only to reproduce old numbers.")
     args = p.parse_args()
 
     log_dir = Path(args.log_dir)
     if not log_dir.exists():
         raise SystemExit(f"Log dir not found: {log_dir}")
 
-    cells, ks, rows, cols, uncapped, skipped = _collect(log_dir, args.by)
+    cells, ks, rows, cols, uncapped, skipped = _collect(log_dir, args.by, args.unresolved)
     if not cells:
         raise SystemExit("No scored non-hivestorm samples found.")
 

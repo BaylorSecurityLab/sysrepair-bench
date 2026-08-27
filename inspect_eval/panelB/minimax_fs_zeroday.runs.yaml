@@ -1,0 +1,39 @@
+# MiniMax-M3 full-suite BLACK-BOX (zero_day) — mirror of minimax_fs_day1.runs.yaml.
+# Fills tab:results-full MiniMax row for vulnhub/ccdc/meta3-ub/sr-modern (BB half).
+# Deltas vs the day1 preset, both deliberate:
+#   * model_attempt_timeout 120 -> 300. Black-box episodes make long discovery
+#     calls; at 120s they trip AttemptTimeoutError and retry the sample from
+#     scratch (the 27B thrash documented in STATUS "Ops gotchas").
+#   * message_limit stays 0 (unlimited). Do NOT set a finite cap here: a cap ends
+#     the episode before the k=5 submit attempts materialise, which drops every
+#     failure out of the pass@k denominator as a "truncated failure".
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  minimax_fs_zeroday:
+    model: openai/MiniMax-M3
+    base_url: https://api.minimax.io/v1
+    api_key: ${MINIMAX_API_KEY}
+    benchmarks: [vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 4
+    modes: [zero_day]

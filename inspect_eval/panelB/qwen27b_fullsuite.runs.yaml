@@ -1,0 +1,67 @@
+# Qwen3.5-27B FULL-SUITE, no cascade (user decision 2026-08-27).
+#
+# The ladder no longer runs bigger models only on the smaller rung's failures.
+# Every rung runs the full suite at epochs=3, both knowledge conditions, so
+# per-rung CDR is directly comparable with no common-subset workaround.
+#
+# Served locally: vLLM on 2xL40 at :8100 (panelB/serve.sh Qwen/Qwen3.5-27B 2).
+#
+# Coverage split, deliberate:
+#   day1     -> the 4 suites 27B has never run. meta2 RI is ALREADY complete and
+#               clean (n=120, 0 truncated, pass@5 96.7) in
+#               logs_es/qwen27b_meta2_day1_day1_k5 -- do not burn GPU re-running it.
+#   zero_day -> includes meta2, because the existing 27B meta2 BB run is INVALID:
+#               it inherited message_limit=40 from task.py's default and no
+#               episode ever reached k=5 (max observed 2). See the pass@k defect
+#               writeup in iclr-2027/experiments/STATUS.md.
+#
+# message_limit: 0 is set EXPLICITLY and must stay that way. Omitting the key
+# silently inherits task.py's default of 40, which ends episodes before the k=5
+# submit attempts materialise and corrupts pass@k. Verify from the .eval header
+# (`eval.task_args`), never from this file -- a run that starts seconds before an
+# edit records the OLD value.
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  # 120s is too short for 27B on long-context black-box episodes: calls exceed it,
+  # trip AttemptTimeoutError, and retry the sample from scratch (STATUS "Ops
+  # gotchas" -- the 27B thrash that burned GPU at n=0).
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  qwen27b_fs_day1:
+    model: openai/Qwen/Qwen3.5-27B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    benchmarks: [vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 8
+    modes: [day1]
+
+  qwen27b_fs_zeroday:
+    model: openai/Qwen/Qwen3.5-27B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    benchmarks: [meta2, vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 8
+    modes: [zero_day]
