@@ -59,26 +59,47 @@ def _collect(log_dir: Path, by: str):
     cols: set[str] = set()
     seeds_ks: set[int] = set()
 
-    for info in list_eval_logs(str(log_dir)):
+    # DEDUP (added 2026-08-27), same rule as passk._collect. eval_set writes a
+    # fresh .eval on every resume, so one logical run leaves several overlapping
+    # files and the same (scenario, epoch) episode is counted more than once.
+    # Measured on a completed cell: 178 raw entries for 63 distinct episodes, so
+    # the summary read 88% (157/178) where the honest figure is 90.5% (57/63).
+    # That is not a rounding difference, and note the deduped value was HIGHER --
+    # pseudo-replication distorts in whichever direction the duplicates fall, it
+    # does not simply deflate. Keyed keep-last by log path: filenames are ISO
+    # timestamps, so lexical order is chronological and the newest resume wins.
+    episodes: dict[tuple, tuple] = {}
+
+    for info in sorted(list_eval_logs(str(log_dir)), key=lambda i: str(i.name)):
         log = read_eval_log(info.name, header_only=False)
         model = log.eval.model or "unknown-model"
         task_args = log.eval.task_args or {}
         solver = task_args.get("solver", "unknown-solver")
+        mode = task_args.get("mode", "day1")
         seeds_k = int(task_args.get("max_attempts", 1))
 
         rows.add(model)
         seeds_ks.add(seeds_k)
 
         for sample in log.samples or []:
-            benchmark = (sample.metadata or {}).get("benchmark", "?")
+            meta = sample.metadata or {}
+            benchmark = meta.get("benchmark", "?")
             col = f"{solver}/{benchmark}" if by == "benchmark" else solver
             cols.add(col)
             v = _score_value(sample)
             if v is None:
                 continue
-            cells[(model, col, seeds_k)][1] += 1
-            if v == 1.0:
-                cells[(model, col, seeds_k)][0] += 1
+            key = (
+                model, solver, mode, benchmark,
+                meta.get("scenario_id") or str(sample.id),
+                getattr(sample, "epoch", None),
+            )
+            episodes[key] = (model, col, seeds_k, v, str(info.name))
+
+    for model, col, seeds_k, v, _path in episodes.values():
+        cells[(model, col, seeds_k)][1] += 1
+        if v == 1.0:
+            cells[(model, col, seeds_k)][0] += 1
 
     return cells, sorted(seeds_ks), sorted(rows), sorted(cols)
 

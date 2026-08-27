@@ -1,0 +1,47 @@
+# Adversarial validity battery for the sr-modern scenarios flagged during the
+# 2026-08-27 dating audit.
+#
+# WHY scenario-66 specifically. Its own verify.sh states that "the simulator does
+# not enforce cipher suites", and its cipher PoC greps a hand-written line in
+# /etc/ipmi.conf that no process ever reads (ipmi_server.py is a ~30-line UDP
+# echo returning a fixed 14-byte constant). A verifier that grades a string in a
+# file nothing consumes cannot distinguish remediation from string-editing, so
+# the no-op floor is the decisive test: if no-op scores ABOVE 0 here, the
+# scenario is rewarding an edit rather than a repair and must be fixed or cut
+# before it can support the paper's floor-0/oracle-100 claim.
+#
+# Controls included deliberately: scenario-33 (dockerd on 2375) and scenario-99
+# (Hadoop YARN acl disabled) are the two other config-state scenarios whose
+# verifiers grade a live service rather than a config string. They should behave
+# correctly, and if they do, a nonzero result on 66 isolates to 66 rather than to
+# the battery or the harness.
+#
+# The agents are SCRIPTED, not model-driven, so no endpoint is needed and the
+# result is deterministic and reproducible. model is a required field only to
+# satisfy the runner; nothing calls it.
+defaults:
+  seeds: [1]
+  epochs: 1
+  log_dir: ./logs-validity
+  bash_timeout: 240
+  verify_timeout: 360
+  # A gaming audit must report failures, not abort on them: a scenario whose
+  # sandbox breaks is itself a finding. Keep going and read the per-sample rows.
+  fail_on_error: 1.0
+  retry_on_error: 0
+  time_limit: 1800
+  working_limit: 1200
+  message_limit: 0
+  token_limit: 0
+  preflight: false
+presets:
+  validity_s66:
+    model: openai/Qwen/Qwen3.5-27B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    scenarios: [meta4/scenario-66, meta4/scenario-33, meta4/scenario-99]
+    solvers: [noop, service-killer, probe-blocker, oracle]
+    seeds: 1
+    epochs: 1
+    max_connections: 2
+    modes: [day1]

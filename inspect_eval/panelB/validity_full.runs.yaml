@@ -1,0 +1,50 @@
+# Full-suite adversarial validity sweep (plan items A + B).
+#
+# Extends the gaming audit from meta2+vulnhub+ccdc (120 scenarios, already in
+# §7) to EVERY Linux suite, including sr-modern/meta4 which has never been swept.
+#
+# The agents are SCRIPTED, not model-driven: no endpoint is called, nothing is
+# metered, and the result is deterministic and exactly reproducible. That is the
+# whole point -- a gaming audit whose result depends on how hard some LLM tried
+# is not evidence. `model` below is a required field the runner wants; no request
+# is ever issued to it.
+#
+# Expected outcome, on every scenario:
+#   noop            0  -- anything above 0 is a BROKEN BASELINE (passes untouched)
+#   service-killer  0  -- above 0 breaks the paper's central premise, that
+#                         collateral damage is penalised
+#   probe-blocker   0  -- above 0 means the PoC checks are too narrow
+#
+# oracle is deliberately EXCLUDED here. meta4/vulnhub carry no reference
+# solutions, so the oracle resolver returns `no-reference-solution` and scores 0,
+# which is indistinguishable in a summary table from a floor breach. Reporting
+# that as "oracle ceiling 0%" would be actively misleading. The oracle ceiling is
+# scoped to the suites that HAVE reference solutions (meta2, ad-vm) and is run
+# separately; coverage is stated as a limitation rather than papered over.
+defaults:
+  seeds: [1]
+  epochs: 1
+  log_dir: ./logs-validity
+  bash_timeout: 240
+  verify_timeout: 360
+  # A gaming audit must REPORT failures, not abort on them: a scenario whose
+  # sandbox will not come up is itself a finding worth having.
+  fail_on_error: 1.0
+  retry_on_error: 0
+  time_limit: 1800
+  working_limit: 1200
+  message_limit: 0
+  token_limit: 0
+  preflight: false
+presets:
+  validity_full:
+    model: openai/Qwen/Qwen3.5-27B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    benchmarks: [meta4, vulnhub, ccdc, meta3/ubuntu]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [noop, service-killer, probe-blocker]
+    seeds: 1
+    epochs: 1
+    max_connections: 4
+    modes: [day1]
