@@ -102,6 +102,7 @@ def load_cells(mode_filter: str | None):
             r["model"], r["solver"], r["mode"], r.get("benchmark"),
             r.get("scenario_id"), r.get("epoch"),
             r.get("message_limit_cfg"), r.get("epochs_cfg"),
+            source_bucket(r),
         )
         raw[(r["model"], r["solver"], r["mode"], r.get("benchmark"))].append(r)
         prev = episodes.get(key)
@@ -127,10 +128,32 @@ def load_cells(mode_filter: str | None):
     # per (scenario, epoch), so a mixed cell comes out looking uniform and the
     # evidence of mixing is exactly what was discarded.
     cells: dict[tuple, list[dict]] = defaultdict(list)
-    for (model, solver, mode, bench, _sc, _ep, _ml, _ec), r in episodes.items():
+    for (model, solver, mode, bench, _sc, _ep, _ml, _ec, _src), r in episodes.items():
         cells[(model, solver, mode, bench,
-               r.get("message_limit_cfg"), r.get("epochs_cfg"))].append(r)
+               r.get("message_limit_cfg"), r.get("epochs_cfg"),
+               source_bucket(r))].append(r)
     return cells, raw
+
+
+def source_bucket(r: dict) -> str:
+    """Which RUN a row came from, for use in the cell key.
+
+    eval_set writes one directory per preset and resumes into it, so the
+    directory name IS the run identity. Non-eval_set logs (bare timestamped
+    .eval files under logs/) all bucket to "logs": they predate eval_set and
+    splitting them per-file would fragment cells that were legitimately pooled.
+
+    This is stronger than keying on the harness config alone, which was the first
+    fix: two runs can differ only by preset name and still be different runs.
+    Peer has exactly that pair -- winpanel_minimax_m3_react_day1_k5 and
+    winpanel_minimax_win_day1_k5, same model/suite/mode, one currently empty --
+    which the config key would happily merge the moment the empty one gets
+    samples. And it is what separates qwen27b_local_zeroday (the known-invalid
+    message_limit=40 run) from qwen27b_fs_zeroday without relying on their
+    configs happening to differ.
+    """
+    path = r["log_path"]
+    return path.split("/logs_es/")[-1].split("/")[0] if "/logs_es/" in path else "logs"
 
 
 def config_conflicts(rows: list[dict]) -> dict[str, list]:
@@ -231,8 +254,8 @@ def main() -> None:
           f"{'betw':>8}{'with':>8}{'E->inf':>8}{'2xS':>7}")
     print("-" * 128)
 
-    for (model, solver, mode, bench, mlim, ecfg) in sorted(cells, key=str):
-        rows = cells[(model, solver, mode, bench, mlim, ecfg)]
+    for (model, solver, mode, bench, mlim, ecfg, src) in sorted(cells, key=str):
+        rows = cells[(model, solver, mode, bench, mlim, ecfg, src)]
         by_scen: dict[str, list[float]] = defaultdict(list)
         for r in rows:
             by_scen[r["scenario_id"]].append(
@@ -254,6 +277,17 @@ def main() -> None:
         ]
         iv = bootstrap_ci(obs, aggregate="micro")
 
+        # COMPLETENESS. A cell whose scenarios have not all reached the
+        # configured epoch count is IN PROGRESS, and the mean-epoch column hides
+        # that: a live cell at 20/63 scored printed as a clean 96.7% at ep=1 on
+        # the peer's box, indistinguishable from a finished result and flattering.
+        # --min-scenarios cannot catch it, because the scenarios have STARTED.
+        # Mark the row so nobody folds a number that is still moving.
+        target_E = ecfg if isinstance(ecfg, int) and ecfg > 0 else None
+        full = (sum(1 for v in by_scen.values() if len(v) >= target_E)
+                if target_E else None)
+        incomplete = "" if full is None or full == S else f"  [PARTIAL {full}/{S} at E={target_E}]"
+
         mean_E = sum(len(v) for v in by_scen.values()) / max(S, 1)
         vd = variance_decomposition(by_scen) if mean_E > 1.0 else None
         if vd:
@@ -274,7 +308,7 @@ def main() -> None:
               f"{sum(len(v) for v in by_scen.values())//max(S,1):>4}"
               f"{iv.point*100:>7.1f}%"
               f"{'[' + format(iv.lo*100, '.1f') + ', ' + format(iv.hi*100, '.1f') + ']':>22}"
-              f"{extra}")
+              f"{extra}{incomplete}")
 
     print("\nbetw/with = between- and within-scenario variance components.")
     print("E->inf = 95% half-width with infinitely many epochs on the SAME "
