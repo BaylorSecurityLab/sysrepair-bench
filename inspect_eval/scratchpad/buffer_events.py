@@ -23,6 +23,14 @@ scored count only moves when an EPISODE COMPLETES (15-50 min for meta4 and
 black-box). The buffer is written continuously as tool calls and model responses
 land. Measured on a MiniMax stream scored-static for two hours: +27 events in 60s.
 
+MINIMUM SAMPLING WINDOW: 60s.
+Events flush in BURSTS, so a short window can read a delta of zero on a run that
+is demonstrably working. Peer measured delta 0 at 25s, then +62 and +56 at 40s, on
+one healthy stream. Anything using this as a veto term must sample at least 60s
+apart, or the protection evaporates exactly when a slow stream needs it: same
+polarity trap as the silent zero, reached by a different route. supervise.sh ticks
+at 300s and is unaffected; ad-hoc checks are the risk.
+
 NOT A RECOVERY PATH. The buffer holds only IN-FLIGHT samples; completed ones are
 flushed to the .eval and dropped. The buffer for the run that lost 288 episodes
 is 37.6 MB and holds 9 samples. A .db whose size matches what you lost is not
