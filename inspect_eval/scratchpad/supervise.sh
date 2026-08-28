@@ -60,7 +60,9 @@ cpu_secs() { local t="${1:-}"; [ -z "$t" ] && { echo 0; return; }
   echo "$t" | awk -F: '{n=NF;s=0;m=1;for(i=n;i>=1;i--){s+=$i*m;m*=60}print s}'; }
 
 probe() { python3 scratchpad/probe_scored.py "$1" 2>/dev/null || echo "unknown 0"; }
-bufev() { python3 scratchpad/buffer_events.py "$1" 2>/dev/null || echo 0; }
+# NOT `|| echo 0`. A crashed probe returning a confident zero is precisely the
+# silent-veto-removal this term exists to avoid; "err" means unobservable.
+bufev() { python3 scratchpad/buffer_events.py "$1" 2>/dev/null || echo err; }
 
 while true; do
   tunnel=$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://127.0.0.1:8001/health 2>/dev/null || echo 000)
@@ -97,8 +99,28 @@ while true; do
     # +27 events in 60s. It was working. This is the term that can say so, and
     # its absence is what let a "110 minutes with no output" read as dead and
     # cost 288 banked episodes to a needless restart.
-    ev=$(bufev "$logdir"); pev=${PREV_EV[$name]:--1}; dev=$(( ev - (pev<0?ev:pev) ))
-    PREV_EV[$name]=$ev
+    #
+    # The probe returns "none"/"err" when it CANNOT OBSERVE, never 0. That
+    # distinction is load-bearing here because this term is a VETO: if a
+    # mis-resolved path made it report a confident zero, the veto would evaluate
+    # as "no work happening" every tick, the protection would silently vanish,
+    # and the supervisor would revert to exactly the behaviour that destroyed 288
+    # episodes. So an unobservable buffer SUPPRESSES the wedge and says so out
+    # loud, rather than quietly permitting one. A missed wedge costs idle time; a
+    # wrong restart costs irreplaceable work, and the asymmetry decides the
+    # default.
+    ev=$(bufev "$logdir")
+    if [ "$ev" = "none" ] || [ "$ev" = "err" ]; then
+      ev_ok=0; dev=0
+      if [ "${LAST_STATUS[buf-$name]:-}" != "$ev" ]; then
+        echo "BUFFER-UNREADABLE $name ($ev) - live-work term unavailable, wedge detection SUPPRESSED for this stream until it resolves"
+        LAST_STATUS[buf-$name]="$ev"
+      fi
+    else
+      ev_ok=1; LAST_STATUS[buf-$name]=""
+      pev=${PREV_EV[$name]:--1}; dev=$(( ev - (pev<0?ev:pev) ))
+      PREV_EV[$name]=$ev
+    fi
     cpu=$(cpu_secs "$(ps -o cputime= -p "$pid" 2>/dev/null | tr -d ' ')")
     cw=$(ss -tnp state close-wait 2>/dev/null | grep -c "pid=$pid" || true)
     pc=${PREV_CPU[$name]:-0}; ps_=${PREV_SCORED[$name]:--1}
@@ -171,13 +193,13 @@ while true; do
       # Non-MiniMax stream: report the stall, take NO action. Long black-box
       # episodes legitimately go many ticks without scoring.
       if [ "${LAST_STATUS[static-$name]:-}" != "$scored" ]; then
-        echo "STATIC $name - $scored unchanged for ${STATIC[$name]} ticks, but +$dev buffer events this tick (working, long episodes)"
+        echo "STATIC $name - $scored unchanged for ${STATIC[$name]} ticks, but +$dev buffer events this tick (working, long episodes; ev_ok=$ev_ok)"
         LAST_STATUS[static-$name]="$scored"   # latch: re-report only on a NEW stuck value
       fi
       STATIC[$name]=0
     fi
 
-    if [ "$ps_" != "-1" ] && [ "$dcpu" -lt "$CPU_MIN_DELTA" ] && [ "$scored" = "$ps_" ] && [ "$cw" -ge 1 ] && [ "$dev" -le 0 ]; then
+    if [ "$ps_" != "-1" ] && [ "$ev_ok" = "1" ] && [ "$dcpu" -lt "$CPU_MIN_DELTA" ] && [ "$scored" = "$ps_" ] && [ "$cw" -ge 1 ] && [ "$dev" -le 0 ]; then
       WEDGED[$name]=$(( ${WEDGED[$name]:-0} + 1 ))
       echo "WEDGE-SUSPECT $name tick=${WEDGED[$name]} dcpu=${dcpu}s scored=$scored cw=$cw dev=$dev"
     else
