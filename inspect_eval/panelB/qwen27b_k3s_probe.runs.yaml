@@ -37,9 +37,24 @@ defaults:
   request_limit: 0
   preflight: true
   model_max_retries: 10
-  model_timeout: 420
-  model_attempt_timeout: 300
-  model_client_timeout: 480
+  # RAISED FOR THIS PROBE ONLY (2026-08-28). The k3s six failed every episode with
+  # AttemptTimeoutError after the cgroupns fix let their containers boot. Cause,
+  # measured on the live serve under the concurrency these runs actually use:
+  # 5.03 tok/s for a 256-token completion (50.9s) and 11.23 tok/s for 1024 (91.2s)
+  # on a 14.8k-token prompt. A Kubernetes remediation emits a few thousand tokens
+  # of YAML, so ONE generate call exceeds the 300s cap. attempt_timeout wraps
+  # exactly one api.generate call (inspect_ai/model/_model.py:969-990), so a slow
+  # call kills the whole episode.
+  #
+  # This does NOT give these six a larger budget than the other 107 scenarios.
+  # time_limit (3600s) and working_limit (2400s) are unchanged and bound the
+  # episode as before; attempt_timeout only decides whether a slow call aborts the
+  # episode or the episode spends its own existing budget on it. A timeout that
+  # binds is measuring the server, not the model, and it did not bind for any
+  # other scenario in the sweep.
+  model_timeout: 1200
+  model_attempt_timeout: 900
+  model_client_timeout: 1320
 presets:
   qwen27b_k3s_day1:
     model: openai/Qwen/Qwen3.5-27B
