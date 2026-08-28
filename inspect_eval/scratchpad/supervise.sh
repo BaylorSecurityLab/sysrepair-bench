@@ -105,6 +105,32 @@ while true; do
     dcpu=$(( cpu - pc ))
     PREV_CPU[$name]=$cpu; PREV_SCORED[$name]=$scored
 
+    # MONOTONICITY: THE ONLY RELIABLE DETECTOR OF DESTRUCTIVE LOSS.
+    # A relaunched eval_set dir is NOT guaranteed to be a superset of the work
+    # done: a peer reproduced backup=23 / live=18 with a UNION of 28, so the live
+    # dir had both lost and gained episodes. A cell folded from live alone can be
+    # silently SHORT with a clean denominator and no error anywhere.
+    #
+    # The deduped scored count must never DECREASE. That is the whole test. It
+    # needs no backup, no expected grid, and it catches loss of any size.
+    #
+    # It replaces a check I had wrong: "expected - scored == sum of shortfalls"
+    # is an ALGEBRAIC IDENTITY, since Sum_seen(E - len_s) + (S-seen)*E reduces to
+    # expected - scored. Both sides are one quantity written twice, so it can
+    # never fail. Verified: dropping 40 random episodes still reconciles.
+    hw_file="scratchpad/scored_highwater"
+    hw=$(grep -E "^$name " "$hw_file" 2>/dev/null | tail -1 | awk '{print $2}')
+    hw=${hw:-0}
+    if [ "$scored" -lt "$hw" ]; then
+      echo "*** EPISODE LOSS $name: scored=$scored is BELOW high-water $hw. A relaunch has replaced .eval files. Restore from logs_backup/ and fold from the UNION of every copy, not from live. ***"
+    else
+      if [ "$scored" -gt "$hw" ]; then
+        grep -v -E "^$name " "$hw_file" 2>/dev/null > "$hw_file.tmp" || true
+        echo "$name $scored" >> "$hw_file.tmp"
+        mv "$hw_file.tmp" "$hw_file"
+      fi
+    fi
+
     # FOURTH STATE: RETRY STORM. A run that is rate-limited burns CPU at a
     # healthy rate while scoring NOTHING, so every CPU-based liveness term reads
     # it as fine. Observed live: scored stuck for 1h45m at 5.8-6.8 CPU-s/tick
