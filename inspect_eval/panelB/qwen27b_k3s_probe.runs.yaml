@@ -1,0 +1,59 @@
+# Qwen3.5-27B, meta4 k3s block ONLY (day1). Recovery run + decisive test.
+#
+# WHY
+# The six rancher/k3s scenarios (38, 75-79) are the ONLY meta4 scenarios that
+# failed to produce a verdict on the completed 27B day1 sweep, and 38/76/77/79
+# scored 0 for DeepSeek-Pro as well, so the cause is the scenario, not the model.
+# Two distinct failures were recorded: SandboxInjectionError (tool injection) and
+# `service "default" is not running` (the container died mid-episode).
+#
+# Standalone, scenario-76 boots and accepts `docker exec -u root` within 2s, so
+# the failure is NOT a plain boot race. The leading hypothesis is resource
+# contention: k3s runs an entire Kubernetes control plane, and these are the
+# heaviest containers in the suite. Running the six ALONE, with the box no longer
+# hosting 45 concurrent sandboxes, tests that directly. If they grade here, the
+# episodes fold straight into the meta4 cell (the pass@k dedup key is
+# (model, solver, mode, benchmark, scenario, epoch), so they merge with the sweep).
+#
+# scenario-38 also carries a one-line fix applied 2026-08-28: it was the only k3s
+# scenario missing the /etc/passwd + /etc/group root entry its five siblings have,
+# without which `docker exec -u root` cannot work at all.
+#
+# Every knob below is copied from qwen27b_fs_day1 UNCHANGED so these episodes are
+# poolable with that sweep. max_connections is the one deliberate exception (8->3):
+# the whole point is to keep concurrency low.
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  qwen27b_k3s_day1:
+    model: openai/Qwen/Qwen3.5-27B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    scenarios:
+      - meta4/scenario-38
+      - meta4/scenario-75
+      - meta4/scenario-76
+      - meta4/scenario-77
+      - meta4/scenario-78
+      - meta4/scenario-79
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 3
+    modes: [day1]

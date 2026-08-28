@@ -7,6 +7,15 @@ FROM --platform=linux/amd64 rancher/k3s:v1.27.1-k3s1
 
 ENV K3S_KUBECONFIG_MODE="644"
 
+# rancher/k3s ships NO /etc/passwd, so `docker exec -u root` fails with
+# "unable to find user root: no matching entries in passwd file". inspect's
+# sandbox-tool injection execs as root, so this scenario errored out UNSCORED
+# for every model while the gate runner passed it (the gate does not exec as a
+# named user). The five sibling k3s scenarios already carry this fix; this one
+# was missed.
+RUN echo 'root:x:0:0:root:/root:/bin/sh' > /etc/passwd \
+ && echo 'root:x:0:' > /etc/group
+
 # Boot wrapper (NOT a bare foreground CMD): it starts k3s with the vulnerable
 # kubelet args in the BACKGROUND and then `exec sleep infinity`, so PID 1 stays
 # `sleep infinity`. That makes the "fixed the args but forgot to restart" case
