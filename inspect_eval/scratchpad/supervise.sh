@@ -117,9 +117,20 @@ while true; do
         LAST_STATUS[buf-$name]="$ev"
       fi
     else
-      ev_ok=1; LAST_STATUS[buf-$name]=""
+      LAST_STATUS[buf-$name]=""
       pev=${PREV_EV[$name]:--1}; dev=$(( ev - (pev<0?ev:pev) ))
       PREV_EV[$name]=$ev
+      ev_ok=1
+      # COUNTER RESET IS NOT ABSENCE OF WORK. The probe reads the buffer for the
+      # NEWEST .eval, and eval_set rolls to a fresh .eval on every resume, so the
+      # count restarts near zero and dev goes sharply NEGATIVE. Measured live:
+      # 11599 -> 3154 across a roll. A negative delta satisfies `dev <= 0`, which
+      # would re-arm the wedge path on a perfectly healthy stream at the exact
+      # moment it resumed. Treat it as a re-baseline, not as evidence.
+      if [ "$dev" -lt 0 ]; then
+        echo "BUFFER-REBASELINE $name (events $pev -> $ev, new .eval) - not a stall, re-baselining"
+        ev_ok=0; dev=0
+      fi
     fi
     cpu=$(cpu_secs "$(ps -o cputime= -p "$pid" 2>/dev/null | tr -d ' ')")
     cw=$(ss -tnp state close-wait 2>/dev/null | grep -c "pid=$pid" || true)
