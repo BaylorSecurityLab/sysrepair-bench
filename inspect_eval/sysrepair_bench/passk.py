@@ -76,8 +76,7 @@ from tabulate import tabulate
 _UNCAPPED_ORACLE_SOLVERS = {"lats"}
 
 
-def _is_pass(value) -> bool:
-    return str(value).upper() in ("C", "CORRECT", "1", "1.0", "TRUE")
+from .verdict import is_pass as _is_pass
 
 
 def _intermediate_scores(sample) -> list:

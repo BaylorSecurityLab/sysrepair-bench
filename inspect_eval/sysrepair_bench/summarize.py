@@ -27,8 +27,9 @@ from inspect_ai.log import list_eval_logs, read_eval_log
 from tabulate import tabulate
 
 
-def _is_pass(score_value) -> bool:
-    return str(score_value).upper() in ("C", "CORRECT", "1", "1.0", "TRUE")
+# One definition, imported. This copy agreed with passk's, but three independent
+# copies is what let category_table's diverge unnoticed.
+from .verdict import is_pass as _is_pass
 
 
 def _score_value(sample) -> float | None:

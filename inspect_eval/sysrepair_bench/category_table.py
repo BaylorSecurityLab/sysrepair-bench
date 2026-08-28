@@ -113,14 +113,10 @@ def classify_threat(threat_path: Path) -> str:
 # Log reading (ZIP-based, bypasses broken config_deserialize)
 # ---------------------------------------------------------------------------
 
-def _is_pass(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value > 0
-    if isinstance(value, str):
-        return value.upper() in ("CORRECT", "TRUE", "1", "PASS")
-    return False
+# Was a local copy that omitted "C", the exact string our scorer emits, so every
+# passing episode graded as a failure and every category printed 0.0%. See
+# verdict.py for the measurement and why this is now imported rather than defined.
+from .verdict import is_pass as _is_pass
 
 
 def _read_log_zip(log_path: Path) -> list[dict]:
