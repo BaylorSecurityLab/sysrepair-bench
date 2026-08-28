@@ -46,9 +46,28 @@ def _components(sample):
 
 
 def collect(log_dir: Path, benchmark: str | None):
-    # {(model, mode): [sec, joint, n]}, and per (model, mode, category)
-    cell = defaultdict(lambda: [0, 0, 0])
-    cat = defaultdict(lambda: [0, 0, 0])
+    """{(model, mode): [sec, joint, n]} and per (model, mode, category).
+
+    DEDUPES ON (model, mode, benchmark, scenario, epoch), keep-last by log path.
+    Without this, every CDR the paper reports is computed on an inflated
+    denominator: eval_set writes a FRESH .eval on every resume, and the earlier
+    files keep their copies of already-scored episodes, so a resumed stream
+    counts the same episode once per file it appears in.
+
+    Measured 2026-08-28 on vulnhub: the Qwen3.5-9B day1 dir held 4 eval files,
+    240 sample rows and 90 distinct (scenario, epoch) pairs, a 2.67x inflation.
+    The Qwen3.5-27B dir had 2 files and no duplicates at all, so the 27B numbers
+    already folded into the paper are unaffected. That is luck, not correctness:
+    whether a cell is inflated depends only on how many times its stream happened
+    to resume.
+
+    This is the same defect fixed in passk.py and summarize.py. It survived here
+    because cdr.py produces the headline metric and nobody re-audited it after
+    fixing the two estimators next to it. Filenames are ISO timestamps, so
+    lexical order is chronological and keep-last takes the newest attempt.
+    """
+    # {(model, mode, benchmark, scenario, epoch): (log_path, sec, joint, category)}
+    episodes: dict[tuple, tuple] = {}
     for i in list_eval_logs(str(log_dir)):
         h = read_eval_log(i.name, header_only=True)
         model = (h.eval.model or "?").split("/")[-1]
@@ -64,14 +83,21 @@ def collect(log_dir: Path, benchmark: str | None):
             if comp is None:
                 continue
             sec, reg = comp
-            joint = sec and reg
             # Collapse the verbose parenthetical qualifiers so all
             # "Compensating Controls (…)" variants share one bucket.
             category = (meta.get("category", "?") or "?").split(" (")[0].strip()
-            for tgt in (cell[(model, mode)], cat[(model, mode, category)]):
-                tgt[0] += int(sec)
-                tgt[1] += int(joint)
-                tgt[2] += 1
+            key = (model, mode, meta.get("benchmark"), str(s.id), s.epoch)
+            prev = episodes.get(key)
+            if prev is None or str(i.name) >= prev[0]:
+                episodes[key] = (str(i.name), sec, sec and reg, category)
+
+    cell = defaultdict(lambda: [0, 0, 0])
+    cat = defaultdict(lambda: [0, 0, 0])
+    for (model, mode, _bench, _sc, _ep), (_p, sec, joint, category) in episodes.items():
+        for tgt in (cell[(model, mode)], cat[(model, mode, category)]):
+            tgt[0] += int(sec)
+            tgt[1] += int(joint)
+            tgt[2] += 1
     return cell, cat
 
 
