@@ -111,7 +111,7 @@ while true; do
     # default.
     ev=$(bufev "$logdir")
     if [ "$ev" = "none" ] || [ "$ev" = "err" ]; then
-      ev_ok=0; dev=0
+      ev_ok=0; dev=0; ev_changed=0
       if [ "${LAST_STATUS[buf-$name]:-}" != "$ev" ]; then
         echo "BUFFER-UNREADABLE $name ($ev) - live-work term unavailable, wedge detection SUPPRESSED for this stream until it resolves"
         LAST_STATUS[buf-$name]="$ev"
@@ -121,16 +121,24 @@ while true; do
       pev=${PREV_EV[$name]:--1}; dev=$(( ev - (pev<0?ev:pev) ))
       PREV_EV[$name]=$ev
       ev_ok=1
-      # COUNTER RESET IS NOT ABSENCE OF WORK. The probe reads the buffer for the
-      # NEWEST .eval, and eval_set rolls to a fresh .eval on every resume, so the
-      # count restarts near zero and dev goes sharply NEGATIVE. Measured live:
-      # 11599 -> 3154 across a roll. A negative delta satisfies `dev <= 0`, which
-      # would re-arm the wedge path on a perfectly healthy stream at the exact
-      # moment it resumed. Treat it as a re-baseline, not as evidence.
-      if [ "$dev" -lt 0 ]; then
-        echo "BUFFER-REBASELINE $name (events $pev -> $ev, new .eval) - not a stall, re-baselining"
-        ev_ok=0; dev=0
-      fi
+      # ANY CHANGE IS ACTIVITY. ONLY A FLATLINE IS EVIDENCE OF ABSENCE.
+      # Do NOT reason on the sign of the delta. The buffer holds only IN-FLIGHT
+      # samples, so when episodes COMPLETE their event rows are pruned and the
+      # count DROPS. A drop is therefore the best possible news, and it happens
+      # throughout a healthy run, not once per resume.
+      #
+      # I first attributed the drop to eval_set rolling to a new .eval. That was
+      # wrong: the peer measured 2098 -> 329 with zero relaunches, same db, same
+      # pid, then immediately climbing again. My own 11599 -> 3154 coincided with
+      # the MiniMax stream going 157 -> 167 scored, i.e. ten episodes completing
+      # and being flushed. Prune, not roll.
+      #
+      # The sign-based rule was the bug: `dev <= 0` is satisfied by a prune, so
+      # the wedge path re-armed on a healthy stream every time work COMPLETED.
+      # A prune landing inside a sampling window can also net to zero against
+      # concurrent writes, which is why the shape of the evidence ("did it change
+      # at all") is robust where the direction is not.
+      ev_changed=0; [ "$dev" -ne 0 ] && ev_changed=1
     fi
     cpu=$(cpu_secs "$(ps -o cputime= -p "$pid" 2>/dev/null | tr -d ' ')")
     cw=$(ss -tnp state close-wait 2>/dev/null | grep -c "pid=$pid" || true)
@@ -204,15 +212,15 @@ while true; do
       # Non-MiniMax stream: report the stall, take NO action. Long black-box
       # episodes legitimately go many ticks without scoring.
       if [ "${LAST_STATUS[static-$name]:-}" != "$scored" ]; then
-        echo "STATIC $name - $scored unchanged for ${STATIC[$name]} ticks, but +$dev buffer events this tick (working, long episodes; ev_ok=$ev_ok)"
+        echo "STATIC $name - $scored unchanged for ${STATIC[$name]} ticks, but buffer moved by $dev this tick (any change = activity; ev_ok=$ev_ok)"
         LAST_STATUS[static-$name]="$scored"   # latch: re-report only on a NEW stuck value
       fi
       STATIC[$name]=0
     fi
 
-    if [ "$ps_" != "-1" ] && [ "$ev_ok" = "1" ] && [ "$dcpu" -lt "$CPU_MIN_DELTA" ] && [ "$scored" = "$ps_" ] && [ "$cw" -ge 1 ] && [ "$dev" -le 0 ]; then
+    if [ "$ps_" != "-1" ] && [ "$ev_ok" = "1" ] && [ "$ev_changed" = "0" ] && [ "$dcpu" -lt "$CPU_MIN_DELTA" ] && [ "$scored" = "$ps_" ] && [ "$cw" -ge 1 ]; then
       WEDGED[$name]=$(( ${WEDGED[$name]:-0} + 1 ))
-      echo "WEDGE-SUSPECT $name tick=${WEDGED[$name]} dcpu=${dcpu}s scored=$scored cw=$cw dev=$dev"
+      echo "WEDGE-SUSPECT $name tick=${WEDGED[$name]} dcpu=${dcpu}s scored=$scored cw=$cw dev=$dev (buffer FLATLINE)"
     else
       [ "${WEDGED[$name]:-0}" -gt 0 ] && echo "RECOVERED $name (dcpu=${dcpu}s scored=$scored cw=$cw)"
       WEDGED[$name]=0

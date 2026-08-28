@@ -23,6 +23,13 @@ scored count only moves when an EPISODE COMPLETES (15-50 min for meta4 and
 black-box). The buffer is written continuously as tool calls and model responses
 land. Measured on a MiniMax stream scored-static for two hours: +27 events in 60s.
 
+BYTES ARE USELESS HERE. SQLite preallocates pages, so the .db file size does not
+track work: measured 38,572,032 bytes CONSTANT across 260s while events climbed
+3915 -> 4468. An earlier +155 KB reading of mine was a single page-allocation
+step, not a signal, and I wrongly cited it as evidence that file size tracks
+activity. Never fall back to bytes when the events read fails: it reads "no
+change" on a fully healthy run.
+
 MINIMUM SAMPLING WINDOW: 60s.
 Events flush in BURSTS, so a short window can read a delta of zero on a run that
 is demonstrably working. Peer measured delta 0 at 25s, then +62 and +56 at 40s, on
