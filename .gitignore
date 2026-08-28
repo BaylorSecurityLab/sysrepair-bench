@@ -125,3 +125,26 @@ inspect_eval/panelB/*.log
 inspect_eval/panelB/*.log.*
 inspect_eval/panelB/cascade_*.runs.yaml
 inspect_eval/smoke.runs.yaml
+
+# ---------------------------------------------------------------- eval outputs
+# 1.3 GB of .eval logs sat here UNIGNORED and one `git add -A` from being
+# committed. eval_set writes logs_es/ continuously (1.1 GB and growing),
+# logs_backup/ holds the copies taken before every relaunch (202 MB), and the
+# rest are audit and quarantine sets. None of it belongs in git: the artifact
+# ships as a zip to a public Box folder, not through the repo.
+inspect_eval/logs_es/
+inspect_eval/logs_backup/
+inspect_eval/logs-quarantine/
+inspect_eval/logs-validity/
+inspect_eval/panelA_out/
+RECOVERED_baselines/
+RECOVERED_minimax_baseline/
+
+# scratchpad holds supervisor tooling (tracked) next to derived data and run
+# logs (not). samples_cache.jsonl alone is ~11 MB and is fully reconstructible by
+# panelB/extract_samples.py, so committing it would put a derived artefact in git
+# that a committed script already regenerates. Ignore everything, then re-admit
+# the tooling by name.
+inspect_eval/scratchpad/*
+!inspect_eval/scratchpad/*.py
+!inspect_eval/scratchpad/*.sh
