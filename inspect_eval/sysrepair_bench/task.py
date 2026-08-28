@@ -1128,6 +1128,14 @@ def _build_sample(scenario_dir: Path, mode: str = "day1") -> Sample:
         privileged=True if needs_privileged else None,
         isolation="hyperv" if os_name == "windows" else None,
         security_opt=run_opts_kwargs.get("security_opt") or None,
+        # _load_run_opts parses --cgroupns into `cgroup`, and SysRepairService
+        # carries the field, but nothing ever passed it here -- so the value was
+        # parsed and then dropped, which is the SAME silent failure the parser
+        # docstring describes as already fixed. It was fixed by halves: parser
+        # and model, never the wiring. Scenarios 75-79 need cgroupns=host or the
+        # k3s kubelet dies with 'cannot enter cgroupv2 kubepods with domain
+        # controllers' and the container is dead before the agent sees it.
+        cgroup=run_opts_kwargs.get("cgroup") or None,
     )
     if not preserve_cmd:
         # Clear any base-image ENTRYPOINT so the keepalive command runs
