@@ -78,6 +78,13 @@ def load_cells(mode_filter: str | None):
     # appears in several overlapping files. Keep-last by log path (filenames are
     # ISO timestamps, so lexical order is chronological).
     episodes: dict[tuple, dict] = {}
+    # Conflicts must be detected BEFORE dedup: dedup keeps one row per
+    # (scenario, epoch), so a cell drawn from a valid AND an invalid run comes
+    # out looking uniform, and the evidence that two configs were mixed is
+    # exactly what got discarded. Checking the deduped rows finds nothing, which
+    # is how the 27B zero_day/meta2 cell passed a conflict gate while being
+    # composed entirely of the known-invalid run.
+    raw: dict[tuple, list[dict]] = defaultdict(list)
     for line in CACHE.open():
         r = json.loads(line)
         if r.get("not_applicable") or r.get("scorer") == "hivestorm_weighted":
@@ -94,15 +101,76 @@ def load_cells(mode_filter: str | None):
         key = (
             r["model"], r["solver"], r["mode"], r.get("benchmark"),
             r.get("scenario_id"), r.get("epoch"),
+            r.get("message_limit_cfg"), r.get("epochs_cfg"),
         )
+        raw[(r["model"], r["solver"], r["mode"], r.get("benchmark"))].append(r)
         prev = episodes.get(key)
         if prev is None or r["log_path"] >= prev["log_path"]:
             episodes[key] = r
 
+    # PARTITION BY HARNESS CONFIG, do not merge across it.
+    # (model, solver, mode, benchmark) is not a unique key for a run: several
+    # runs of one cell can exist, and dedup keeps the lexically-last log path,
+    # which is unrelated to which run is VALID. Measured here: the Qwen3.5-27B
+    # react/zero_day/meta2 label drew from qwen27b_fs_zeroday (message_limit 0,
+    # the good run), a logs/ run, and qwen27b_local_zeroday (message_limit 40,
+    # the KNOWN-INVALID run whose truncated episodes produced the pass@5 = 100%
+    # (26/26) artifact). All 120 deduped episodes came from the invalid one,
+    # purely because "qwen27b_local" sorts after "qwen27b_fs".
+    #
+    # Refusing such a cell outright was too blunt: two paper cells tripped it on
+    # a ONE-SCENARIO stray. Partitioning shows every config as its own row, so a
+    # stray is a 1-scenario row that --min-scenarios drops, while a real second
+    # run is visible next to the first instead of silently replacing it.
+    #
+    # The partition key must come from the PRE-dedup rows. Dedup keeps one row
+    # per (scenario, epoch), so a mixed cell comes out looking uniform and the
+    # evidence of mixing is exactly what was discarded.
     cells: dict[tuple, list[dict]] = defaultdict(list)
-    for (model, solver, mode, bench, _sc, _ep), r in episodes.items():
-        cells[(model, solver, mode, bench)].append(r)
-    return cells
+    for (model, solver, mode, bench, _sc, _ep, _ml, _ec), r in episodes.items():
+        cells[(model, solver, mode, bench,
+               r.get("message_limit_cfg"), r.get("epochs_cfg"))].append(r)
+    return cells, raw
+
+
+def config_conflicts(rows: list[dict]) -> dict[str, list]:
+    """Distinct harness configs contributing to ONE cell label. Empty if clean.
+
+    WHY THIS IS A HARD ERROR AND NOT A WARNING
+    (model, solver, mode, benchmark) is NOT a unique key for a run. Several
+    different runs of the same cell can exist on one machine, and dedup keeps the
+    lexically-last log path, which has nothing to do with which run is VALID.
+
+    Measured here: the Qwen3.5-27B react/zero_day/meta2 label drew from three
+    sources -- qwen27b_fs_zeroday (message_limit 0, max_attempts 5, the good
+    run), a 2026-08-10 logs/ run, and qwen27b_local_zeroday (message_limit 40,
+    max_attempts 2, the KNOWN-INVALID run whose truncated episodes produced the
+    pass@5 = 100% (26/26) artifact that started the whole estimator
+    investigation). All 120 deduped episodes came from the invalid one, purely
+    because "qwen27b_local" sorts after "qwen27b_fs". The valid run was silently
+    shadowed and the output said nothing.
+
+    A cell assembled from two different message_limits is not one cell. Report
+    the conflict instead of a number: a number here is worse than no number,
+    because it looks finished.
+    """
+    keys = ("message_limit_cfg", "epochs_cfg")
+    out: dict[str, list] = {}
+    for k in keys:
+        vals = sorted({r.get(k) for r in rows}, key=str)
+        if len(vals) > 1:
+            out[k] = vals
+    return out
+
+
+def cell_sources(rows: list[dict]) -> dict[str, int]:
+    """Episode count per contributing log directory, for provenance display."""
+    src: dict[str, int] = defaultdict(int)
+    for r in rows:
+        p = r["log_path"]
+        d = p.split("/logs_es/")[-1].split("/")[0] if "/logs_es/" in p else "logs"
+        src[d] += 1
+    return dict(src)
 
 
 def variance_decomposition(by_scenario: dict[str, list[float]]):
@@ -150,15 +218,21 @@ def main() -> None:
     ap.add_argument("--mode", choices=["day1", "zero_day"], default=None)
     ap.add_argument("--min-scenarios", type=int, default=8)
     ap.add_argument("--k", type=int, default=5)
+    ap.add_argument("--allow-mixed", action="store_true",
+                    help="print cells whose episodes came from incompatible "
+                         "harness configs (message_limit/epochs). Off by "
+                         "default: such a cell is not one cell, and a number "
+                         "for it looks finished while being meaningless.")
     args = ap.parse_args()
 
-    cells = load_cells(args.mode)
+    cells, raw = load_cells(args.mode)
     print(f"{'model':<26}{'solver':<16}{'mode':<10}{'bench':<11}{'S':>4}{'ep':>4}"
           f"{'pass@'+str(args.k):>8}{'95% CI (clustered)':>22}"
           f"{'betw':>8}{'with':>8}{'E->inf':>8}{'2xS':>7}")
     print("-" * 128)
 
-    for (model, solver, mode, bench), rows in sorted(cells.items()):
+    for (model, solver, mode, bench, mlim, ecfg) in sorted(cells, key=str):
+        rows = cells[(model, solver, mode, bench, mlim, ecfg)]
         by_scen: dict[str, list[float]] = defaultdict(list)
         for r in rows:
             by_scen[r["scenario_id"]].append(
@@ -167,6 +241,11 @@ def main() -> None:
         S = len(by_scen)
         if S < args.min_scenarios:
             continue
+
+        # PROVENANCE GATE. Refuse to print a number for a label that was
+        # assembled from incompatible harness configs: dedup keeps the
+        # lexically-last log path, which is unrelated to which run is valid, so
+        # the invalid one can silently win. See config_conflicts().
 
         # One clustered value per scenario = mean over its epochs.
         obs = [
@@ -190,7 +269,8 @@ def main() -> None:
             extra = f"{'  (E=1: no within-var estimate)':>31}"
 
         m = model.split("/")[-1][:24]
-        print(f"{m:<26}{solver[:15]:<16}{mode:<10}{str(bench)[:10]:<11}{S:>4}"
+        tag = "" if mlim in (0, None) else f" mlim={mlim}"
+        print(f"{m:<26}{solver[:15]:<16}{mode:<10}{(str(bench)[:10]+tag):<11}{S:>4}"
               f"{sum(len(v) for v in by_scen.values())//max(S,1):>4}"
               f"{iv.point*100:>7.1f}%"
               f"{'[' + format(iv.lo*100, '.1f') + ', ' + format(iv.hi*100, '.1f') + ']':>22}"
