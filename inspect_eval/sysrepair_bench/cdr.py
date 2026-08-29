@@ -42,6 +42,21 @@ def _components(sample):
     md = s.metadata or {}
     if "security_pass" not in md:
         return None
+    # regression_pass is None when the scenario has NO REGRESSION CHECK, not when
+    # the check failed. vulnhub/scenario-18 says so in its verify.sh: "There is no
+    # service in this scenario (no .preserve-cmd) and no regression check: the
+    # finding is purely file-permission state". bool(None) silently turned that
+    # into a regression FAILURE, so every such episode that blocked its exploit was
+    # counted as collateral damage that cannot have occurred: there is no service
+    # to break. Measured on Qwen3.5-27B vulnhub: 9 of 89 report-informed and 6 of
+    # 120 black-box episodes. CDR was therefore INFLATED wherever a suite contains
+    # service-less scenarios, which overstates the very problem the paper reports.
+    #
+    # Such episodes have no availability trade-off, so they are excluded from CDR
+    # rather than counted either way. Returning None drops them from both the
+    # numerator and the denominator, which is what the metric means.
+    if md.get("regression_pass") is None:
+        return None
     return bool(md.get("security_pass")), bool(md.get("regression_pass"))
 
 
