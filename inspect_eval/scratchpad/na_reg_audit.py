@@ -1,9 +1,21 @@
 """Count N/A-regression episodes per (dir, benchmark) and how many passed security.
 
-The exclusion is correct for CDR and dangerous for accuracy. A peer measured a
-track where EVERY N/A-regression episode was a failure, so excluding them lifted
-an accuracy cell from 90.5% to 100.0%. This prints the direction of that
-confound on our own cells so it is never assumed.
+Metadata-absence coincides with failure on some tracks and not on others, so
+COUNT WHICH WAY IT RUNS before excluding on any predicate. Measured here: on
+vulnhub most excluded episodes PASSED security (118 of 158 raw records), on meta4
+almost none did (2 of 55). Same predicate, opposite sign, same corpus.
+
+Note cdr.py drops an episode at three separate points, and only the third is the
+N/A-regression exclusion this script measures:
+  A  _is_not_applicable_sample  -- scenario deliberately skipped. Never fires on
+     our corpus: 0 of 11504 records.
+  B  "security_pass" not in md  -- no two-component metadata at all. 365 records,
+     of which 2 passed, so this one IS confounded with failure. CDR is
+     ALGEBRAICALLY INVARIANT to B: (sec-joint)/sec counts only security-passing
+     episodes and these have no security_pass, so B moves only the per-n
+     sec/joint percentages, which the paper does not use.
+  C  regression_pass is None    -- scenario defines no regression check. This is
+     the exclusion, and the one this script counts.
 """
 import sys
 from collections import defaultdict
