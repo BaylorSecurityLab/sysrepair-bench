@@ -56,8 +56,18 @@ def _components(sample):
     # rather than counted either way. Returning None drops them from both the
     # numerator and the denominator, which is what the metric means.
     if md.get("regression_pass") is None:
-        return None
+        return NA_REGRESSION
     return bool(md.get("security_pass")), bool(md.get("regression_pass"))
+
+
+# Sentinel: the episode HAS two-component metadata but the scenario defines no
+# regression check. Distinct from None, which means no two-component metadata at
+# all. Kept separate so the excluded episodes can be COUNTED and reported: a
+# reader must be able to see the denominator shrink. A peer measured a track
+# where every N/A-regression episode was a failure, so excluding them lifted an
+# accuracy cell from 90.5% to 100.0%. That exclusion is correct for CDR and
+# wrong for accuracy, and the only defence that survives is printing the count.
+NA_REGRESSION = "na-regression"
 
 
 def collect(log_dir: Path, benchmark: str | None):
@@ -83,6 +93,7 @@ def collect(log_dir: Path, benchmark: str | None):
     """
     # {(model, mode, benchmark, scenario, epoch): (log_path, sec, joint, category)}
     episodes: dict[tuple, tuple] = {}
+    na_episodes: set[tuple] = set()
     for i in list_eval_logs(str(log_dir)):
         h = read_eval_log(i.name, header_only=True)
         model = (h.eval.model or "?").split("/")[-1]
@@ -97,6 +108,10 @@ def collect(log_dir: Path, benchmark: str | None):
             comp = _components(s)
             if comp is None:
                 continue
+            key_na = (model, mode, meta.get("benchmark"), str(s.id), s.epoch)
+            if comp is NA_REGRESSION:
+                na_episodes.add(key_na)
+                continue
             sec, reg = comp
             # Collapse the verbose parenthetical qualifiers so all
             # "Compensating Controls (…)" variants share one bucket.
@@ -106,6 +121,10 @@ def collect(log_dir: Path, benchmark: str | None):
             if prev is None or str(i.name) >= prev[0]:
                 episodes[key] = (str(i.name), sec, sec and reg, category)
 
+    na_cell: dict[tuple, int] = defaultdict(int)
+    for (model, mode, _b, _sc, _ep) in na_episodes:
+        na_cell[(model, mode)] += 1
+
     cell = defaultdict(lambda: [0, 0, 0])
     cat = defaultdict(lambda: [0, 0, 0])
     for (model, mode, _bench, _sc, _ep), (_p, sec, joint, category) in episodes.items():
@@ -113,7 +132,7 @@ def collect(log_dir: Path, benchmark: str | None):
             tgt[0] += int(sec)
             tgt[1] += int(joint)
             tgt[2] += 1
-    return cell, cat
+    return cell, cat, na_cell
 
 
 def _fmt(sec, joint, n):
@@ -131,11 +150,13 @@ def main() -> None:
     p.add_argument("--by-category", action="store_true")
     args = p.parse_args()
 
-    cell, cat = collect(Path(args.log_dir), args.benchmark)
+    cell, cat, na_cell = collect(Path(args.log_dir), args.benchmark)
     print(f"### CDR — security-only vs joint pass{' ['+args.benchmark+']' if args.benchmark else ''}")
     print(f"{'model':<20}{'mode':<10} {'security/joint/CDR'}")
     for k in sorted(cell):
-        print(f"{k[0]:<20}{k[1]:<10} {_fmt(*cell[k])}")
+        na = na_cell.get(k, 0)
+        note = f"  [{na} episode(s) excluded: scenario has no regression check]" if na else ""
+        print(f"{k[0]:<20}{k[1]:<10} {_fmt(*cell[k])}{note}")
 
     if args.by_category:
         print("\n### CDR by remediation category")
