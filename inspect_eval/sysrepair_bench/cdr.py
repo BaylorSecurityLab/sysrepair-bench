@@ -140,7 +140,7 @@ def _fmt(sec, joint, n):
         return "-"
     sr, jr = 100 * sec / n, 100 * joint / n
     cdr = 0.0 if sec == 0 else 100 * (sec - joint) / sec
-    return f"sec={sr:5.1f}% joint={jr:5.1f}% CDR={cdr:5.1f}% (n={n})"
+    return f"sec(elig)={sr:5.1f}% joint(elig)={jr:5.1f}% CDR={cdr:5.1f}% (n={n})"
 
 
 def main() -> None:
@@ -152,6 +152,14 @@ def main() -> None:
 
     cell, cat, na_cell = collect(Path(args.log_dir), args.benchmark)
     print(f"### CDR — security-only vs joint pass{' ['+args.benchmark+']' if args.benchmark else ''}")
+    # sec(elig)/joint(elig) are rates among CDR-ELIGIBLE episodes, NOT the cell's
+    # accuracy. Episodes with no two-component metadata are dropped before this
+    # denominator, and they are almost always failures (2 of 365 passed), so
+    # sec(elig) reads HIGHER than pass@1: one cell prints 100.0% against an
+    # accuracy of 90.5%. CDR itself is unaffected, since (sec-joint)/sec counts
+    # only security-passing episodes and a dropped episode is in neither term.
+    print("    sec(elig)/joint(elig) are computed on CDR-eligible episodes only "
+          "and are NOT this cell's accuracy; use passk for accuracy.")
     print(f"{'model':<20}{'mode':<10} {'security/joint/CDR'}")
     for k in sorted(cell):
         na = na_cell.get(k, 0)

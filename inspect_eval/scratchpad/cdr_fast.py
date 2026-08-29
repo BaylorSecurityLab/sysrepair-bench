@@ -4,6 +4,12 @@ Same rules as cdr.py: skip not-applicable samples, require security_pass, EXCLUD
 regression_pass is None, dedupe on (model, mode, benchmark, scenario, epoch)
 keep-last by log path. Prints the excluded count so the denominator is visible.
 
+sec(elig)/joint(elig) are rates among CDR-ELIGIBLE episodes and are NOT the
+cell's accuracy: episodes with no two-component metadata are dropped first and
+are almost always failures, so sec(elig) reads high (one Windows cell prints
+100.0% against an accuracy of 90.5%). CDR is unaffected, since (sec-joint)/sec
+counts only security-passing episodes. Use passk for accuracy.
+
 Usage: cdr_fast.py <suite> <dir> [dir ...]
 """
 import sys
@@ -46,5 +52,5 @@ for d in sys.argv[2:]:
         cdr = 0.0 if sec == 0 else 100*(sec-joint)/sec
         nak = sum(1 for x in na if (x[0], x[1]) == k)
         print(f"{Path(d).name:<40} {suite:<9} {k[0]:<16}{k[1]:<10} "
-              f"sec={100*sec/n:5.1f}% joint={100*joint/n:5.1f}% CDR={cdr:5.1f}% (n={n})"
+              f"sec(elig)={100*sec/n:5.1f}% joint(elig)={100*joint/n:5.1f}% CDR={cdr:5.1f}% (n={n})"
               + (f"  [{nak} excluded]" if nak else ""))
