@@ -1,0 +1,59 @@
+# Qwen3.5-35B-A3B FULL-SUITE, no cascade.
+#
+# 35B has only ever run meta2 on the 27-scenario LADDER SUBSET (both conditions,
+# epochs=3, in ./logs). That is not a full-suite cell, so meta2 is included here
+# in BOTH conditions at its full 40 scenarios rather than being skipped the way
+# 27B's already-complete meta2 RI was.
+#
+# Served locally: vLLM on 2xL40 at :8100 (panelB/serve.sh Qwen/Qwen3.5-35B-A3B 2).
+# 35B-A3B is MoE: 35B total, ~3B active, so decode is far cheaper than its total
+# size suggests, but the weights are 67G and need both cards.
+#
+# message_limit: 0 is set EXPLICITLY and must stay that way. Omitting the key
+# silently inherits task.py's default of 40, which ends episodes before the k=5
+# submit attempts materialise and corrupts pass@k. Verify from the .eval header
+# (`eval.task_args`), never from this file.
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  # Same reasoning as the 27B config: 120s is too short on long-context black-box
+  # episodes; a tripped AttemptTimeoutError retries the sample from scratch.
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  qwen35b_fs_day1:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    benchmarks: [meta2, vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 8
+    modes: [day1]
+
+  qwen35b_fs_zeroday:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    benchmarks: [meta2, vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 8
+    modes: [zero_day]

@@ -1,0 +1,57 @@
+# Qwen3.5-122B-A10B FULL-SUITE, served on Delta H200s and reached over the
+# :8001 tunnel. Run BEFORE the 397B so the remaining Delta allocation is
+# attributable to the 397B alone (user instruction 2026-08-31).
+#
+# 122B has only ever run meta2 on the 27-scenario LADDER SUBSET, so meta2 is
+# included here in both conditions at its full 40 scenarios.
+#
+# served-model-name on Delta is "qwen3.5-122b" (set in ~/hpc/vllm_args.env), so
+# the model string here must match that, NOT the HF repo id.
+#
+# api_key comes from DELTA_VLLM_KEY, which the orchestrator exports from the
+# job's conn file. The key is per-job: a resubmitted serve job mints a new one.
+#
+# message_limit: 0 explicitly. Omitting it inherits task.py's default of 40,
+# which ends episodes before the k=5 submit attempts materialise.
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  qwen122b_fs_day1:
+    model: openai/qwen3.5-122b
+    base_url: http://localhost:8001/v1
+    api_key: ${DELTA_VLLM_KEY}
+    benchmarks: [meta2, vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 8
+    modes: [day1]
+
+  qwen122b_fs_zeroday:
+    model: openai/qwen3.5-122b
+    base_url: http://localhost:8001/v1
+    api_key: ${DELTA_VLLM_KEY}
+    benchmarks: [meta2, vulnhub, ccdc, meta3/ubuntu, meta4]
+    exclude: [meta4/scenario-19, meta4/scenario-21, meta4/scenario-22, meta4/scenario-117]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 8
+    modes: [zero_day]
