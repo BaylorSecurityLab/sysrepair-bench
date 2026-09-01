@@ -1,0 +1,44 @@
+# Targeted gap-fill for the Qwen3.5-35B day1 sr-modern cell.
+#
+# The day1 leg exited rc=0 with sr-modern at 112/113: meta4/scenario-50 never
+# ran at all, and meta4/scenario-43 stopped after epoch 1. Neither resolves on
+# its own now that the leg has ended, unlike ccdc/scenario-15 which did.
+#
+# Five episodes total. Runs into the SAME eval_set dir so it resumes and fills
+# only the missing (scenario, epoch) pairs rather than redoing the suite; the
+# directory was backed up first, because a restarted eval_set can replace .eval
+# files.
+#
+# Deliberately does NOT re-exclude scenario-50: the standing exclude list is
+# 19/21/22/117, and 50 is not among them, so its absence is a gap rather than a
+# deliberate omission.
+defaults:
+  seeds: [5]
+  epochs: 3
+  log_dir: ./logs
+  bash_timeout: 240
+  verify_timeout: 360
+  fail_on_error: 0.5
+  retry_on_error: 2
+  time_limit: 3600
+  working_limit: 2400
+  message_limit: 0
+  token_limit: 0
+  request_limit: 0
+  preflight: true
+  model_max_retries: 10
+  model_timeout: 420
+  model_attempt_timeout: 300
+  model_client_timeout: 480
+presets:
+  qwen35b_gapfill:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    base_url: http://localhost:8100/v1
+    api_key: vllm
+    benchmarks: [meta4]
+    scenarios: [meta4/scenario-43, meta4/scenario-50]
+    solvers: [react]
+    seeds: 5
+    epochs: 3
+    max_connections: 2
+    modes: [day1]

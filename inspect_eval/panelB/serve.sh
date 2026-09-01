@@ -1,6 +1,18 @@
 #!/bin/bash
 # panelB/serve.sh <HF_MODEL> [tp] [extra vllm args...]
 # Brings up vllm-openai on localhost:8100 serving HF_MODEL, waits for /health.
+#
+# MAX_LEN defaults to 32768, NOT the model's ceiling. Serving Qwen3.5-35B-A3B at
+# max-model-len 262144 left KV cache headroom for a maximum concurrency of 2.48x
+# while the harness drove 10 connections; after 11 hours a worker stalled, the
+# shared-memory broadcast timed out, and EngineCore died with a fatal
+# TimeoutError, taking the zero_day leg and a gap-fill run down with it. The same
+# 262144 was hard-coded for every locally served model, so it would have recurred
+# on the 122B GPTQ rung.
+#
+# At 32768 the identical 166,848-token cache supports 16.63x concurrency. No
+# episode in this benchmark needs a 256k window. Override per model with
+#   MAX_LEN=65536 MAX_SEQS=8 panelB/serve.sh <model> 2
 set -u
 MODEL="$1"; TP="${2:-2}"; shift 2 2>/dev/null || shift $#
 EXTRA=("$@")
@@ -13,7 +25,8 @@ docker run -d --name pbvllm --gpus all --shm-size 24g \
   -p 8100:8000 \
   vllm/vllm-openai:latest \
   --model "$MODEL" --served-model-name "$MODEL" \
-  --tensor-parallel-size "$TP" --gpu-memory-utilization 0.92 --max-model-len 262144 \
+  --tensor-parallel-size "$TP" --gpu-memory-utilization 0.92 \
+  --max-model-len "${MAX_LEN:-32768}" --max-num-seqs "${MAX_SEQS:-16}" \
   --trust-remote-code \
   --enable-auto-tool-choice --tool-call-parser qwen3_coder --enable-prefix-caching \
   "${EXTRA[@]}" >/dev/null
